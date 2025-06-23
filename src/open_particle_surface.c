@@ -230,10 +230,12 @@ static int GetCellIndex(GridCoord coord) {
         
         // Initialize new cells
         for (int i = spatialHashCellsCapacity; i < newCapacity; i++) {
-            spatialHashCells[i].particleCount = 0;
-            spatialHashCells[i].particleIndices = NULL; // Will allocate on demand
-            spatialHashCells[i].dirty = false;
-            spatialHashCells[i].hasMesh = false;
+            SpatialHashCell* cell = &spatialHashCells[i];
+
+            cell->particleCount   = 0;
+            cell->particleIndices = NULL; // Will allocate on demand
+            cell->dirty           = false;
+            cell->hasMesh         = false;
         }
         
         spatialHashCellsCapacity = newCapacity;
@@ -496,16 +498,18 @@ ParticleHandle CreateParticle(Vector3 position, int materialId) {
             printf("Warning: Maximum overlapping cells reached for particle %d\n", particleIndex);
             break;
         }
+
+        SpatialHashCell* cell = &spatialHashCells[cellIndex];
         
         // Set the cell's grid coordinates and bounds if it's a new cell
-        if (spatialHashCells[cellIndex].particleCount == 0) {
-            spatialHashCells[cellIndex].coord = overlappingCells[i];
-            spatialHashCells[cellIndex].bounds = GetSpatialHashBounds(overlappingCells[i]);
+        if (cell->particleCount == 0) {
+            cell->coord = overlappingCells[i];
+            cell->bounds = GetSpatialHashBounds(overlappingCells[i]);
             
             // First particle - need to allocate the indices array
-            if (spatialHashCells[cellIndex].particleIndices == NULL) {
-                spatialHashCells[cellIndex].particleIndices = (int*)malloc(10000 * sizeof(int));
-                if (spatialHashCells[cellIndex].particleIndices == NULL) {
+            if (cell->particleIndices == NULL) {
+                cell->particleIndices = (int*)malloc(10000 * sizeof(int));
+                if (cell->particleIndices == NULL) {
                     printf("Failed to allocate particle indices array for cell %d\n", cellIndex);
                     continue; // Skip this cell but continue with others
                 }
@@ -513,15 +517,15 @@ ParticleHandle CreateParticle(Vector3 position, int materialId) {
         }
         
         // Safety check before adding particle to cell
-        if (spatialHashCells[cellIndex].particleIndices == NULL) {
+        if (cell->particleIndices == NULL) {
             printf("Error: particleIndices is NULL for cell %d\n", cellIndex);
             continue; // Skip this cell but continue with others
         }
         
         // Add particle to cell
-        spatialHashCells[cellIndex].particleIndices[spatialHashCells[cellIndex].particleCount] = particleIndex;
-        spatialHashCells[cellIndex].particleCount++;
-        spatialHashCells[cellIndex].dirty = true; // Mark as dirty
+        cell->particleIndices[cell->particleCount] = particleIndex;
+        cell->particleCount++;
+        cell->dirty = true; // Mark as dirty
         
         // Track cell as active
         AddActiveCellIfNeeded(cellIndex);
@@ -578,10 +582,13 @@ bool UpdateParticlePosition(ParticleHandle handle, Vector3 newPosition) {
         if (cellIndex < 0 || cellIndex >= spatialHashCellsCapacity) {
             continue;
         }
+
+        // Get the cell
+        SpatialHashCell* cell = &spatialHashCells[cellIndex];
         
         // Remove particle from this cell
-        int cellCount = spatialHashCells[cellIndex].particleCount;
-        int* indices = spatialHashCells[cellIndex].particleIndices;
+        int cellCount = cell->particleCount;
+        int* indices = cell->particleIndices;
         
         if (indices != NULL) {
             // Find and remove the particle
@@ -589,14 +596,14 @@ bool UpdateParticlePosition(ParticleHandle handle, Vector3 newPosition) {
                 if (indices[j] == handle) {
                     // Replace with the last element and decrement count
                     indices[j] = indices[cellCount - 1];
-                    spatialHashCells[cellIndex].particleCount--;
+                    cell->particleCount--;
                     break;
                 }
             }
         }
         
         // Mark cell as dirty
-        spatialHashCells[cellIndex].dirty = true;
+        cell->dirty = true;
     }
     
     // Reset particle's cell count
@@ -614,16 +621,19 @@ bool UpdateParticlePosition(ParticleHandle handle, Vector3 newPosition) {
             printf("Warning: Maximum overlapping cells reached for particle %d\n", handle);
             break;
         }
+
+        // Get the cell
+        SpatialHashCell* cell = &spatialHashCells[cellIndex];
         
         // Set the cell's grid coordinates and bounds if it's a new cell
-        if (spatialHashCells[cellIndex].particleCount == 0) {
-            spatialHashCells[cellIndex].coord = newOverlappingCells[i];
-            spatialHashCells[cellIndex].bounds = GetSpatialHashBounds(newOverlappingCells[i]);
+        if (cell->particleCount == 0) {
+            cell->coord = newOverlappingCells[i];
+            cell->bounds = GetSpatialHashBounds(newOverlappingCells[i]);
             
             // First particle - need to allocate the indices array
-            if (spatialHashCells[cellIndex].particleIndices == NULL) {
-                spatialHashCells[cellIndex].particleIndices = (int*)malloc(10000 * sizeof(int));
-                if (spatialHashCells[cellIndex].particleIndices == NULL) {
+            if (cell->particleIndices == NULL) {
+                cell->particleIndices = (int*)malloc(10000 * sizeof(int));
+                if (cell->particleIndices == NULL) {
                     printf("Failed to allocate particle indices array for cell %d\n", cellIndex);
                     continue; // Skip this cell but continue with others
                 }
@@ -631,15 +641,15 @@ bool UpdateParticlePosition(ParticleHandle handle, Vector3 newPosition) {
         }
         
         // Safety check before adding particle to cell
-        if (spatialHashCells[cellIndex].particleIndices == NULL) {
+        if (cell->particleIndices == NULL) {
             printf("Error: particleIndices is NULL for cell %d\n", cellIndex);
             continue; // Skip this cell but continue with others
         }
         
         // Add particle to cell
-        spatialHashCells[cellIndex].particleIndices[spatialHashCells[cellIndex].particleCount] = handle;
-        spatialHashCells[cellIndex].particleCount++;
-        spatialHashCells[cellIndex].dirty = true; // Mark as dirty
+        cell->particleIndices[cell->particleCount] = handle;
+        cell->particleCount++;
+        cell->dirty = true; // Mark as dirty
         
         // Track cell as active
         AddActiveCellIfNeeded(cellIndex);
