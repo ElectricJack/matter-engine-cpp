@@ -11,9 +11,17 @@ uniform vec3  cameraUp;
 uniform float cameraFovy;
 uniform vec2  screenSize;
 
+// Lighting uniforms (ported from raytracer.cl)
+vec3 lightPos = vec3(3.0, 10.0, 2.0);
+vec3 lightColor = vec3(150.0, 150.0, 120.0);
+vec3 ambient = vec3(0.2, 0.2, 0.4);
 
-// Include the shared BLAS/TLAS common code
-#include "blas_tlas_common.glsl"
+// Sky texture (placeholder - could be added as uniform)
+uniform sampler2D skyTexture;
+
+
+// Include the enhanced BVH common code (ported from bvh_article)
+#include "bvh_tlas_common.glsl"
 
 // Camera ray generation
 vec3 computeCameraRay(vec2 uv) {
@@ -38,49 +46,120 @@ vec3 computeCameraRay(vec2 uv) {
     return rayDir;
 }
 
-// Simple shading function
-vec3 shade(HitResult hit, vec3 rayDir) {
-    if (!hit.hit) {
-        // Sky color
-        float skyFactor = (rayDir.y + 1.0) * 0.5;
-        return mix(vec3(0.2, 0.4, 0.8), vec3(0.8, 0.9, 1.0), skyFactor);
+// Sky sampling (ported from raytracer.cl)
+vec3 sampleSky(vec3 direction) {
+    // Procedural sky for now (could use skyTexture in the future)
+    float phi = atan(direction.z, direction.x);
+    float theta = acos(direction.y);
+    
+    // Simple gradient sky
+    float skyFactor = (direction.y + 1.0) * 0.5;
+    vec3 skyColor = mix(vec3(0.2, 0.4, 0.8), vec3(0.8, 0.9, 1.0), skyFactor);
+    
+    // Add sun effect
+    vec3 sunDir = normalize(vec3(0.5, 0.7, 0.3));
+    float sunDot = max(0.0, dot(direction, sunDir));
+    float sun = pow(sunDot, 256.0);
+    skyColor += vec3(1.0, 0.9, 0.7) * sun;
+    
+    return skyColor * 0.65;
+}
+
+// Advanced raytracing with reflections (ported from raytracer.cl)
+vec3 trace(vec3 rayOrigin, vec3 rayDirection, uint seed) {
+    vec3 rayPos = rayOrigin;
+    vec3 rayDir = rayDirection;
+    vec3 color = vec3(0.0);
+    vec3 attenuation = vec3(1.0);
+    
+    for (int rayDepth = 0; rayDepth < 4; rayDepth++) {
+        HitResult hit = intersectScene(rayPos, rayDir);
+        
+        if (!hit.hit) {
+            // Hit sky
+            color += attenuation * sampleSky(rayDir);
+            break;
+        }
+        
+        // Get triangle for normal calculation and material properties
+        vec3 hitPos = rayPos + rayDir * hit.t;
+        vec3 normal = hit.normal;
+        
+        // Material properties based on instance ID (simulate material variation)
+        bool isMirror = (hit.instanceId * 17) % 2 == 1;
+        
+        if (isMirror) {
+            // Mirror reflection
+            if (rayDepth == 1) {
+                // Quick sky sample for depth 1 reflections
+                vec3 reflectedDir = rayDir - 2.0 * normal * dot(normal, rayDir);
+                color += attenuation * sampleSky(reflectedDir);
+                break;
+            }
+            
+            // Calculate reflection ray
+            rayDir = rayDir - 2.0 * normal * dot(normal, rayDir);
+            rayPos = hitPos + rayDir * 0.005; // Offset to avoid self-intersection
+            
+            // Slight attenuation for reflections
+            attenuation *= 0.9;
+        } else {
+            // Diffuse material - calculate lighting
+            vec3 lightVec = lightPos - hitPos;
+            float lightDist = length(lightVec);
+            vec3 lightDir = lightVec / lightDist;
+            
+            // Base material color
+            vec3 albedo;
+            if (hit.material == 0) albedo = vec3(0.8, 0.2, 0.2);      // Red
+            else if (hit.material == 1) albedo = vec3(0.2, 0.2, 0.8); // Blue
+            else if (hit.material == 2) albedo = vec3(0.2, 0.8, 0.2); // Green
+            else if (hit.material == 3) albedo = vec3(0.8, 0.8, 0.2); // Yellow
+            else if (hit.material == 4) albedo = vec3(0.8, 0.2, 0.8); // Magenta
+            else albedo = vec3(0.5);                                   // Gray
+            
+            // Lighting calculation
+            float lightFalloff = 1.0 / (lightDist * lightDist);
+            float diffuse = max(0.0, dot(normal, lightDir));
+            
+            color += attenuation * albedo * (ambient + diffuse * lightColor * lightFalloff);
+            break;
+        }
     }
     
-    // Simple lighting based on material ID
-    vec3 baseColor;
-    if (hit.material == 0) baseColor = vec3(0.8, 0.2, 0.2);      // Red
-    else if (hit.material == 1) baseColor = vec3(0.2, 0.2, 0.8); // Blue
-    else if (hit.material == 2) baseColor = vec3(0.2, 0.8, 0.2); // Green
-    else if (hit.material == 3) baseColor = vec3(0.8, 0.8, 0.2); // Yellow
-    else if (hit.material == 4) baseColor = vec3(0.8, 0.2, 0.8); // Magenta
-    else baseColor = vec3(0.5);                                   // Gray
-    
-    // Simple diffuse shading
-    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
-    float diffuse = max(0.0, dot(hit.normal, lightDir));
-    vec3 ambient = vec3(0.2);
-    
-    return baseColor * (ambient + diffuse * vec3(0.8));
+    return color;
 }
 
 void main() {
     // Use gl_FragCoord for reliable screen-space coordinates
     vec2 screenUV = gl_FragCoord.xy / screenSize;
-    vec2 uv = screenUV * 2.0 - 1.0;
-    uv.x *= screenSize.x / screenSize.y;
+    
+    // Initialize RNG seed (similar to raytracer.cl)
+    uint seed = WangHash(uint(gl_FragCoord.x + gl_FragCoord.y * screenSize.x) * 17u + 1u);
     
     // Compute camera basis
     vec3 forward = normalize(cameraTarget - cameraPos);
     vec3 right = normalize(cross(forward, cameraUp));
     vec3 up = cross(right, forward);
     
-    // Compute ray direction
-    float fovScale = tan(radians(cameraFovy) * 0.5);
-    vec3 rayDir = normalize(uv.x * right * fovScale + uv.y * up * fovScale + forward);
+    // Multiple samples for antialiasing (like raytracer.cl)
+    vec3 color = vec3(0.0);
+    for (int i = 0; i < 2; i++) {
+        // Add random offset for antialiasing
+        vec2 pixelOffset = vec2(RandomFloat(seed), RandomFloat(seed));
+        vec2 uv = ((gl_FragCoord.xy + pixelOffset) / screenSize) * 2.0 - 1.0;
+        uv.x *= screenSize.x / screenSize.y;
+        
+        // Compute ray direction
+        float fovScale = tan(radians(cameraFovy) * 0.5);
+        vec3 rayDir = normalize(uv.x * right * fovScale + uv.y * up * fovScale + forward);
+        
+        // Trace the ray
+        color += trace(cameraPos, rayDir, seed);
+    }
     
-    // Raytracing
-    HitResult hit = intersectScene(cameraPos, rayDir);
-    vec3 color = shade(hit, rayDir);
+    // Average the samples
+    color *= 0.5;
     
     // Gamma correction
     color = pow(color, vec3(1.0/2.2));

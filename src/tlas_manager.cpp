@@ -252,12 +252,13 @@ void TLASManager::generate_instance_texture_data(const BLASManager& /* blas_mana
             }
         }
         
-        // Row 8: metadata (blasStartIndex + instanceId + padding)
+        // Row 8: metadata (blasIndex + materialId + padding)
         int metadataIdx = texture_width * (8 * 4) + baseIdx;
         if (metadataIdx + 3 < static_cast<int>(output_data.size())) {
+            // For now, use blas_start_index as blasIndex (will be converted in future)
             output_data[metadataIdx + 0] = static_cast<float>(inst.blas_start_index);
-            output_data[metadataIdx + 1] = static_cast<float>(inst.instance_id);
-            output_data[metadataIdx + 2] = 0.0f; // padding
+            output_data[metadataIdx + 1] = 0.0f; // materialId (TODO: get from draw record)
+            output_data[metadataIdx + 2] = 0.0f; // padding  
             output_data[metadataIdx + 3] = 0.0f; // padding
         }
     }
