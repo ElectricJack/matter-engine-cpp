@@ -515,6 +515,11 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, uint seed) {
             break;
         }
         
+        // DEBUG: If we found any hit, show a bright color
+        if (rayDepth == 0 && gl_FragCoord.x < 100.0 && gl_FragCoord.y < 100.0) {
+            return vec3(0.0, 1.0, 0.0); // Bright green for hits in top-left corner
+        }
+        
         // Get triangle for normal calculation and material properties
         vec3 hitPos = rayPos + rayDir * hit.t;
         vec3 normal = hit.normal;
@@ -597,5 +602,12 @@ void main() {
     
     // Gamma correction
     color = pow(color, vec3(1.0/2.2));
+    
+    // DEBUG: Add a test pattern to verify shader is working
+    vec2 testUV = gl_FragCoord.xy / screenSize;
+    if (testUV.x < 0.1 && testUV.y < 0.1) {
+        color = vec3(1.0, 0.0, 0.0); // Red square in top-left corner
+    }
+    
     finalColor = vec4(color, 1.0);
 }

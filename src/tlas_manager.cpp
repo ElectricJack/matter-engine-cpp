@@ -304,7 +304,7 @@ int TLASManager::get_node_count() const {
     return tlas_ ? tlas_->nodesUsed : 0;
 }
 
-void TLASManager::generate_instance_texture_data(const BLASManager& /* blas_manager */,
+void TLASManager::generate_instance_texture_data(const BLASManager& blas_manager,
                                                 std::vector<float>& output_data, 
                                                 int texture_width,
                                                 int texture_height) const {
@@ -348,9 +348,15 @@ void TLASManager::generate_instance_texture_data(const BLASManager& /* blas_mana
         // Row 8: metadata (blasIndex + materialId + padding)
         int metadataIdx = texture_width * (8 * 4) + baseIdx;
         if (metadataIdx + 3 < static_cast<int>(output_data.size())) {
-            // For now, use blas_start_index as blasIndex (will be converted in future)
-            // For now, use instance index as placeholder for blas_start_index
-            output_data[metadataIdx + 0] = static_cast<float>(i);
+            // Get the actual BLAS node start offset for this instance
+            // This is what the shader expects for geometry traversal
+            BLASHandle blas_handle = i < static_cast<int>(draw_records_.size()) ? 
+                                   draw_records_[i].blas_handle : INVALID_BLAS_HANDLE;
+            BLASOffsets offsets = blas_manager.get_offsets(blas_handle);
+            output_data[metadataIdx + 0] = static_cast<float>(offsets.node_offset);
+            
+            printf("    TLAS: Instance %d - BLAS handle:%u, node_offset:%d, triangle_offset:%d\n", 
+                   i, blas_handle, offsets.node_offset, offsets.triangle_offset);
             
             // Get material ID from the corresponding draw record
             uint32_t materialId = 0;
@@ -490,6 +496,8 @@ void TLASManager::ensure_gpu_textures_ready(const BLASManager& blas_manager) {
 void TLASManager::bind_to_shader(Shader shader, const BLASManager& blas_manager) const {
     PROFILE_SECTION("TLAS Shader Binding");
     
+    printf("    TLAS: Binding to shader...\n");
+    
     // Ensure textures are ready
     const_cast<TLASManager*>(this)->ensure_gpu_textures_ready(blas_manager);
     
@@ -499,19 +507,36 @@ void TLASManager::bind_to_shader(Shader shader, const BLASManager& blas_manager)
     int tlas_nodes_texture_loc = GetShaderLocation(shader, "tlasNodesTexture");
     int instances_texture_loc = GetShaderLocation(shader, "instancesTexture");
     
+    printf("    TLAS: Uniform locations - tlasNodeCount:%d, instanceCount:%d, tlasNodesTexture:%d, instancesTexture:%d\n",
+           tlas_node_count_loc, instance_count_loc, tlas_nodes_texture_loc, instances_texture_loc);
+    
     // Set counts
     int node_count = get_node_count();
     int inst_count = get_instance_count();
+    
+    printf("    TLAS: Setting counts - nodes:%d, instances:%d\n", node_count, inst_count);
+    
     SetShaderValue(shader, tlas_node_count_loc, &node_count, SHADER_UNIFORM_INT);
     SetShaderValue(shader, instance_count_loc, &inst_count, SHADER_UNIFORM_INT);
+    
+    printf("    TLAS: Texture IDs - nodes:%u, instances:%u\n", nodes_texture_.id, instances_texture_.id);
     
     // Bind textures
     if (nodes_texture_.id != 0 && tlas_nodes_texture_loc != -1) {
         SetShaderValueTexture(shader, tlas_nodes_texture_loc, nodes_texture_);
+        printf("    TLAS: Bound nodes texture (ID:%u) to location %d\n", nodes_texture_.id, tlas_nodes_texture_loc);
+    } else {
+        printf("    TLAS: WARNING - Cannot bind nodes texture (ID:%u, location:%d)\n", nodes_texture_.id, tlas_nodes_texture_loc);
     }
+    
     if (instances_texture_.id != 0 && instances_texture_loc != -1) {
         SetShaderValueTexture(shader, instances_texture_loc, instances_texture_);
+        printf("    TLAS: Bound instances texture (ID:%u) to location %d\n", instances_texture_.id, instances_texture_loc);
+    } else {
+        printf("    TLAS: WARNING - Cannot bind instances texture (ID:%u, location:%d)\n", instances_texture_.id, instances_texture_loc);
     }
+    
+    printf("    TLAS: Shader binding complete.\n");
 }
 
 void TLASManager::print_stats() const {

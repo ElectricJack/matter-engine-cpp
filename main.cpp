@@ -5,6 +5,7 @@ extern "C" {
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <vector>
 
@@ -14,8 +15,9 @@ extern "C" {
 
 class RayTracingDemo {
 public:
-    RayTracingDemo(int width, int height) 
+    RayTracingDemo(int width, int height, bool debug_mode = false) 
         : screen_width_(width), screen_height_(height),
+          debug_mode_(debug_mode), debug_frame_count_(0),
           blas_manager_(std::make_unique<BLASManager>()),
           tlas_manager_(std::make_unique<TLASManager>(50)) {
         
@@ -38,13 +40,24 @@ public:
     void run() {
         int frame_count = 0;
         
+        if (debug_mode_) {
+            printf("=== DEBUG MODE: Will auto-quit after 60 frames ===\n");
+        }
+        
         while (!WindowShouldClose()) {
             PROFILE_FRAME_BEGIN();
             
             frame_count++;
+            debug_frame_count_ = frame_count;
+            
+            // Debug mode auto-quit
+            if (debug_mode_ && frame_count >= 60) {
+                printf("DEBUG MODE: Reached 60 frames, auto-quitting...\n");
+                break;
+            }
             
             // Print simple frame count to check if we're making progress
-            if (frame_count % 30 == 0) {
+            if (frame_count % 30 == 0 || debug_mode_) {
                 printf("Frame %d...\n", frame_count);
             }
             
@@ -74,16 +87,25 @@ private:
     void setup_scene() {
         PROFILE_SECTION("Scene Setup");
         
+        printf("=== BLAS Registration Phase ===\n");
+        
         // Register different geometry types using factory functions
         cube_blas_ = BLASFactory::register_cube(*blas_manager_, 1.0f);
+        printf("  Cube BLAS registered: handle=%u\n", cube_blas_);
+        
         sphere_blas_ = BLASFactory::register_sphere(*blas_manager_, 0.5f, 32, 16);
+        printf("  Sphere BLAS registered: handle=%u\n", sphere_blas_);
+        
         ground_blas_ = BLASFactory::register_plane(*blas_manager_, 20.0f, 20.0f);
+        printf("  Ground BLAS registered: handle=%u\n", ground_blas_);
         
-        printf("Registered BLAS handles: cube=%u, sphere=%u, ground=%u\n", 
-               cube_blas_, sphere_blas_, ground_blas_);
+        printf("=== BLAS Statistics After Registration ===\n");
+        blas_manager_->print_stats();
         
+        printf("=== Setting Up Test Scene ===\n");
         setup_test_scene(current_test_scene_);
         
+        printf("=== Final Manager Statistics ===\n");
         blas_manager_->print_stats();
         tlas_manager_->print_stats();
     }
@@ -276,10 +298,16 @@ private:
         }
         
         // Build TLAS from recorded draw calls
+        printf("=== Building TLAS for scene %d ===\n", test_number);
+        printf("  Draw records before build: %d\n", tlas_manager_->get_draw_record_count());
+        
         tlas_manager_->build(*blas_manager_);
         
-        printf("Test scene %d built: %d nodes for %d instances\n", 
-               test_number, tlas_manager_->get_node_count(), tlas_manager_->get_instance_count());
+        printf("  TLAS built successfully!\n");
+        printf("  Final counts: %d nodes, %d instances\n", 
+               tlas_manager_->get_node_count(), tlas_manager_->get_instance_count());
+        
+        printf("Test scene %d setup complete!\n", test_number);
     }
     
     
@@ -398,6 +426,17 @@ private:
     void render_raytraced() {
         PROFILE_SECTION("Raytraced Rendering");
         
+        // Debug logging every 30 frames or always in debug mode
+        bool should_log = (debug_frame_count_ % 30 == 1) || debug_mode_;
+        
+        if (should_log) {
+            printf("=== Raytraced Render Frame %d ===\n", debug_frame_count_);
+            printf("  Camera pos: (%.2f, %.2f, %.2f)\n", camera_.position.x, camera_.position.y, camera_.position.z);
+            printf("  BLAS triangles: %d\n", blas_manager_->get_total_triangle_count());
+            printf("  TLAS instances: %d, nodes: %d\n", 
+                   tlas_manager_->get_instance_count(), tlas_manager_->get_node_count());
+        }
+        
         BeginShaderMode(raytracing_shader_);
         
         // Set shader uniforms
@@ -406,6 +445,10 @@ private:
             
             Vector2 screen_size = {static_cast<float>(GetScreenWidth()), static_cast<float>(GetScreenHeight())};
             
+            if (should_log) {
+                printf("  Setting camera uniforms...\n");
+            }
+            
             // Set camera uniforms
             SetShaderValue(raytracing_shader_, camera_pos_loc_, &camera_.position, SHADER_UNIFORM_VEC3);
             SetShaderValue(raytracing_shader_, camera_target_loc_, &camera_.target, SHADER_UNIFORM_VEC3);
@@ -413,9 +456,22 @@ private:
             SetShaderValue(raytracing_shader_, camera_fovy_loc_, &camera_.fovy, SHADER_UNIFORM_FLOAT);
             SetShaderValue(raytracing_shader_, screen_size_loc_, &screen_size, SHADER_UNIFORM_VEC2);
             
+            if (should_log) {
+                printf("  Binding BLAS to shader...\n");
+            }
+            
             // Let managers handle their own shader binding and texture management
             blas_manager_->bind_to_shader(raytracing_shader_);
+            
+            if (should_log) {
+                printf("  Binding TLAS to shader...\n");
+            }
+            
             tlas_manager_->bind_to_shader(raytracing_shader_, *blas_manager_);
+            
+            if (should_log) {
+                printf("  All uniforms and textures bound.\n");
+            }
         }
         
         // Draw fullscreen rectangle
@@ -504,6 +560,10 @@ private:
     int screen_width_;
     int screen_height_;
     
+    // Debug mode
+    bool debug_mode_;
+    int debug_frame_count_;
+    
     // Managers
     std::unique_ptr<BLASManager> blas_manager_;
     std::unique_ptr<TLASManager> tlas_manager_;
@@ -531,11 +591,21 @@ private:
 
 };
 
-int main() {
+int main(int argc, char* argv[]) {
     printf("=== C++ Modular BLAS/TLAS System with Performance Profiling ===\n");
     
+    bool debug_mode = false;
+    
+    // Check for debug flag
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--debug") == 0 || strcmp(argv[i], "-d") == 0) {
+            debug_mode = true;
+            printf("DEBUG MODE ENABLED: Will auto-quit after 60 frames\n");
+        }
+    }
+    
     try {
-        RayTracingDemo demo(800, 600);
+        RayTracingDemo demo(800, 600, debug_mode);
         demo.run();
     } catch (const std::exception& e) {
         printf("Error: %s\n", e.what());
