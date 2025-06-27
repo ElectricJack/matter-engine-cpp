@@ -1,3 +1,17 @@
+# Build directories and artifacts
+build/
+obj/
+
+# Executables
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+open_particle_surface
+open_particle_surface.exe
+
 # Object files
 *.o
 *.ko
@@ -20,25 +34,25 @@
 *.so.*
 *.dylib
 
-# Executables
-*.exe
-*.out
-*.app
-*.i*86
-*.x86_64
-*.hex
-open_particle_surface
-
 # Debug files
 *.dSYM/
 *.su
 *.idb
 *.pdb
 
-# Build directories
-obj/
+# System files
+.DS_Store
+
+# IDE files
+.vscode/
+.idea/
+*.vcxproj.user
+*.sln.docstates
 
 # Editor files
 *~
 .*.swp
-.DS_Store
+
+# Temporary files
+*.tmp
+*.temp

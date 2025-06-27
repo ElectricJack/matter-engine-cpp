@@ -47,6 +47,16 @@ all: $(BIN)
 $(BIN): $(OBJS) raylib
 	$(CC) -o $@ $(OBJS) $(LDFLAGS) $(LDLIBS)
 	@echo "Built executable for $(PLATFORM): $@"
+	@echo "Copying executable to root directory for easy execution..."
+ifeq ($(PLATFORM),windows)
+	@rm -f ./open_particle_surface.exe
+	@cp $@ ./open_particle_surface.exe
+	@echo "✓ Copied to ./open_particle_surface.exe"
+else
+	@rm -f ./open_particle_surface
+	@cp $@ ./open_particle_surface
+	@echo "✓ Copied to ./open_particle_surface"
+endif
 
 # Platform-specific raylib build with force rebuild check
 RAYLIB_LIB = $(RAYLIB_PATH)/build/$(PLATFORM)/libraylib.a
@@ -79,11 +89,17 @@ $(OBJ_DIR)/$(SRC_DIR)/%.o: $(SRC_DIR)/%.c
 # Platform-specific clean
 clean:
 	rm -rf $(BUILD_DIR)
+ifeq ($(PLATFORM),windows)
+	-rm -f ./open_particle_surface.exe
+else
+	-rm -f ./open_particle_surface
+endif
 
 # Clean all platforms
 clean-all:
 	rm -rf build/
 	rm -rf $(RAYLIB_PATH)/build/
+	-rm -f ./open_particle_surface ./open_particle_surface.exe
 
 # Force rebuild raylib for current platform
 rebuild-raylib:

@@ -49,14 +49,20 @@ done
 
 echo ""
 
-# Check symlink
-if [ -L "./open_particle_surface" ]; then
-    TARGET=$(readlink "./open_particle_surface")
-    echo "Symlink: ./open_particle_surface -> $TARGET"
-elif [ -f "./open_particle_surface" ]; then
-    echo "Symlink: ./open_particle_surface (regular file - not a symlink)"
+# Check root executables
+echo "Root Directory Executables:"
+if [ -f "./open_particle_surface" ]; then
+    SIZE=$(du -h "./open_particle_surface" 2>/dev/null | cut -f1)
+    echo "  ./open_particle_surface: ✓ ($SIZE)"
 else
-    echo "Symlink: ./open_particle_surface (not found)"
+    echo "  ./open_particle_surface: ✗"
+fi
+
+if [ -f "./open_particle_surface.exe" ]; then
+    SIZE=$(du -h "./open_particle_surface.exe" 2>/dev/null | cut -f1)
+    echo "  ./open_particle_surface.exe: ✓ ($SIZE)"
+else
+    echo "  ./open_particle_surface.exe: ✗"
 fi
 
 echo ""
