@@ -481,10 +481,24 @@ HitResult intersectScene(vec3 rayOrigin, vec3 rayDir)
         
         // Get triangle data for normal calculation
         Triangle tri = decodeTriangle(int(triIdx));
-        vec3 normal = normalize(cross(tri.v1 - tri.v0, tri.v2 - tri.v0));
+        BVHInstance inst = decodeInstance(int(instIdx));
+        
+        // Check if this is a sphere material (based on scene setup: materials 1, 3, 4 are spheres)
+        bool isSphere = (inst.materialId == 1u || inst.materialId == 3u || inst.materialId == 4u);
+        
+        vec3 normal;
+        if (isSphere) {
+            // For spheres, calculate smooth normal from hit position to sphere center
+            // Transform world hit position to local space
+            vec3 localHitPos = transformPosition(result.position, inst.invTransform);
+            // Smooth normal is the normalized position from sphere center (origin in local space)
+            normal = normalize(localHitPos);
+        } else {
+            // Use face normal for non-sphere materials
+            normal = normalize(cross(tri.v1 - tri.v0, tri.v2 - tri.v0));
+        }
         
         // Transform normal to world space
-        BVHInstance inst = decodeInstance(int(instIdx));
         result.normal = transformNormal(normal, inst.invTransform);
         result.material = int(inst.materialId);
         result.instanceId = int(instIdx);
