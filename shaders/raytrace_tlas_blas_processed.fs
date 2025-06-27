@@ -667,7 +667,7 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, uint seed) {
     float fogDensity = 0.0001;
     vec3 fogColor = vec3(0.8, 0.8, 0.9);
     
-    for (int rayDepth = 0; rayDepth < 3; rayDepth++) { // Reduced from 4 to 3 bounces
+    for (int rayDepth = 0; rayDepth < 2; rayDepth++) { // Limited to 2 bounces for performance
         HitResult hit = intersectScene(rayPos, rayDir);
         
         if (!hit.hit) {
@@ -704,10 +704,11 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, uint seed) {
         bool isMirror = false;
         
         int matId = hit.material;
-        if (matId == 0) { // Red diffuse
+        if (matId == 0) { // Red semi-metallic
             albedo = vec3(0.8, 0.2, 0.2);
-            roughness = 0.0;
-            metallic = 0.1;
+            roughness = 0.2;
+            metallic = 0.6;
+            isMirror = true;
         } else if (matId == 1) { // Blue diffuse
             albedo = vec3(0.2, 0.3, 0.8);
             roughness = 0.7;
@@ -716,47 +717,53 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, uint seed) {
             albedo = vec3(0.3, 0.7, 0.3);
             roughness = 0.9;
             metallic = 0.0;
-        } else if (matId == 3) { // Yellow/Gold diffuse
+        } else if (matId == 3) { // Yellow/Gold metallic
             albedo = vec3(0.8, 0.7, 0.3);
+            roughness = 0.05;
+            metallic = 1.0;
+            isMirror = true;
+        } else if (matId == 4) { // White metallic
+            albedo = vec3(0.9, 0.9, 0.9);
             roughness = 0.02;
             metallic = 1.0;
-        } else if (matId == 4) { // White diffuse
-            albedo = vec3(0.9, 0.9, 0.9);
-            roughness = 0.0;
-            metallic = 1.0;
-        } else { // Default gray diffuse
+            isMirror = true;
+        } else { // Default gray metallic
             albedo = vec3(0.6, 0.6, 0.6);
-            roughness = 0.0;
-            metallic = 1.0;
+            roughness = 0.1;
+            metallic = 0.8;
+            isMirror = true;
         }
         
-        if (isMirror && rayDepth < 2) { // Limit reflection depth
+        if (isMirror && rayDepth < 1) { // Allow only 1 reflection bounce for performance
             // Calculate PBR lighting for the surface
             vec3 directLight = calculatePBR(hitPos, normal, rayDir, albedo, roughness, metallic);
             
-            // Calculate proper Fresnel for reflection
+            // Calculate Fresnel for reflection
             float NdotV = max(0.0, dot(normal, -rayDir));
             vec3 F0 = mix(vec3(0.04), albedo, metallic);
             vec3 fresnel = F0 + (1.0 - F0) * pow(1.0 - NdotV, 5.0);
             float fresnelStrength = (fresnel.r + fresnel.g + fresnel.b) / 3.0;
             
-            if (rayDepth == 0) {
-                // Primary reflection - energy conservation
-                vec3 reflectedDir = rayDir - 2.0 * normal * dot(normal, rayDir);
-                rayDir = reflectedDir;
-                rayPos = hitPos + normal * 0.001;
-                attenuation *= fresnel * (1.0 - roughness);
-                
-                // Add direct lighting weighted by inverse fresnel
-                color += directLight * (1.0 - fresnelStrength) * 0.5;
-            } else {
-                // Secondary reflection - simplified
-                rayDir = rayDir - 2.0 * normal * dot(normal, rayDir);
-                rayPos = hitPos + normal * 0.001;
-                attenuation *= fresnel * 0.7;
+            // Energy conservation: balance direct and reflected light
+            float reflectionWeight = fresnelStrength * (1.0 - roughness);
+            
+            // Add direct lighting with proper energy conservation
+            color += attenuation * directLight * (1.0 - reflectionWeight * 0.7);
+            
+            // Continue ray for reflection
+            vec3 reflectedDir = rayDir - 2.0 * normal * dot(normal, rayDir);
+            rayDir = reflectedDir;
+            rayPos = hitPos + normal * 0.001; // Small offset to avoid self-intersection
+            attenuation *= fresnel * (1.0 - roughness) * 0.6; // Stronger attenuation for performance
+            
+            // Early termination if attenuation is too low
+            if (length(attenuation) < 0.1) {
+                break;
             }
+            
+            // Continue the ray loop for the reflection
         } else {
-            // Non-reflective material - calculate full PBR lighting
+            // Non-reflective material or max bounces reached - calculate full PBR lighting
             vec3 materialColor = calculatePBR(hitPos, normal, rayDir, albedo, roughness, metallic);
             
             // Apply atmospheric fog
