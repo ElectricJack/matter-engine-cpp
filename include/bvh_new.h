@@ -139,10 +139,68 @@ public:
 	
 	mat4 Inverted() const
 	{
-		// Simplified inversion for basic transforms
-		mat4 ret;
-		// For now, return identity - will implement proper inversion later
-		return ret;
+		// General 4x4 matrix inversion using Gauss-Jordan elimination
+		mat4 inv;
+		float m[16], invOut[16];
+		
+		// Copy to working array
+		for (int i = 0; i < 16; i++) m[i] = cell[i];
+		
+		// Initialize as identity
+		for (int i = 0; i < 16; i++) invOut[i] = 0.0f;
+		invOut[0] = invOut[5] = invOut[10] = invOut[15] = 1.0f;
+		
+		// Perform Gauss-Jordan elimination
+		for (int i = 0; i < 4; i++) {
+			// Find pivot
+			int pivot = i;
+			for (int j = i + 1; j < 4; j++) {
+				if (fabs(m[j * 4 + i]) > fabs(m[pivot * 4 + i])) {
+					pivot = j;
+				}
+			}
+			
+			// Swap rows if needed
+			if (pivot != i) {
+				for (int k = 0; k < 4; k++) {
+					float tmp = m[i * 4 + k];
+					m[i * 4 + k] = m[pivot * 4 + k];
+					m[pivot * 4 + k] = tmp;
+					
+					tmp = invOut[i * 4 + k];
+					invOut[i * 4 + k] = invOut[pivot * 4 + k];
+					invOut[pivot * 4 + k] = tmp;
+				}
+			}
+			
+			// Check for singular matrix
+			if (fabs(m[i * 4 + i]) < 1e-8f) {
+				// Return identity for singular matrices
+				return mat4::Identity();
+			}
+			
+			// Scale pivot row
+			float scale = 1.0f / m[i * 4 + i];
+			for (int k = 0; k < 4; k++) {
+				m[i * 4 + k] *= scale;
+				invOut[i * 4 + k] *= scale;
+			}
+			
+			// Eliminate column
+			for (int j = 0; j < 4; j++) {
+				if (j != i) {
+					float factor = m[j * 4 + i];
+					for (int k = 0; k < 4; k++) {
+						m[j * 4 + k] -= factor * m[i * 4 + k];
+						invOut[j * 4 + k] -= factor * invOut[i * 4 + k];
+					}
+				}
+			}
+		}
+		
+		// Copy result
+		for (int i = 0; i < 16; i++) inv.cell[i] = invOut[i];
+		return inv;
 	}
 	
 	float3 TransformPoint( const float3& v ) const
@@ -170,6 +228,7 @@ public:
 	BVHInstance( BVH* blas, uint index ) : bvh( blas ), idx( index ) { SetTransform( mat4() ); }
 	void SetTransform( const mat4& transform );
 	mat4& GetTransform() { return transform; }
+	mat4& GetInvTransform() { return invTransform; }
 	void Intersect( Ray& ray );
 private:
 	mat4 transform;

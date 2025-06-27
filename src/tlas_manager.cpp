@@ -366,14 +366,15 @@ void TLASManager::generate_instance_texture_data(const BLASManager& blas_manager
         }
         
         // Rows 4-7: inverse transform matrix (4x4)
+        // Get the actual inverse transform from the BVHInstance
+        mat4 inv_transform = const_cast<BVHInstance&>(inst).GetInvTransform();
         for (int row = 0; row < 4; row++) {
             int rowIdx = texture_width * ((row + 4) * 4) + baseIdx;
             if (rowIdx + 3 < static_cast<int>(output_data.size())) {
-                // For now, use the transform as inverse (placeholder)
-                output_data[rowIdx + 0] = transform_matrix.cell[row * 4 + 0];
-                output_data[rowIdx + 1] = transform_matrix.cell[row * 4 + 1];
-                output_data[rowIdx + 2] = transform_matrix.cell[row * 4 + 2];
-                output_data[rowIdx + 3] = transform_matrix.cell[row * 4 + 3];
+                output_data[rowIdx + 0] = inv_transform.cell[row * 4 + 0];
+                output_data[rowIdx + 1] = inv_transform.cell[row * 4 + 1];
+                output_data[rowIdx + 2] = inv_transform.cell[row * 4 + 2];
+                output_data[rowIdx + 3] = inv_transform.cell[row * 4 + 3];
             }
         }
         

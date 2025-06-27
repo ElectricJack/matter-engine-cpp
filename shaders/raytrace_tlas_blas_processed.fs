@@ -77,8 +77,9 @@ struct TLASNode
 
 struct BVHInstance
 {
-    mat4 transform;
-    mat4 invTransform;
+    // Transform matrix as 16 individual floats (row-major like reference)
+    float transform[16];
+    float invTransform[16];
     uint blasIndex;
     uint materialId;
 };
@@ -236,13 +237,17 @@ BVHInstance decodeInstance(int instanceIndex)
     
     float instTexCoord = (float(instanceIndex) + 0.5) / float(instanceCount);
     
-    // Load transform matrix (4 rows)
+    // Load transform matrix (4 rows, stored as individual floats)
     vec4 row0 = texture(instancesTexture, vec2(instTexCoord, 0.0556));
     vec4 row1 = texture(instancesTexture, vec2(instTexCoord, 0.1667));
     vec4 row2 = texture(instancesTexture, vec2(instTexCoord, 0.2778));
     vec4 row3 = texture(instancesTexture, vec2(instTexCoord, 0.3889));
     
-    inst.transform = mat4(row0, row1, row2, row3);
+    // Store as individual floats in row-major order
+    inst.transform[0] = row0.x; inst.transform[1] = row0.y; inst.transform[2] = row0.z; inst.transform[3] = row0.w;
+    inst.transform[4] = row1.x; inst.transform[5] = row1.y; inst.transform[6] = row1.z; inst.transform[7] = row1.w;
+    inst.transform[8] = row2.x; inst.transform[9] = row2.y; inst.transform[10] = row2.z; inst.transform[11] = row2.w;
+    inst.transform[12] = row3.x; inst.transform[13] = row3.y; inst.transform[14] = row3.z; inst.transform[15] = row3.w;
     
     // Load inverse transform matrix (4 rows)
     vec4 invRow0 = texture(instancesTexture, vec2(instTexCoord, 0.5000));
@@ -250,7 +255,11 @@ BVHInstance decodeInstance(int instanceIndex)
     vec4 invRow2 = texture(instancesTexture, vec2(instTexCoord, 0.7222));
     vec4 invRow3 = texture(instancesTexture, vec2(instTexCoord, 0.8333));
     
-    inst.invTransform = mat4(invRow0, invRow1, invRow2, invRow3);
+    // Store as individual floats in row-major order  
+    inst.invTransform[0] = invRow0.x; inst.invTransform[1] = invRow0.y; inst.invTransform[2] = invRow0.z; inst.invTransform[3] = invRow0.w;
+    inst.invTransform[4] = invRow1.x; inst.invTransform[5] = invRow1.y; inst.invTransform[6] = invRow1.z; inst.invTransform[7] = invRow1.w;
+    inst.invTransform[8] = invRow2.x; inst.invTransform[9] = invRow2.y; inst.invTransform[10] = invRow2.z; inst.invTransform[11] = invRow2.w;
+    inst.invTransform[12] = invRow3.x; inst.invTransform[13] = invRow3.y; inst.invTransform[14] = invRow3.z; inst.invTransform[15] = invRow3.w;
     
     // Load metadata (currently using blas_start_index as blasIndex for compatibility)
     vec4 metadata = texture(instancesTexture, vec2(instTexCoord, 0.9444));
@@ -260,21 +269,46 @@ BVHInstance decodeInstance(int instanceIndex)
     return inst;
 }
 
-// Transform ray to local space
-void transformRay(vec3 rayOrigin, vec3 rayDir, mat4 invTransform, out vec3 localOrigin, out vec3 localDir)
+// Transform vector (ported from tools.cl)
+vec3 transformVector(vec3 v, float T[16])
 {
-    vec4 localOrigin4 = invTransform * vec4(rayOrigin, 1.0);
-    vec4 localDir4 = invTransform * vec4(rayDir, 0.0);
+    return vec3(
+        dot(vec3(T[0], T[1], T[2]), v),
+        dot(vec3(T[4], T[5], T[6]), v),
+        dot(vec3(T[8], T[9], T[10]), v)
+    );
+}
+
+// Transform position (ported from tools.cl)
+vec3 transformPosition(vec3 v, float T[16])
+{
+    return vec3(
+        dot(vec3(T[0], T[1], T[2]), v) + T[3],
+        dot(vec3(T[4], T[5], T[6]), v) + T[7],
+        dot(vec3(T[8], T[9], T[10]), v) + T[11]
+    );
+}
+
+// Transform ray to local space (ported from tools.cl)
+void transformRay(inout Ray ray, float invTransform[16])
+{
+    // Transform direction and origin using reference functions
+    ray.D = transformVector(ray.D, invTransform);
+    ray.O = transformPosition(ray.O, invTransform);
     
-    localOrigin = localOrigin4.xyz;
-    localDir = normalize(localDir4.xyz);
+    // Update reciprocals after transformation (crucial!)
+    ray.rD = vec3(1.0) / ray.D;
 }
 
 // Transform normal from local to world space
-vec3 transformNormal(vec3 normal, mat4 transform)
+vec3 transformNormal(vec3 normal, float transform[16])
 {
-    vec4 worldNormal4 = transpose(transform) * vec4(normal, 0.0);
-    return normalize(worldNormal4.xyz);
+    // For normals, use transpose of transform (inverse of inverse = original)
+    return normalize(vec3(
+        dot(vec3(transform[0], transform[4], transform[8]), normal),
+        dot(vec3(transform[1], transform[5], transform[9]), normal),
+        dot(vec3(transform[2], transform[6], transform[10]), normal)
+    ));
 }
 
 // BVH traversal (ported from BVH::Intersect in bvh.cpp)
@@ -338,9 +372,29 @@ void BVHIntersect(inout Ray ray, uint instanceIdx, uint blasOffset)
     }
 }
 
-// TLAS traversal (ported from TLAS::Intersect)
+// Instance intersection (ported from tools.cl)
+void instanceIntersect(inout Ray ray, BVHInstance inst, uint blasIdx)
+{
+    // Backup ray
+    Ray backup = ray;
+    
+    // Transform ray to instance space
+    transformRay(ray, inst.invTransform);
+    
+    // Intersect with BLAS
+    BVHIntersect(ray, blasIdx, inst.blasIndex);
+    
+    // Restore ray but keep intersection
+    backup.hit = ray.hit;
+    ray = backup;
+}
+
+// TLAS traversal (ported from tools.cl)
 void TLASIntersect(inout Ray ray)
 {
+    // Initialize reciprocals for TLAS traversal
+    ray.rD = vec3(1.0) / ray.D;
+    
     // Stack for iterative TLAS traversal
     int stack[32];
     int stackPtr = 0;
@@ -352,84 +406,47 @@ void TLASIntersect(inout Ray ray)
     {
         TLASNode node = decodeTLASNode(nodeIdx);
         
-        // Test ray against TLAS node AABB
-        if (IntersectAABB(ray, node.aabbMin, node.aabbMax) == 1e30)
+        if (node.leftRight == 0u) // Leaf node
         {
-            // Miss - pop from stack
+            // Current node is a leaf: intersect instance
+            BVHInstance inst = decodeInstance(int(node.BLAS));
+            instanceIntersect(ray, inst, node.BLAS);
+            
+            // Pop a node from the stack; terminate if none left
             if (stackPtr == 0) break;
             nodeIdx = stack[--stackPtr];
             continue;
         }
         
-        if (node.leftRight == 0u) // Leaf node
+        // Current node is an interior node: visit child nodes, ordered
+        uint leftChild = node.leftRight & 0xFFFFu;
+        uint rightChild = (node.leftRight >> 16) & 0xFFFFu;
+        
+        TLASNode child1 = decodeTLASNode(int(leftChild));
+        TLASNode child2 = decodeTLASNode(int(rightChild));
+        
+        float dist1 = IntersectAABB(ray, child1.aabbMin, child1.aabbMax);
+        float dist2 = IntersectAABB(ray, child2.aabbMin, child2.aabbMax);
+        
+        // Sort by distance to process nearest first
+        if (dist1 > dist2)
         {
-            // Intersect with instance
-            uint instanceIndex = node.BLAS;
-            if (instanceIndex < uint(instanceCount))
-            {
-                BVHInstance inst = decodeInstance(int(instanceIndex));
-                
-                // Transform ray to instance space
-                vec3 localRayOrigin, localRayDir;
-                transformRay(ray.O, ray.D, inst.invTransform, localRayOrigin, localRayDir);
-                
-                // Create local ray
-                Ray localRay;
-                localRay.O = localRayOrigin;
-                localRay.D = localRayDir;
-                localRay.rD = vec3(1.0) / localRayDir;
-                localRay.hit = ray.hit;
-                
-                // Intersect with BLAS
-                BVHIntersect(localRay, instanceIndex, inst.blasIndex);
-                
-                // Update global ray if we found a closer intersection
-                if (localRay.hit.t < ray.hit.t)
-                {
-                    ray.hit = localRay.hit;
-                }
-            }
-            
-            // Pop from stack
+            float tmpDist = dist1; dist1 = dist2; dist2 = tmpDist;
+            uint tmpIdx = leftChild; leftChild = rightChild; rightChild = tmpIdx;
+        }
+        
+        if (dist1 == 1e30)
+        {
+            // Missed both child nodes; pop a node from the stack
             if (stackPtr == 0) break;
             nodeIdx = stack[--stackPtr];
         }
-        else // Interior node
+        else
         {
-            // Extract left and right child indices
-            uint leftChild = node.leftRight & 0xFFFFu;
-            uint rightChild = (node.leftRight >> 16) & 0xFFFFu;
-            
-            // Test both children and order by distance
-            TLASNode leftNode = decodeTLASNode(int(leftChild));
-            TLASNode rightNode = decodeTLASNode(int(rightChild));
-            
-            float distLeft = IntersectAABB(ray, leftNode.aabbMin, leftNode.aabbMax);
-            float distRight = IntersectAABB(ray, rightNode.aabbMin, rightNode.aabbMax);
-            
-            // Sort by distance - process closer child first
-            if (distLeft > distRight)
-            {
-                float tmpDist = distLeft; distLeft = distRight; distRight = tmpDist;
-                uint tmpIdx = leftChild; leftChild = rightChild; rightChild = tmpIdx;
-            }
-            
-            if (distLeft == 1e30)
-            {
-                // Both children missed
-                if (stackPtr == 0) break;
-                nodeIdx = stack[--stackPtr];
-            }
-            else
-            {
-                // Process closer child first
-                nodeIdx = int(leftChild);
-                // Push farther child to stack if it hit
-                if (distRight != 1e30 && stackPtr < 31)
-                {
-                    stack[stackPtr++] = int(rightChild);
-                }
-            }
+            // Visit near node; push the far node if the ray intersects it
+            nodeIdx = int(leftChild);
+            if (dist2 != 1e30 && stackPtr < 31)
+                stack[stackPtr++] = int(rightChild);
         }
     }
 }
