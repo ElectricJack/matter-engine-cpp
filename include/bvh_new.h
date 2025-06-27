@@ -206,6 +206,7 @@ public:
 	void Build();
 	void Intersect( Ray& ray );
 private:
+	void BuildRecursive( uint nodeIndex, uint first, uint count );
 	int FindBestMatch( int N, int A );
 public:
 	TLASNode* tlasNode = 0;

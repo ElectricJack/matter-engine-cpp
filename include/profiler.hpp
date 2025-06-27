@@ -106,10 +106,17 @@ public:
             });
         
         for (const auto* stats : sorted_sections) {
+            // Skip sections with very low activity or that are only initialization-related
+            if (stats->call_count == 0 || 
+                stats->average_time_ms < 0.01 || 
+                stats->percentage < 0.1) {
+                continue;
+            }
+            
             printf("%-25s %8.2f %8.2f %8.2f %8.2f %6d %4.1f%%\n",
                    stats->name.c_str(),
                    stats->average_time_ms,
-                   stats->min_time_ms, 
+                   stats->min_time_ms < 1e8 ? stats->min_time_ms : 0.0,  // Fix crazy min values
                    stats->max_time_ms,
                    stats->total_time_ms,
                    stats->call_count,

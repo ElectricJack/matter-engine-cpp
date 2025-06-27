@@ -355,6 +355,7 @@ void TLASIntersect(inout Ray ray)
         // Test ray against TLAS node AABB
         if (IntersectAABB(ray, node.aabbMin, node.aabbMax) == 1e30)
         {
+            // Miss - pop from stack
             if (stackPtr == 0) break;
             nodeIdx = stack[--stackPtr];
             continue;
@@ -364,28 +365,32 @@ void TLASIntersect(inout Ray ray)
         {
             // Intersect with instance
             uint instanceIndex = node.BLAS;
-            BVHInstance inst = decodeInstance(int(instanceIndex));
-            
-            // Transform ray to instance space
-            vec3 localRayOrigin, localRayDir;
-            transformRay(ray.O, ray.D, inst.invTransform, localRayOrigin, localRayDir);
-            
-            // Create local ray
-            Ray localRay;
-            localRay.O = localRayOrigin;
-            localRay.D = localRayDir;
-            localRay.rD = vec3(1.0) / localRayDir;
-            localRay.hit = ray.hit;
-            
-            // Intersect with BLAS
-            BVHIntersect(localRay, instanceIndex, inst.blasIndex);
-            
-            // Update global ray if we found a closer intersection
-            if (localRay.hit.t < ray.hit.t)
+            if (instanceIndex < uint(instanceCount))
             {
-                ray.hit = localRay.hit;
+                BVHInstance inst = decodeInstance(int(instanceIndex));
+                
+                // Transform ray to instance space
+                vec3 localRayOrigin, localRayDir;
+                transformRay(ray.O, ray.D, inst.invTransform, localRayOrigin, localRayDir);
+                
+                // Create local ray
+                Ray localRay;
+                localRay.O = localRayOrigin;
+                localRay.D = localRayDir;
+                localRay.rD = vec3(1.0) / localRayDir;
+                localRay.hit = ray.hit;
+                
+                // Intersect with BLAS
+                BVHIntersect(localRay, instanceIndex, inst.blasIndex);
+                
+                // Update global ray if we found a closer intersection
+                if (localRay.hit.t < ray.hit.t)
+                {
+                    ray.hit = localRay.hit;
+                }
             }
             
+            // Pop from stack
             if (stackPtr == 0) break;
             nodeIdx = stack[--stackPtr];
         }
@@ -395,15 +400,36 @@ void TLASIntersect(inout Ray ray)
             uint leftChild = node.leftRight & 0xFFFFu;
             uint rightChild = (node.leftRight >> 16) & 0xFFFFu;
             
-            // Add children to stack (right first, so left is processed first)
-            if (stackPtr < 30)
+            // Test both children and order by distance
+            TLASNode leftNode = decodeTLASNode(int(leftChild));
+            TLASNode rightNode = decodeTLASNode(int(rightChild));
+            
+            float distLeft = IntersectAABB(ray, leftNode.aabbMin, leftNode.aabbMax);
+            float distRight = IntersectAABB(ray, rightNode.aabbMin, rightNode.aabbMax);
+            
+            // Sort by distance - process closer child first
+            if (distLeft > distRight)
             {
-                stack[stackPtr++] = int(rightChild);
-                stack[stackPtr++] = int(leftChild);
+                float tmpDist = distLeft; distLeft = distRight; distRight = tmpDist;
+                uint tmpIdx = leftChild; leftChild = rightChild; rightChild = tmpIdx;
             }
             
-            if (stackPtr == 0) break;
-            nodeIdx = stack[--stackPtr];
+            if (distLeft == 1e30)
+            {
+                // Both children missed
+                if (stackPtr == 0) break;
+                nodeIdx = stack[--stackPtr];
+            }
+            else
+            {
+                // Process closer child first
+                nodeIdx = int(leftChild);
+                // Push farther child to stack if it hit
+                if (distRight != 1e30 && stackPtr < 31)
+                {
+                    stack[stackPtr++] = int(rightChild);
+                }
+            }
         }
     }
 }

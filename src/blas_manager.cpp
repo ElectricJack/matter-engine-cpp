@@ -39,8 +39,6 @@ LegacyTriangle BLASManager::convert_triangle_back(const Tri& new_tri) {
 }
 
 uint32_t BLASManager::calculate_hash(const Tri* triangles, int count) const {
-    PROFILE_SECTION("BLAS Hash Calculation");
-    
     uint32_t hash = 2166136261u; // FNV-1a offset basis
     
     for (int i = 0; i < count; i++) {
@@ -86,8 +84,6 @@ bool BLASManager::triangles_equal(const std::vector<Tri>& a, const Tri* b, int c
 }
 
 BLASHandle BLASManager::find_existing_blas(const Tri* triangles, int count, uint32_t hash) const {
-    PROFILE_SECTION("BLAS Deduplication Check");
-    
     auto range = hash_to_entry_.equal_range(hash);
     for (auto it = range.first; it != range.second; ++it) {
         const auto& entry = entries_[it->second];
@@ -196,8 +192,7 @@ BLASHandle BLASManager::register_triangles(Tri* triangles, int triangle_count) {
         bvh->bvhNode[0].aabbMin = aabbMin;
         bvh->bvhNode[0].aabbMax = aabbMax;
         
-        printf("    BLAS: Created root node with %d triangles, AABB: (%.2f,%.2f,%.2f) to (%.2f,%.2f,%.2f)\n", 
-               triangle_count, aabbMin.x, aabbMin.y, aabbMin.z, aabbMax.x, aabbMax.y, aabbMax.z);
+        // Root node created with proper AABB
         
         BLASHandle handle = next_handle_++;
         
@@ -429,13 +424,7 @@ void BLASManager::ensure_gpu_textures_ready() {
                 const Tri& tri = all_triangles[i];
                 int base_idx = static_cast<int>(i) * 4;
                 
-                // Debug first triangle
-                if (i == 0) {
-                    printf("    BLAS: First triangle vertices: (%.2f,%.2f,%.2f) (%.2f,%.2f,%.2f) (%.2f,%.2f,%.2f)\n",
-                           tri.vertex0.x, tri.vertex0.y, tri.vertex0.z,
-                           tri.vertex1.x, tri.vertex1.y, tri.vertex1.z,
-                           tri.vertex2.x, tri.vertex2.y, tri.vertex2.z);
-                }
+                // Triangle data processed
                 
                 // Row 0: v0 + materialId
                 texture_data[base_idx + 0] = tri.vertex0.x;
@@ -538,8 +527,6 @@ void BLASManager::ensure_gpu_textures_ready() {
 void BLASManager::bind_to_shader(Shader shader) const {
     PROFILE_SECTION("BLAS Shader Binding");
     
-    printf("    BLAS: Binding to shader...\n");
-    
     // Ensure textures are ready
     const_cast<BLASManager*>(this)->ensure_gpu_textures_ready();
     
@@ -550,14 +537,9 @@ void BLASManager::bind_to_shader(Shader shader) const {
     int blas_nodes_texture_loc = GetShaderLocation(shader, "blasNodesTexture");
     int intersection_mode_loc  = GetShaderLocation(shader, "intersectionMode");
     
-    printf("    BLAS: Uniform locations - triangleCount:%d, blasNodeCount:%d, trianglesTexture:%d, blasNodesTexture:%d, intersectionMode:%d\n",
-           triangle_count_loc, blas_node_count_loc, triangles_texture_loc, blas_nodes_texture_loc, intersection_mode_loc);
-    
     // Set counts
     int triangle_count = get_total_triangle_count();
     int node_count     = get_total_node_count();
-    
-    printf("    BLAS: Setting counts - triangles:%d, nodes:%d\n", triangle_count, node_count);
     
     SetShaderValue(shader, triangle_count_loc,  &triangle_count, SHADER_UNIFORM_INT);
     SetShaderValue(shader, blas_node_count_loc, &node_count,     SHADER_UNIFORM_INT);
@@ -566,24 +548,14 @@ void BLASManager::bind_to_shader(Shader shader) const {
     int intersection_mode = 1;
     SetShaderValue(shader, intersection_mode_loc, &intersection_mode, SHADER_UNIFORM_INT);
     
-    printf("    BLAS: Texture IDs - triangles:%u, nodes:%u\n", triangles_texture_.id, nodes_texture_.id);
-    
     // Bind textures
     if (triangles_texture_.id != 0 && triangles_texture_loc != -1) {
         SetShaderValueTexture(shader, triangles_texture_loc, triangles_texture_);
-        printf("    BLAS: Bound triangles texture (ID:%u) to location %d\n", triangles_texture_.id, triangles_texture_loc);
-    } else {
-        printf("    BLAS: WARNING - Cannot bind triangles texture (ID:%u, location:%d)\n", triangles_texture_.id, triangles_texture_loc);
     }
     
     if (nodes_texture_.id != 0 && blas_nodes_texture_loc != -1) {
         SetShaderValueTexture(shader, blas_nodes_texture_loc, nodes_texture_);
-        printf("    BLAS: Bound nodes texture (ID:%u) to location %d\n", nodes_texture_.id, blas_nodes_texture_loc);
-    } else {
-        printf("    BLAS: WARNING - Cannot bind nodes texture (ID:%u, location:%d)\n", nodes_texture_.id, blas_nodes_texture_loc);
     }
-    
-    printf("    BLAS: Shader binding complete.\n");
 }
 
 void BLASManager::print_stats() const {
@@ -869,8 +841,6 @@ std::vector<Tri> create_sphere_triangles(float radius, int segments, int rings) 
 }
 
 std::vector<Tri> create_plane_triangles(float width, float height) {
-    PROFILE_SECTION("Create Plane Triangles (New)");
-    
     std::vector<Tri> triangles;
     triangles.reserve(2);
     

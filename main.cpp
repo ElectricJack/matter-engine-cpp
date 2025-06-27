@@ -129,9 +129,9 @@ private:
             case 2: {
                 // Test 2: Single cube + ground plane
                 tlas_manager_->load_identity();
-                tlas_manager_->draw(cube_blas_, 0); // Red cube
+                tlas_manager_->draw(sphere_blas_, 1); // Blue sphere
                 
-                //tlas_manager_->load_identity();
+                tlas_manager_->load_identity();
                 tlas_manager_->translate(0.0f, -5.0f, 0.0f);
                 tlas_manager_->draw(ground_blas_, 2); // Green ground
                 
@@ -141,7 +141,7 @@ private:
             
             case 3: {
                 tlas_manager_->load_identity();
-                tlas_manager_->translate(0.0f, -5.0f, 0.0f);
+                //tlas_manager_->translate(0.0f, -5.0f, 0.0f);
                 tlas_manager_->draw(ground_blas_, 2); // Green ground
 
                 tlas_manager_->load_identity();
@@ -353,16 +353,11 @@ private:
     }
     
     void update() {
-        PROFILE_SECTION("Frame Update");
-        
         // Handle input
         handle_input();
         
         // Update camera
-        {
-            PROFILE_SECTION("Camera Update");
-            UpdateCamera(&camera_, CAMERA_FREE);
-        }
+        UpdateCamera(&camera_, CAMERA_FREE);
     }
     
     void handle_input() {
@@ -399,15 +394,8 @@ private:
     void render() {
         PROFILE_SECTION("Frame Render");
         
-        {
-            PROFILE_SECTION("Begin Drawing");
-            BeginDrawing();
-        }
-        
-        {
-            PROFILE_SECTION("Clear Screen");
-            ClearBackground(BLACK);
-        }
+        BeginDrawing();
+        ClearBackground(BLACK);
         
         if (use_raytracing_ && raytracing_shader_.id != 0) {
             render_raytraced();
@@ -475,10 +463,7 @@ private:
         }
         
         // Draw fullscreen rectangle
-        {
-            PROFILE_SECTION("Fullscreen Quad");
-            DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), WHITE);
-        }
+        DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), WHITE);
         
         EndShaderMode();
     }
@@ -549,8 +534,6 @@ private:
     }
     
     void cleanup() {
-        PROFILE_SECTION("Cleanup");
-        
         if (raytracing_shader_.id != 0) UnloadShader(raytracing_shader_);
         // Managers clean up their own textures in destructors
     }

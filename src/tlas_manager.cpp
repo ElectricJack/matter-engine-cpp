@@ -126,8 +126,6 @@ Matrix4x4& TLASManager::get_current_matrix() {
 }
 
 void TLASManager::push_matrix() {
-    PROFILE_SECTION("Matrix Push");
-    
     if (matrix_stack_.size() >= 32) { // Reasonable limit
         printf("Warning: Matrix stack overflow in TLAS manager\n");
         return;
@@ -137,8 +135,6 @@ void TLASManager::push_matrix() {
 }
 
 void TLASManager::pop_matrix() {
-    PROFILE_SECTION("Matrix Pop");
-    
     if (matrix_stack_.size() <= 1) {
         printf("Warning: Matrix stack underflow in TLAS manager\n");
         return;
@@ -227,8 +223,6 @@ void TLASManager::draw_batch(const std::vector<DrawInstance>& instances) {
 }
 
 void TLASManager::clear() {
-    PROFILE_SECTION("TLAS Clear");
-    
     draw_records_.clear();
     next_instance_id_ = 1;
     
@@ -273,9 +267,11 @@ void TLASManager::build(const BLASManager& blas_manager) {
         // Create BVH instance
         auto instance = std::make_unique<BVHInstance>(bvh, record.instance_id);
         
-        // Convert and set transform
+        // Convert and set transform - this will also calculate world bounds
         mat4 new_transform = convert_matrix(record.transform);
         instance->SetTransform(new_transform);
+        
+        // Instance bounds calculated
         
         // Add to our vectors
         instance_ptrs.push_back(instance.get());
@@ -308,8 +304,6 @@ void TLASManager::generate_instance_texture_data(const BLASManager& blas_manager
                                                 std::vector<float>& output_data, 
                                                 int texture_width,
                                                 int texture_height) const {
-    PROFILE_SECTION("TLAS Instance Texture Generation");
-    
     if (!tlas_) return;
     
     output_data.clear();
@@ -355,8 +349,7 @@ void TLASManager::generate_instance_texture_data(const BLASManager& blas_manager
             BLASOffsets offsets = blas_manager.get_offsets(blas_handle);
             output_data[metadataIdx + 0] = static_cast<float>(offsets.node_offset);
             
-            printf("    TLAS: Instance %d - BLAS handle:%u, node_offset:%d, triangle_offset:%d\n", 
-                   i, blas_handle, offsets.node_offset, offsets.triangle_offset);
+            // Instance metadata set
             
             // Get material ID from the corresponding draw record
             uint32_t materialId = 0;
@@ -373,8 +366,6 @@ void TLASManager::generate_instance_texture_data(const BLASManager& blas_manager
 void TLASManager::generate_node_texture_data(std::vector<float>& output_data,
                                             int texture_width, 
                                             int texture_height) const {
-    PROFILE_SECTION("TLAS Node Texture Generation");
-    
     if (!tlas_) return;
     
     output_data.clear();
@@ -399,6 +390,8 @@ void TLASManager::generate_node_texture_data(std::vector<float>& output_data,
             output_data[row1Idx + 1] = node.aabbMax.y;
             output_data[row1Idx + 2] = node.aabbMax.z;
             output_data[row1Idx + 3] = static_cast<float>(node.BLAS);
+            
+            // TLAS node data set
         }
         
         // Row 2: padding
@@ -444,8 +437,6 @@ void TLASManager::ensure_gpu_textures_ready(const BLASManager& blas_manager) {
     
     // Generate instances texture
     if (get_instance_count() > 0) {
-        PROFILE_SECTION("TLAS Instance Texture Generation");
-        
         int texture_width = get_instance_count();
         int texture_height = 9; // 9 rows per instance (4 transform + 4 inverse + 1 metadata)
         
@@ -468,8 +459,6 @@ void TLASManager::ensure_gpu_textures_ready(const BLASManager& blas_manager) {
     
     // Generate nodes texture
     if (get_node_count() > 0) {
-        PROFILE_SECTION("TLAS Node Texture Generation");
-        
         int texture_width = get_node_count();
         int texture_height = 3; // 3 rows per node
         
@@ -496,8 +485,6 @@ void TLASManager::ensure_gpu_textures_ready(const BLASManager& blas_manager) {
 void TLASManager::bind_to_shader(Shader shader, const BLASManager& blas_manager) const {
     PROFILE_SECTION("TLAS Shader Binding");
     
-    printf("    TLAS: Binding to shader...\n");
-    
     // Ensure textures are ready
     const_cast<TLASManager*>(this)->ensure_gpu_textures_ready(blas_manager);
     
@@ -507,36 +494,21 @@ void TLASManager::bind_to_shader(Shader shader, const BLASManager& blas_manager)
     int tlas_nodes_texture_loc = GetShaderLocation(shader, "tlasNodesTexture");
     int instances_texture_loc = GetShaderLocation(shader, "instancesTexture");
     
-    printf("    TLAS: Uniform locations - tlasNodeCount:%d, instanceCount:%d, tlasNodesTexture:%d, instancesTexture:%d\n",
-           tlas_node_count_loc, instance_count_loc, tlas_nodes_texture_loc, instances_texture_loc);
-    
     // Set counts
     int node_count = get_node_count();
     int inst_count = get_instance_count();
     
-    printf("    TLAS: Setting counts - nodes:%d, instances:%d\n", node_count, inst_count);
-    
     SetShaderValue(shader, tlas_node_count_loc, &node_count, SHADER_UNIFORM_INT);
     SetShaderValue(shader, instance_count_loc, &inst_count, SHADER_UNIFORM_INT);
-    
-    printf("    TLAS: Texture IDs - nodes:%u, instances:%u\n", nodes_texture_.id, instances_texture_.id);
     
     // Bind textures
     if (nodes_texture_.id != 0 && tlas_nodes_texture_loc != -1) {
         SetShaderValueTexture(shader, tlas_nodes_texture_loc, nodes_texture_);
-        printf("    TLAS: Bound nodes texture (ID:%u) to location %d\n", nodes_texture_.id, tlas_nodes_texture_loc);
-    } else {
-        printf("    TLAS: WARNING - Cannot bind nodes texture (ID:%u, location:%d)\n", nodes_texture_.id, tlas_nodes_texture_loc);
     }
     
     if (instances_texture_.id != 0 && instances_texture_loc != -1) {
         SetShaderValueTexture(shader, instances_texture_loc, instances_texture_);
-        printf("    TLAS: Bound instances texture (ID:%u) to location %d\n", instances_texture_.id, instances_texture_loc);
-    } else {
-        printf("    TLAS: WARNING - Cannot bind instances texture (ID:%u, location:%d)\n", instances_texture_.id, instances_texture_loc);
     }
-    
-    printf("    TLAS: Shader binding complete.\n");
 }
 
 void TLASManager::print_stats() const {

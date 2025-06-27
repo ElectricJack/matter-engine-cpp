@@ -263,7 +263,40 @@ void BVHInstance::SetTransform( const mat4& transform_new )
 {
 	transform = transform_new;
 	invTransform = transform.Inverted();
-	// TODO: calculate world bounds
+	
+	// Calculate world bounds by transforming local BVH bounds
+	if (bvh && bvh->nodesUsed > 0) {
+		// Get local AABB from BVH root node
+		float3 localMin = bvh->bvhNode[0].aabbMin;
+		float3 localMax = bvh->bvhNode[0].aabbMax;
+		
+		// Transform all 8 corners of the AABB
+		float3 corners[8] = {
+			{localMin.x, localMin.y, localMin.z},
+			{localMax.x, localMin.y, localMin.z},
+			{localMin.x, localMax.y, localMin.z},
+			{localMax.x, localMax.y, localMin.z},
+			{localMin.x, localMin.y, localMax.z},
+			{localMax.x, localMin.y, localMax.z},
+			{localMin.x, localMax.y, localMax.z},
+			{localMax.x, localMax.y, localMax.z}
+		};
+		
+		// Initialize world bounds
+		bounds.bmin = make_float3(1e30f);
+		bounds.bmax = make_float3(-1e30f);
+		
+		// Transform each corner and expand bounds
+		for (int i = 0; i < 8; i++) {
+			float3 worldCorner = transform.TransformPoint(corners[i]);
+			bounds.bmin = fminf(bounds.bmin, worldCorner);
+			bounds.bmax = fmaxf(bounds.bmax, worldCorner);
+		}
+	} else {
+		// Fallback for empty BVH
+		bounds.bmin = make_float3(0.0f);
+		bounds.bmax = make_float3(0.0f);
+	}
 }
 
 void BVHInstance::Intersect( Ray& ray )
@@ -299,30 +332,143 @@ TLAS::TLAS( BVHInstance* bvhList, int N )
 
 void TLAS::Build()
 {
-	// Simple linear build for now - can be optimized later
+	// Initialize node indices
 	for (uint i = 0; i < blasCount; i++) nodeIdx[i] = i;
 	nodesUsed = 1;
 	
-	// Create single root node containing all instances
-	tlasNode[0].aabbMin = make_float3( 1e30f );
-	tlasNode[0].aabbMax = make_float3( -1e30f );
-	tlasNode[0].leftRight = 0; // leaf
-	tlasNode[0].BLAS = 0; // first instance
-	
-	// Expand bounds to contain all instances
-	for (uint i = 0; i < blasCount; i++)
-	{
-		tlasNode[0].aabbMin = fminf( tlasNode[0].aabbMin, blas[i].bounds.bmin );
-		tlasNode[0].aabbMax = fmaxf( tlasNode[0].aabbMax, blas[i].bounds.bmax );
+	if (blasCount == 0) {
+		// No instances
+		tlasNode[0].aabbMin = make_float3(0.0f);
+		tlasNode[0].aabbMax = make_float3(0.0f);
+		tlasNode[0].leftRight = 0;
+		tlasNode[0].BLAS = 0;
+		return;
 	}
+	
+	if (blasCount == 1) {
+		// Single instance - create leaf node
+		tlasNode[0].aabbMin = blas[0].bounds.bmin;
+		tlasNode[0].aabbMax = blas[0].bounds.bmax;
+		tlasNode[0].leftRight = 0; // leaf
+		tlasNode[0].BLAS = 0; // first instance
+		return;
+	}
+	
+	// Multiple instances - build proper binary tree
+	BuildRecursive(0, 0, blasCount);
+}
+
+void TLAS::BuildRecursive(uint nodeIndex, uint first, uint count)
+{
+	TLASNode& node = tlasNode[nodeIndex];
+	
+	// Calculate AABB for this node
+	node.aabbMin = make_float3(1e30f);
+	node.aabbMax = make_float3(-1e30f);
+	
+	for (uint i = first; i < first + count; i++) {
+		uint blasIdx = nodeIdx[i];
+		if (blas[blasIdx].bounds.bmin.x < 1e29f) { // Valid bounds check
+			node.aabbMin = fminf(node.aabbMin, blas[blasIdx].bounds.bmin);
+			node.aabbMax = fmaxf(node.aabbMax, blas[blasIdx].bounds.bmax);
+		}
+	}
+	
+	// If we have only one instance, make this a leaf
+	if (count == 1) {
+		node.leftRight = 0; // leaf
+		node.BLAS = nodeIdx[first]; // instance index
+		return;
+	}
+	
+	// Split instances into two groups
+	uint split = count / 2;
+	uint leftFirst = first;
+	uint leftCount = split;
+	uint rightFirst = first + split;
+	uint rightCount = count - split;
+	
+	// Create child nodes
+	uint leftChild = nodesUsed++;
+	uint rightChild = nodesUsed++;
+	
+	// Set interior node data
+	node.leftRight = (leftChild & 0xFFFF) | ((rightChild & 0xFFFF) << 16);
+	node.BLAS = 0; // Not used for interior nodes
+	
+	// Recursively build children
+	BuildRecursive(leftChild, leftFirst, leftCount);
+	BuildRecursive(rightChild, rightFirst, rightCount);
 }
 
 void TLAS::Intersect( Ray& ray )
 {
-	// Simple traversal - intersect all instances
-	for (uint i = 0; i < blasCount; i++)
+	// Stack-based iterative traversal
+	TLASNode* stack[64];
+	uint stackPtr = 0;
+	TLASNode* node = &tlasNode[0];
+	
+	while (true)
 	{
-		blas[i].Intersect( ray );
+		// Test ray against node AABB
+		if (IntersectAABB(ray, node->aabbMin, node->aabbMax) == 1e30f)
+		{
+			// Miss - pop from stack
+			if (stackPtr == 0) break;
+			node = stack[--stackPtr];
+			continue;
+		}
+		
+		if (node->leftRight == 0) // Leaf node
+		{
+			// Intersect with instance
+			uint instanceIndex = node->BLAS;
+			if (instanceIndex < blasCount)
+			{
+				blas[instanceIndex].Intersect(ray);
+			}
+			
+			// Pop from stack
+			if (stackPtr == 0) break;
+			node = stack[--stackPtr];
+		}
+		else // Interior node
+		{
+			// Extract left and right child indices
+			uint leftChild = node->leftRight & 0xFFFF;
+			uint rightChild = (node->leftRight >> 16) & 0xFFFF;
+			
+			// Test both children and order by distance
+			TLASNode* leftNode = &tlasNode[leftChild];
+			TLASNode* rightNode = &tlasNode[rightChild];
+			
+			float distLeft = IntersectAABB(ray, leftNode->aabbMin, leftNode->aabbMax);
+			float distRight = IntersectAABB(ray, rightNode->aabbMin, rightNode->aabbMax);
+			
+			// Sort by distance - process closer child first
+			if (distLeft > distRight)
+			{
+				float tmpDist = distLeft; distLeft = distRight; distRight = tmpDist;
+				TLASNode* tmpNode = leftNode; leftNode = rightNode; rightNode = tmpNode;
+			}
+			
+			if (distLeft == 1e30f)
+			{
+				// Both children missed
+				if (stackPtr == 0) break;
+				node = stack[--stackPtr];
+			}
+			else
+			{
+				// Process closer child first
+				node = leftNode;
+				// Push farther child to stack if it hit
+				if (distRight != 1e30f && stackPtr < 63)
+				{
+					stack[stackPtr++] = rightNode;
+				}
+			}
+		}
 	}
 }
 
