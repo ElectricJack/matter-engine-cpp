@@ -19,17 +19,24 @@ echo ""
 
 # Check build directories
 echo "Build Status:"
-for platform in linux macos windows; do
+for platform in linux macos windows windows-native; do
     BUILD_DIR="./build/$platform"
-    EXECUTABLE="$BUILD_DIR/gpu_raytrace"
     RAYLIB_LIB="../Libraries/raylib/build/$platform/libraylib.a"
     PREPROCESSOR="$BUILD_DIR/shader_preprocessor"
     
-    printf "%-10s: " "$platform"
+    if [ "$platform" = "windows-native" ]; then
+        EXECUTABLE="$BUILD_DIR/gpu_raytrace.exe"
+        DISPLAY_NAME="win-native"
+    else
+        EXECUTABLE="$BUILD_DIR/gpu_raytrace"
+        DISPLAY_NAME="$platform"
+    fi
+    
+    printf "%-10s: " "$DISPLAY_NAME"
     
     if [ -f "$EXECUTABLE" ]; then
         SIZE=$(du -h "$EXECUTABLE" 2>/dev/null | cut -f1)
-        TIMESTAMP=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$EXECUTABLE" 2>/dev/null || stat -c "%y" "$EXECUTABLE" 2>/dev/null | cut -d' ' -f1-2)
+        TIMESTAMP=$(stat -c "%y" "$EXECUTABLE" 2>/dev/null | cut -d' ' -f1-2 | cut -d'.' -f1 2>/dev/null || echo "unknown")
         printf "✓ Built ($SIZE, $TIMESTAMP)"
     else
         printf "✗ Not built"
@@ -56,14 +63,20 @@ done
 
 echo ""
 
-# Check symlink
-if [ -L "./gpu_raytrace" ]; then
-    TARGET=$(readlink "./gpu_raytrace")
-    echo "Symlink: ./gpu_raytrace -> $TARGET"
-elif [ -f "./gpu_raytrace" ]; then
-    echo "Symlink: ./gpu_raytrace (regular file - not a symlink)"
+# Check root executables
+echo "Root Directory Executables:"
+if [ -f "./gpu_raytrace" ]; then
+    SIZE=$(du -h "./gpu_raytrace" 2>/dev/null | cut -f1)
+    echo "  ./gpu_raytrace: ✓ ($SIZE)"
 else
-    echo "Symlink: ./gpu_raytrace (not found)"
+    echo "  ./gpu_raytrace: ✗"
+fi
+
+if [ -f "./gpu_raytrace.exe" ]; then
+    SIZE=$(du -h "./gpu_raytrace.exe" 2>/dev/null | cut -f1)
+    echo "  ./gpu_raytrace.exe: ✓ ($SIZE)"
+else
+    echo "  ./gpu_raytrace.exe: ✗"
 fi
 
 echo ""
@@ -77,10 +90,12 @@ fi
 
 echo ""
 echo "Usage:"
-echo "  ./build.sh           - Build for current platform ($CURRENT_PLATFORM)"
-echo "  ./run.sh             - Run for current platform"
-echo "  make platform        - Show Makefile platform info"
-echo "  make clean           - Clean current platform"
-echo "  make clean-all       - Clean all platforms"
-echo "  make rebuild-raylib  - Force rebuild raylib for current platform"
-echo "  make shaders         - Process shaders" 
+echo "  ./build.sh                    - Build for current platform ($CURRENT_PLATFORM)"
+echo "  ./run.sh                      - Run for current platform"
+echo "  ./build-cross-compile.sh      - Cross-compile Windows .exe from Linux/WSL"
+echo "  TARGET=windows-native make    - Cross-compile using Makefile directly"
+echo "  make platform                 - Show Makefile platform info"
+echo "  make clean                    - Clean current platform"
+echo "  make clean-all                - Clean all platforms"
+echo "  make rebuild-raylib           - Force rebuild raylib for current platform"
+echo "  make shaders                  - Process shaders" 

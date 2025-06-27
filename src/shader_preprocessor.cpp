@@ -5,8 +5,12 @@
 #include <set>
 #include <regex>
 #include <cstdlib>
-#include <unistd.h>
-#include <climits>
+#ifdef _WIN32
+    #include <windows.h>
+#else
+    #include <unistd.h>
+    #include <climits>
+#endif
 
 class ShaderPreprocessor {
 public:
@@ -44,6 +48,15 @@ public:
 
 private:
     std::string get_absolute_path(const std::string& path) {
+#ifdef _WIN32
+        // Use GetFullPathName on Windows
+        char buffer[MAX_PATH];
+        DWORD result = GetFullPathNameA(path.c_str(), MAX_PATH, buffer, nullptr);
+        if (result == 0 || result > MAX_PATH) {
+            return path; // Return original path if GetFullPathName fails
+        }
+        return std::string(buffer);
+#else
         char* real_path = realpath(path.c_str(), nullptr);
         if (real_path) {
             std::string result(real_path);
@@ -51,6 +64,7 @@ private:
             return result;
         }
         return path; // fallback to original path if realpath fails
+#endif
     }
     
     std::string get_parent_dir(const std::string& file_path) {

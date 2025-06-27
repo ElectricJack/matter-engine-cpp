@@ -4,25 +4,38 @@ RAYLIB_PATH = ../Libraries/raylib
 CFLAGS = -Wall -Wextra -O2 -I$(RAYLIB_PATH)/src -I./include
 CXXFLAGS = -Wall -Wextra -O2 -std=c++14 -Wno-missing-field-initializers -I$(RAYLIB_PATH)/src -I./include
 
-# Detect OS and set platform-specific variables
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Darwin)
-    PLATFORM = macos
+# Cross-compilation support
+ifeq ($(TARGET),windows-native)
+    # Cross-compile for Windows from Linux/WSL
+    CC = x86_64-w64-mingw32-gcc
+    CXX = x86_64-w64-mingw32-g++
+    PLATFORM = windows-native
     PLATFORM_DEFINE = PLATFORM_DESKTOP
-    LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo -lm
+    LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -static-libgcc -static-libstdc++ -lopengl32 -lgdi32 -lwinmm
     LDLIBS = $(RAYLIB_PATH)/build/$(PLATFORM)/libraylib.a
-endif
-ifeq ($(UNAME_S),Linux)
-    PLATFORM = linux
-    PLATFORM_DEFINE = PLATFORM_DESKTOP
-    LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -lGL -lm -lpthread -ldl -lrt -lX11
-    LDLIBS = $(RAYLIB_PATH)/build/$(PLATFORM)/libraylib.a
-endif
-ifeq ($(OS),Windows_NT)
-    PLATFORM = windows
-    PLATFORM_DEFINE = PLATFORM_DESKTOP
-    LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -lopengl32 -lgdi32 -lwinmm
-    LDLIBS = $(RAYLIB_PATH)/build/$(PLATFORM)/libraylib.a
+    BIN_SUFFIX = .exe
+else
+    # Auto-detect OS and set platform-specific variables
+    UNAME_S := $(shell uname -s)
+    ifeq ($(UNAME_S),Darwin)
+        PLATFORM = macos
+        PLATFORM_DEFINE = PLATFORM_DESKTOP
+        LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo -lm
+        LDLIBS = $(RAYLIB_PATH)/build/$(PLATFORM)/libraylib.a
+    endif
+    ifeq ($(UNAME_S),Linux)
+        PLATFORM = linux
+        PLATFORM_DEFINE = PLATFORM_DESKTOP
+        LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -lGL -lm -lpthread -ldl -lrt -lX11
+        LDLIBS = $(RAYLIB_PATH)/build/$(PLATFORM)/libraylib.a
+    endif
+    ifeq ($(OS),Windows_NT)
+        PLATFORM = windows
+        PLATFORM_DEFINE = PLATFORM_DESKTOP
+        LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -lopengl32 -lgdi32 -lwinmm
+        LDLIBS = $(RAYLIB_PATH)/build/$(PLATFORM)/libraylib.a
+        BIN_SUFFIX = .exe
+    endif
 endif
 
 # Platform-specific directories
@@ -37,7 +50,7 @@ $(shell mkdir -p $(RAYLIB_PATH)/build/$(PLATFORM))
 # C++ main application
 SRC = main.cpp src/bvh_new.cpp src/object_allocator.c src/blas_manager.cpp src/tlas_manager.cpp src/bvh_visualizer.cpp
 OBJ = $(OBJ_DIR)/main.o $(OBJ_DIR)/bvh_new.o $(OBJ_DIR)/object_allocator.o $(OBJ_DIR)/blas_manager.o $(OBJ_DIR)/tlas_manager.o $(OBJ_DIR)/bvh_visualizer.o
-BIN = $(BUILD_DIR)/gpu_raytrace
+BIN = $(BUILD_DIR)/gpu_raytrace$(BIN_SUFFIX)
 PREPROCESSOR = $(BUILD_DIR)/shader_preprocessor
 
 all: dependencies shaders $(BIN)
@@ -50,7 +63,12 @@ dependencies:
 shaders: shaders/raytrace_tlas_blas_processed.fs
 
 $(PREPROCESSOR): src/shader_preprocessor.cpp
+ifeq ($(TARGET),windows-native)
+	# For cross-compilation, build preprocessor for host (Linux) platform
+	g++ -Wall -Wextra -O2 -std=c++14 -o $@ $<
+else
 	$(CXX) $(CXXFLAGS) -o $@ $<
+endif
 
 shaders/raytrace_tlas_blas_processed.fs: shaders/raytrace_tlas_blas.fs shaders/bvh_tlas_common.glsl $(PREPROCESSOR)
 	@echo "Processing shader with includes (C++)..."
@@ -65,8 +83,13 @@ raylib: $(RAYLIB_LIB)
 $(RAYLIB_LIB): $(RAYLIB_FORCE_FILE)
 	@echo "Building raylib for $(PLATFORM)..."
 	@mkdir -p $(RAYLIB_PATH)/build/$(PLATFORM)
-	$(MAKE) -C $(RAYLIB_PATH)/src PLATFORM=$(PLATFORM_DEFINE) clean
-	$(MAKE) -C $(RAYLIB_PATH)/src PLATFORM=$(PLATFORM_DEFINE)
+ifeq ($(TARGET),windows-native)
+	$(MAKE) -C $(RAYLIB_PATH)/src PLATFORM=$(PLATFORM_DEFINE) CC=$(CC) PLATFORM_OS=WINDOWS clean
+	$(MAKE) -C $(RAYLIB_PATH)/src PLATFORM=$(PLATFORM_DEFINE) CC=$(CC) PLATFORM_OS=WINDOWS
+else
+	$(MAKE) -C $(RAYLIB_PATH)/src PLATFORM=$(PLATFORM_DEFINE) CC=$(CC) clean
+	$(MAKE) -C $(RAYLIB_PATH)/src PLATFORM=$(PLATFORM_DEFINE) CC=$(CC)
+endif
 	@cp $(RAYLIB_PATH)/src/libraylib.a $(RAYLIB_LIB)
 	@echo "Raylib built and copied to $(RAYLIB_LIB)"
 
@@ -77,8 +100,21 @@ $(RAYLIB_FORCE_FILE):
 	@touch $(RAYLIB_FORCE_FILE)
 
 $(BIN): $(OBJ) raylib
+ifeq ($(TARGET),windows-native)
+	# For Windows cross-compilation, link raylib first to avoid symbol conflicts
+	$(CXX) -o $@ $(OBJ) $(LDLIBS) $(LDFLAGS)
+else
 	$(CXX) -o $@ $(OBJ) $(LDFLAGS) $(LDLIBS)
+endif
 	@echo "Built executable for $(PLATFORM): $@"
+	@echo "Copying executable to root directory for easy execution..."
+ifeq ($(TARGET),windows-native)
+	@cp $@ ./gpu_raytrace.exe
+	@echo "✓ Copied to ./gpu_raytrace.exe"
+else
+	@cp $@ ./gpu_raytrace
+	@echo "✓ Copied to ./gpu_raytrace"
+endif
 
 # Build rules for main target (C++)
 $(OBJ_DIR)/main.o: main.cpp
@@ -103,12 +139,18 @@ $(OBJ_DIR)/bvh_visualizer.o: src/bvh_visualizer.cpp
 clean:
 	rm -rf $(BUILD_DIR)
 	rm -f *.o $(PREPROCESSOR) shaders/raytrace_tlas_blas_processed.fs
+ifeq ($(TARGET),windows-native)
+	-rm -f ./gpu_raytrace.exe
+else
+	-rm -f ./gpu_raytrace
+endif
 
 # Clean all platforms
 clean-all:
 	rm -rf build/
 	rm -rf $(RAYLIB_PATH)/build/
 	rm -f *.o shaders/raytrace_tlas_blas_processed.fs
+	-rm -f ./gpu_raytrace ./gpu_raytrace.exe
 
 # Force rebuild raylib for current platform
 rebuild-raylib:

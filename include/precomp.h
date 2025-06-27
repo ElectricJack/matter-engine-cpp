@@ -31,8 +31,21 @@ using namespace std;
 #define FREE64( x ) _aligned_free( x )
 #else
 #define ALIGN( x ) __attribute__( ( aligned( x ) ) )
-#define MALLOC64( x ) ( ( x ) == 0 ? 0 : aligned_alloc( 64, ( x ) ) )
-#define FREE64( x ) free( x )
+#ifdef _WIN32
+    #define MALLOC64( x ) ( ( x ) == 0 ? 0 : _aligned_malloc( ( x ), 64 ) )
+#else
+    #define MALLOC64( x ) ( ( x ) == 0 ? 0 : aligned_alloc( 64, ( x ) ) )
+#endif
+#ifdef _WIN32
+    #define FREE64( x ) _aligned_free( x )
+#else
+    #define FREE64( x ) free( x )
+#endif
+#endif
+
+// Math constants for Windows compatibility
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
 #endif
 
 // basic types

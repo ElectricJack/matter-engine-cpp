@@ -26,7 +26,7 @@ public:
         PROFILE_SECTION("Demo Initialization");
         
         InitWindow(screen_width_, screen_height_, "C++ Modular BLAS/TLAS with Performance Profiling");
-        SetTargetFPS(60);
+        SetTargetFPS(120);
         
         setup_scene();
         setup_rendering();
@@ -891,8 +891,8 @@ int main(int argc, char* argv[]) {
     }
     
     try {
-        //RayTracingDemo demo(1280, 800, debug_mode);
-        RayTracingDemo demo(800, 600, debug_mode);
+        RayTracingDemo demo(1280, 800, debug_mode);
+        //RayTracingDemo demo(800, 600, debug_mode);
         demo.run();
     } catch (const std::exception& e) {
         printf("Error: %s\n", e.what());
