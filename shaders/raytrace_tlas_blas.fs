@@ -20,8 +20,12 @@ vec3 ambient = vec3(0.1, 0.15, 0.2);            // Darker ambient for contrast
 uniform sampler2D skyTexture;
 
 
+// Include comprehensive material properties system
+#include "materials.glsl"
+
 // Include the enhanced BVH common code (ported from bvh_article)
 #include "bvh_tlas_common.glsl"
+
 
 // Camera ray generation
 vec3 computeCameraRay(vec2 uv) {
@@ -77,6 +81,25 @@ vec3 sampleSky(vec3 direction) {
     }
     
     return skyColor;
+}
+
+// Refraction calculation using Snell's law
+vec3 refract(vec3 incident, vec3 normal, float eta) {
+    float cosI = -dot(normal, incident);
+    float sinT2 = eta * eta * (1.0 - cosI * cosI);
+    if (sinT2 > 1.0) {
+        return vec3(0.0); // Total internal reflection
+    }
+    float cosT = sqrt(1.0 - sinT2);
+    return eta * incident + (eta * cosI - cosT) * normal;
+}
+
+// Fresnel reflectance calculation (Schlick approximation)
+float fresnel(vec3 incident, vec3 normal, float ior) {
+    float cosI = abs(dot(incident, normal));
+    float r0 = (1.0 - ior) / (1.0 + ior);
+    r0 = r0 * r0;
+    return r0 + (1.0 - r0) * pow(1.0 - cosI, 5.0);
 }
 
 // Simple shadow calculation
@@ -220,51 +243,64 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, uint seed) {
         float distance = hit.t;
         float fogFactor = 1.0 - exp(-fogDensity * distance * distance);
         
-        // Non-metallic materials for better shadow visibility
-        vec3 albedo;
-        float roughness, metallic;
-        bool isMirror = false;
+        // Get material properties from the material system
+        MaterialProperties matProps = getMaterialProperties(hit.material);
+        vec3 albedo = matProps.albedo;
+        float roughness = matProps.roughness;
+        float metallic = matProps.metallic;
+        bool isMirror = (metallic > 0.5 && roughness < 0.3);
         
-        int matId = hit.material;
-        if (matId == 0) { // Red semi-metallic
-            albedo = vec3(0.8, 0.2, 0.2);
-            roughness = 0.2;
-            metallic = 0.6;
-            isMirror = true;
-        } else if (matId == 1) { // Blue diffuse
-            albedo = vec3(0.2, 0.3, 0.8);
-            roughness = 0.7;
-            metallic = 0.1;
-        } else if (matId == 2) { // Green diffuse (ground)
-            albedo = vec3(0.3, 0.7, 0.3);
-            roughness = 0.9;
-            metallic = 0.0;
-        } else if (matId == 3) { // Yellow/Gold metallic
-            albedo = vec3(0.8, 0.7, 0.3);
-            roughness = 0.05;
-            metallic = 1.0;
-            isMirror = true;
-        } else if (matId == 4) { // White metallic
-            albedo = vec3(0.9, 0.9, 0.9);
-            roughness = 0.02;
-            metallic = 1.0;
-            isMirror = true;
-        } else { // Default gray metallic
-            albedo = vec3(0.6, 0.6, 0.6);
-            roughness = 0.1;
-            metallic = 0.8;
-            isMirror = true;
+        // Add emission contribution
+        if (matProps.emission > 0.0) {
+            vec3 emissionColor = matProps.albedo * matProps.emission;
+            color += attenuation * emissionColor;
         }
         
-        if (isMirror && rayDepth < 1) { // Allow only 1 reflection bounce for performance
-            // Calculate PBR lighting for the surface
+        // Handle different material types based on properties
+        if (matProps.translucency > 0.0 && rayDepth < 1) {
+            // Translucent material - handle refraction and transmission
+            vec3 directLight = calculatePBR(hitPos, normal, rayDir, albedo, roughness, metallic);
+            
+            // Determine if ray is entering or exiting the material
+            bool entering = dot(rayDir, normal) < 0.0;
+            vec3 n = entering ? normal : -normal;
+            float eta = entering ? (1.0 / matProps.ior) : matProps.ior;
+            
+            // Calculate Fresnel reflectance
+            float fresnelReflectance = fresnel(rayDir, n, matProps.ior);
+            
+            // Refract the ray
+            vec3 refractedDir = refract(rayDir, n, eta);
+            
+            if (length(refractedDir) > 0.0) {
+                // Successful refraction
+                float transmittance = (1.0 - fresnelReflectance) * matProps.translucency;
+                
+                // Add surface lighting contribution
+                color += attenuation * directLight * (1.0 - transmittance);
+                
+                // Continue with refracted ray
+                rayDir = refractedDir;
+                rayPos = hitPos - n * 0.001; // Offset in direction of refraction
+                attenuation *= albedo * transmittance; // Tint transmitted light
+                
+                // Beer's law absorption could be added here for colored glass
+            } else {
+                // Total internal reflection - treat as mirror
+                vec3 reflectedDir = rayDir - 2.0 * n * dot(n, rayDir);
+                rayDir = reflectedDir;
+                rayPos = hitPos + n * 0.001;
+                attenuation *= albedo * 0.9;
+            }
+        } else if (isMirror && rayDepth < 1) {
+            // Reflective material
             vec3 directLight = calculatePBR(hitPos, normal, rayDir, albedo, roughness, metallic);
             
             // Calculate Fresnel for reflection
             float NdotV = max(0.0, dot(normal, -rayDir));
             vec3 F0 = mix(vec3(0.04), albedo, metallic);
-            vec3 fresnel = F0 + (1.0 - F0) * pow(1.0 - NdotV, 5.0);
-            float fresnelStrength = (fresnel.r + fresnel.g + fresnel.b) / 3.0;
+            vec3 fresnelVec = F0 + (1.0 - F0) * pow(1.0 - NdotV, 5.0);
+            float fresnelStrength = (fresnelVec.r + fresnelVec.g + fresnelVec.b) / 3.0;
             
             // Energy conservation: balance direct and reflected light
             float reflectionWeight = fresnelStrength * (1.0 - roughness);
@@ -275,23 +311,21 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, uint seed) {
             // Continue ray for reflection
             vec3 reflectedDir = rayDir - 2.0 * normal * dot(normal, rayDir);
             rayDir = reflectedDir;
-            rayPos = hitPos + normal * 0.001; // Small offset to avoid self-intersection
-            attenuation *= fresnel * (1.0 - roughness) * 0.6; // Stronger attenuation for performance
-            
-            // Early termination if attenuation is too low
-            if (length(attenuation) < 0.1) {
-                break;
-            }
-            
-            // Continue the ray loop for the reflection
+            rayPos = hitPos + normal * 0.001;
+            attenuation *= fresnelVec * (1.0 - roughness) * 0.6;
         } else {
-            // Non-reflective material or max bounces reached - calculate full PBR lighting
+            // Opaque material - calculate full PBR lighting and terminate
             vec3 materialColor = calculatePBR(hitPos, normal, rayDir, albedo, roughness, metallic);
             
             // Apply atmospheric fog
             materialColor = mix(materialColor, fogColor, fogFactor);
             
             color += attenuation * materialColor;
+            break;
+        }
+        
+        // Early termination if attenuation is too low
+        if (length(attenuation) < 0.01) {
             break;
         }
     }
