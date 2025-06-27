@@ -47,6 +47,20 @@ struct LegacyBVHInstance {
 
 class TLASManager {
 public:
+    // DrawRecord struct for accessing instance data
+    struct DrawRecord {
+        BLASHandle blas_handle;
+        Matrix4x4 transform;
+        Matrix4x4 inv_transform;
+        uint32_t material_id;
+        uint32_t instance_id;
+        
+        DrawRecord(BLASHandle handle, const Matrix4x4& trans, uint32_t mat_id, uint32_t inst_id)
+            : blas_handle(handle), transform(trans), material_id(mat_id), instance_id(inst_id) {
+            inv_transform = Matrix4x4(); // Will implement matrix_inverse later
+        }
+    };
+
     explicit TLASManager(int max_instances = 100);
     ~TLASManager();
     
@@ -94,6 +108,12 @@ public:
     int get_instance_count() const;
     int get_node_count() const;
     
+    // Access to internal TLAS for visualization
+    const Tmpl8::TLAS* get_tlas() const { return tlas_.get(); }
+    
+    // Access to draw records for rasterization
+    const std::vector<DrawRecord>& get_draw_records() const { return draw_records_; }
+    
     // GPU texture management (fully encapsulated)
     void ensure_gpu_textures_ready(const BLASManager& blas_manager); // Creates/updates textures if needed
     void bind_to_shader(Shader shader, const BLASManager& blas_manager) const; // Manager owns textures completely
@@ -119,7 +139,6 @@ public:
                                    int texture_height) const;
     
     // Get underlying TLAS for compatibility with existing code
-    TLAS* get_tlas() const { return tlas_.get(); }
     
     // Statistics and debugging
     void print_stats() const;
@@ -130,18 +149,6 @@ private:
     // Conversion utilities
     static mat4 convert_matrix(const Matrix4x4& legacy_matrix);
     static Matrix4x4 convert_matrix_back(const mat4& new_matrix);
-    struct DrawRecord {
-        BLASHandle blas_handle;
-        Matrix4x4 transform;
-        Matrix4x4 inv_transform;
-        uint32_t material_id;
-        uint32_t instance_id;
-        
-        DrawRecord(BLASHandle handle, const Matrix4x4& trans, uint32_t mat_id, uint32_t inst_id)
-            : blas_handle(handle), transform(trans), material_id(mat_id), instance_id(inst_id) {
-            inv_transform = Matrix4x4(); // Will implement matrix_inverse later
-        }
-    };
     
     // Get current matrix from top of stack
     const Matrix4x4& get_current_matrix() const;

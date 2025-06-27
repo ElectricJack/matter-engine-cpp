@@ -11,6 +11,9 @@
 namespace Tmpl8
 {
 
+// Forward declarations
+class BvhMesh;
+
 // minimalist triangle struct
 ALIGN(64) struct Tri
 {
@@ -78,7 +81,7 @@ ALIGN(64) class BVH
 	};
 public:
 	BVH() = default;
-	BVH( class Mesh* mesh );
+	BVH( BvhMesh* mesh );
 	void Build();
 	void Refit();
 	void Intersect( Ray& ray, uint instanceIdx );
@@ -86,7 +89,7 @@ private:
 	void Subdivide( uint nodeIdx, uint depth, uint& nodePtr, float3& centroidMin, float3& centroidMax );
 	void UpdateNodeBounds( uint nodeIdx, float3& centroidMin, float3& centroidMax );
 	float FindBestSplitPlane( BVHNode& node, int& axis, int& splitPos, float3& centroidMin, float3& centroidMax );
-	class Mesh* mesh = 0;
+	BvhMesh* mesh = 0;
 public:
 	uint* triIdx = 0;
 	uint nodesUsed;
@@ -97,12 +100,12 @@ public:
 };
 
 // minimalist mesh class
-class Mesh
+class BvhMesh
 {
 public:
-	Mesh() = default;
-	Mesh( uint primCount );
-	Mesh( const char* objFile, const char* texFile, const float scale = 1 );
+	BvhMesh() = default;
+	BvhMesh( uint primCount );
+	BvhMesh( const char* objFile, const char* texFile, const float scale = 1 );
 	Tri* tri = 0;			// triangle data for intersection
 	TriEx* triEx = 0;		// triangle data for shading
 	int triCount = 0;
@@ -194,7 +197,7 @@ struct TLASNode
 		float3 aabbMax; 
 		__m128 aabbMax4; 
 	};
-	bool isLeaf() { return leftRight == 0; }
+	bool isLeaf() const { return leftRight == 0; }
 };
 
 // top-level BVH class (simplified without kdtree for now)

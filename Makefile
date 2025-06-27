@@ -20,8 +20,8 @@ ifeq ($(OS),Windows_NT)
 endif
 
 # C++ main application
-SRC = main.cpp src/bvh.c src/bvh_new.cpp src/object_allocator.c src/blas_manager.cpp src/tlas_manager.cpp
-OBJ = main.o bvh.o bvh_new.o object_allocator.o blas_manager.o tlas_manager.o
+SRC = main.cpp src/bvh.c src/bvh_new.cpp src/object_allocator.c src/blas_manager.cpp src/tlas_manager.cpp src/bvh_visualizer.cpp
+OBJ = main.o bvh.o bvh_new.o object_allocator.o blas_manager.o tlas_manager.o bvh_visualizer.o
 BIN = gpu_raytrace
 PREPROCESSOR = shader_preprocessor
 
@@ -58,6 +58,8 @@ blas_manager.o: src/blas_manager.cpp
 tlas_manager.o: src/tlas_manager.cpp
 	$(CXX) -c $< $(CXXFLAGS) -o $@
 
+bvh_visualizer.o: src/bvh_visualizer.cpp
+	$(CXX) -c $< $(CXXFLAGS) -o $@
 
 raylib:
 	$(MAKE) -C $(RAYLIB_PATH)/src PLATFORM=PLATFORM_DESKTOP

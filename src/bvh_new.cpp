@@ -59,9 +59,9 @@ float IntersectAABB_SSE( const Ray& ray, const __m128& bmin4, const __m128& bmax
 }
 #endif
 
-// Mesh class implementation
+// BvhMesh class implementation
 
-Mesh::Mesh( const uint primCount )
+BvhMesh::BvhMesh( const uint primCount )
 {
 	// basic constructor, for top-down TLAS construction
 	tri = (Tri*)MALLOC64( primCount * sizeof( Tri ) );
@@ -73,7 +73,7 @@ Mesh::Mesh( const uint primCount )
 
 // BVH class implementation
 
-BVH::BVH( Mesh* triMesh )
+BVH::BVH( BvhMesh* triMesh )
 {
 	mesh = triMesh;
 	bvhNode = (BVHNode*)MALLOC64( sizeof( BVHNode ) * mesh->triCount * 2 + 64 );
@@ -172,8 +172,15 @@ void BVH::Subdivide( uint nodeIdx, uint depth, uint& nodePtr, float3& centroidMi
 	int axis, splitPos;
 	float splitCost = FindBestSplitPlane( node, axis, splitPos, centroidMin, centroidMax );
 	// terminate recursion
-	float nosplitCost = node.CalculateNodeCost();
-	if (splitCost >= nosplitCost) return;
+	if (subdivToOnePrim)
+	{
+		if (node.triCount == 1) return;
+	}
+	else
+	{
+		float nosplitCost = node.CalculateNodeCost();
+		if (splitCost >= nosplitCost) return;
+	}
 	
 	// in-place partition
 	int i = node.leftFirst;
@@ -181,8 +188,8 @@ void BVH::Subdivide( uint nodeIdx, uint depth, uint& nodePtr, float3& centroidMi
 	float scale = BINS / (centroidMax.cell[axis] - centroidMin.cell[axis]);
 	while (i <= j)
 	{
-		int binIdx = (int)((mesh->tri[triIdx[i]].centroid.cell[axis] - centroidMin.cell[axis]) * scale);
-		if (binIdx >= BINS) binIdx = BINS - 1;
+		// use the exact calculation we used for binning to prevent rare inaccuracies
+		int binIdx = std::min( BINS - 1, (int)((mesh->tri[triIdx[i]].centroid.cell[axis] - centroidMin.cell[axis]) * scale) );
 		if (binIdx < splitPos) i++; 
 		else { 
 			uint tmp = triIdx[i]; triIdx[i] = triIdx[j]; triIdx[j] = tmp; 
@@ -222,8 +229,7 @@ float BVH::FindBestSplitPlane( BVHNode& node, int& axis, int& splitPos, float3& 
 		for (uint i = 0; i < node.triCount; i++)
 		{
 			Tri& triangle = mesh->tri[triIdx[node.leftFirst + i]];
-			int binIdx = (int)((triangle.centroid.cell[a] - boundsMin) * scale);
-			if (binIdx >= BINS) binIdx = BINS - 1;
+			int binIdx = std::min( BINS - 1, (int)((triangle.centroid.cell[a] - boundsMin) * scale) );
 			bin[binIdx].triCount++;
 			bin[binIdx].bounds.grow( triangle.vertex0 );
 			bin[binIdx].bounds.grow( triangle.vertex1 );

@@ -12,6 +12,7 @@ extern "C" {
 #include "include/blas_manager.hpp"
 #include "include/tlas_manager.hpp"
 #include "include/profiler.hpp"
+#include "include/bvh_visualizer.hpp"
 
 class RayTracingDemo {
 public:
@@ -19,7 +20,8 @@ public:
         : screen_width_(width), screen_height_(height),
           debug_mode_(debug_mode), debug_frame_count_(0),
           blas_manager_(std::make_unique<BLASManager>()),
-          tlas_manager_(std::make_unique<TLASManager>(50)) {
+          tlas_manager_(std::make_unique<TLASManager>(50)),
+          bvh_visualizer_(std::make_unique<BVHVisualizer>()) {
         
         PROFILE_SECTION("Demo Initialization");
         
@@ -42,6 +44,8 @@ public:
         
         if (debug_mode_) {
             printf("=== DEBUG MODE: Will auto-quit after 60 frames ===\n");
+            printf("DEBUG MODE: Setting up unit test scene\n");
+            setup_unit_test_scene();
         }
         
         while (!WindowShouldClose()) {
@@ -134,22 +138,22 @@ private:
                 tlas_manager_->load_identity();
                 tlas_manager_->translate(0.0f, -5.0f, 0.0f);
                 tlas_manager_->draw(ground_blas_, 2); // Green ground
-                
 
                 break;
             }
             
             case 3: {
                 tlas_manager_->load_identity();
-                //tlas_manager_->translate(0.0f, -5.0f, 0.0f);
+                tlas_manager_->translate(0.0f, -5.0f, 0.0f);
                 tlas_manager_->draw(ground_blas_, 2); // Green ground
 
                 tlas_manager_->load_identity();
+                tlas_manager_->translate(+2.0f, 0.0f, 0.0f);
                 tlas_manager_->draw(cube_blas_, 0); // Red cube
                 
-                // tlas_manager_->load_identity();
-                // tlas_manager_->translate(-2.0f, 0.0f, 0.0f);
-                // tlas_manager_->draw(cube_blas_, 1); // Blue cube
+                tlas_manager_->load_identity();
+                tlas_manager_->translate(-2.0f, 0.0f, 0.0f);
+                tlas_manager_->draw(cube_blas_, 1); // Blue cube
                 break;
             }
             
@@ -310,6 +314,91 @@ private:
         printf("Test scene %d setup complete!\n", test_number);
     }
     
+    void setup_unit_test_scene() {
+        printf("=== Setting Up Unit Test Scene ===\n");
+        
+        // Clear any existing scene
+        tlas_manager_->clear();
+        
+        // Create a simple test geometry with just 3 triangles, well separated
+        std::vector<Tri> test_triangles;
+        
+        // Triangle 1: At origin, facing up (Z+)
+        Tri tri1;
+        tri1.vertex0 = make_float3(-0.5f, 0.0f, 0.0f);
+        tri1.vertex1 = make_float3( 0.5f, 0.0f, 0.0f);
+        tri1.vertex2 = make_float3( 0.0f, 0.0f, 1.0f);
+        tri1.centroid = make_float3(0.0f, 0.0f, 0.33f);
+        test_triangles.push_back(tri1);
+        
+        // Triangle 2: To the right, at X=5
+        Tri tri2;
+        tri2.vertex0 = make_float3(4.5f, 0.0f, 0.0f);
+        tri2.vertex1 = make_float3(5.5f, 0.0f, 0.0f);
+        tri2.vertex2 = make_float3(5.0f, 0.0f, 1.0f);
+        tri2.centroid = make_float3(5.0f, 0.0f, 0.33f);
+        test_triangles.push_back(tri2);
+        
+        // Triangle 3: Above, at Y=5
+        Tri tri3;
+        tri3.vertex0 = make_float3(-0.5f, 5.0f, 0.0f);
+        tri3.vertex1 = make_float3( 0.5f, 5.0f, 0.0f);
+        tri3.vertex2 = make_float3( 0.0f, 5.0f, 1.0f);
+        tri3.centroid = make_float3(0.0f, 5.0f, 0.33f);
+        test_triangles.push_back(tri3);
+        
+        printf("Created 3 test triangles:\n");
+        printf("  Triangle 1: Center at (0, 0, 0.33)\n");
+        printf("  Triangle 2: Center at (5, 0, 0.33)\n");
+        printf("  Triangle 3: Center at (0, 5, 0.33)\n");
+        
+        // Register the triangles and get the resulting BVH to analyze
+        BLASHandle test_blas = blas_manager_->register_triangles(test_triangles);
+        printf("Test BLAS registered: handle=%u\n", test_blas);
+        
+        // Get the BVH and analyze the subdivision
+        BVH* test_bvh = blas_manager_->get_bvh(test_blas);
+        if (test_bvh) {
+            printf("Test BVH built with subdivToOnePrim=%s\n", test_bvh->subdivToOnePrim ? "true" : "false");
+            
+            printf("=== BVH Structure Analysis ===\n");
+            printf("BVH nodes used: %u\n", test_bvh->nodesUsed);
+            
+            for (uint32_t i = 0; i < test_bvh->nodesUsed; i++) {
+                const auto& node = test_bvh->bvhNode[i];
+                printf("Node %u: %s\n", i, node.isLeaf() ? "LEAF" : "INTERIOR");
+                printf("  AABB: (%.2f, %.2f, %.2f) to (%.2f, %.2f, %.2f)\n",
+                       node.aabbMin.x, node.aabbMin.y, node.aabbMin.z,
+                       node.aabbMax.x, node.aabbMax.y, node.aabbMax.z);
+                
+                if (node.isLeaf()) {
+                    printf("  Triangle count: %u, First triangle: %u\n", 
+                           node.triCount, node.leftFirst);
+                    // Print which triangles are in this leaf
+                    for (uint32_t t = 0; t < node.triCount; t++) {
+                        uint32_t tri_idx = test_bvh->triIdx[node.leftFirst + t];
+                        printf("    Triangle %u: index %u\n", t, tri_idx);
+                    }
+                } else {
+                    printf("  Left child: %u, Right child: %u\n", 
+                           node.leftFirst, node.leftFirst + 1);
+                }
+            }
+        }
+        
+        // Add the BLAS to TLAS with no transform
+        tlas_manager_->load_identity();
+        tlas_manager_->draw(test_blas, 0);
+        
+        // Build TLAS
+        printf("=== Building TLAS ===\n");
+        tlas_manager_->build(*blas_manager_);
+        printf("TLAS built with %d instances, %d nodes\n", 
+               tlas_manager_->get_instance_count(), tlas_manager_->get_node_count());
+               
+        current_test_scene_ = 0; // Mark as unit test scene
+    }
+    
     
     
     void setup_rendering() {
@@ -376,9 +465,16 @@ private:
                     setup_test_scene(current_test_scene_);
                     blas_manager_->print_stats();
                     tlas_manager_->print_stats();
+                    
                 }
                 break;
             }
+        }
+        
+        // Unit test scene
+        if (IsKeyPressed(KEY_ZERO)) {
+            printf("Loading unit test scene...\n");
+            setup_unit_test_scene();
         }
         
         // Performance controls
@@ -388,6 +484,51 @@ private:
         if (IsKeyPressed(KEY_R)) {
             printf("Resetting performance statistics...\n");
             PROFILE_RESET();
+        }
+        
+        // BVH visualization toggle
+        if (IsKeyPressed(KEY_B)) {
+            show_bvh_visualization_ = !show_bvh_visualization_;
+            printf("BVH visualization %s\n", show_bvh_visualization_ ? "enabled" : "disabled");
+        }
+        
+        // BVH visualization settings (only work when visualization is enabled)
+        if (show_bvh_visualization_) {
+            auto& settings = bvh_visualizer_->get_settings();
+            
+            // Use different keys to avoid conflict with scene selection
+            if (IsKeyPressed(KEY_Q)) {
+                settings.show_blas_bvh = !settings.show_blas_bvh;
+                printf("BLAS BVH visualization %s\n", settings.show_blas_bvh ? "enabled" : "disabled");
+            }
+            if (IsKeyPressed(KEY_W)) {
+                settings.show_tlas_bvh = !settings.show_tlas_bvh;
+                printf("TLAS BVH visualization %s\n", settings.show_tlas_bvh ? "enabled" : "disabled");
+            }
+            if (IsKeyPressed(KEY_E)) {
+                settings.show_leaf_nodes = !settings.show_leaf_nodes;
+                printf("Leaf nodes %s\n", settings.show_leaf_nodes ? "enabled" : "disabled");
+            }
+            if (IsKeyPressed(KEY_T)) {
+                settings.show_interior_nodes = !settings.show_interior_nodes;
+                printf("Interior nodes %s\n", settings.show_interior_nodes ? "enabled" : "disabled");
+            }
+            if (IsKeyPressed(KEY_Y)) {
+                settings.use_depth_colors = !settings.use_depth_colors;
+                printf("Depth colors %s\n", settings.use_depth_colors ? "enabled" : "disabled");
+            }
+            if (IsKeyPressed(KEY_U)) {
+                settings.show_triangles = !settings.show_triangles;
+                printf("Triangle wireframes %s\n", settings.show_triangles ? "enabled" : "disabled");
+            }
+            if (IsKeyPressed(KEY_UP)) {
+                settings.max_depth_to_show = std::min(15, settings.max_depth_to_show + 1);
+                printf("Max depth to show: %d\n", settings.max_depth_to_show);
+            }
+            if (IsKeyPressed(KEY_DOWN)) {
+                settings.max_depth_to_show = std::max(1, settings.max_depth_to_show - 1);
+                printf("Max depth to show: %d\n", settings.max_depth_to_show);
+            }
         }
     }
     
@@ -473,21 +614,90 @@ private:
         
         BeginMode3D(camera_);
         
-        // Draw simplified scene representation
-        DrawCube({0.0f, 0.0f, 0.0f}, 1.0f, 1.0f, 1.0f, RED);
-        DrawCube({-3.0f, 0.0f, 0.0f}, 1.0f, 1.0f, 1.0f, BLUE);
-        DrawCube({3.0f, 2.0f, 0.0f}, 0.6f, 0.6f, 0.6f, YELLOW);
-        DrawSphere({0.0f, 3.0f, -2.0f}, 0.75f, GREEN);
-        DrawPlane({0.0f, -1.0f, 0.0f}, {20.0f, 20.0f}, DARKGREEN);
+        // Render actual scene meshes from TLAS
+        render_scene_meshes();
         
-        // Animated objects
-        float time = static_cast<float>(GetTime());
-        DrawCube({-4.0f + std::sin(time) * 2.0f, 4.0f + std::cos(time * 0.7f), -3.0f}, 0.4f, 0.4f, 0.4f, PURPLE);
-        DrawSphere({4.0f + std::cos(time * 1.3f) * 1.5f, 4.0f, -3.0f + std::sin(time * 0.9f)}, 0.6f, ORANGE);
+        // Draw reference grid
+        DrawGrid(20, 1.0f);
         
-        DrawGrid(10, 1.0f);
+        // Render BVH visualization if enabled
+        if (show_bvh_visualization_) {
+            bvh_visualizer_->render(*blas_manager_, *tlas_manager_);
+        }
         
         EndMode3D();
+    }
+    
+    void render_scene_meshes() {
+        // Render meshes using draw records from TLAS manager to get proper transforms
+        const auto& draw_records = tlas_manager_->get_draw_records();
+        
+        
+        for (size_t i = 0; i < draw_records.size(); i++) {
+            const auto& record = draw_records[i];
+            
+            // Get the mesh for this BLAS handle
+            auto* mesh = blas_manager_->get_mesh(record.blas_handle);
+            if (!mesh || !mesh->tri || mesh->triCount == 0) {
+                continue;
+            }
+            
+            // Choose color based on material ID and instance
+            Color mesh_colors[] = {GREEN, BLUE, RED, YELLOW, PURPLE, ORANGE};
+            Color mesh_color = mesh_colors[(record.material_id + record.instance_id) % 6];
+            
+            // Apply transform matrix
+            rlPushMatrix();
+            
+            // Convert Matrix4x4 to OpenGL matrix format (column-major)
+            const auto& m = record.transform.m;
+            float gl_matrix[16] = {
+                m[0], m[4], m[8],  m[12],
+                m[1], m[5], m[9],  m[13],
+                m[2], m[6], m[10], m[14],
+                m[3], m[7], m[11], m[15]
+            };
+            rlMultMatrixf(gl_matrix);
+            
+            // Render mesh as filled triangles with transparency
+            rlBegin(RL_TRIANGLES);
+            rlColor4ub(mesh_color.r, mesh_color.g, mesh_color.b, 120); // Semi-transparent
+            
+            for (int tri_idx = 0; tri_idx < mesh->triCount; tri_idx++) {
+                const auto& tri = mesh->tri[tri_idx];
+                
+                // Vertex 0
+                rlVertex3f(tri.vertex0.x, tri.vertex0.y, tri.vertex0.z);
+                // Vertex 1  
+                rlVertex3f(tri.vertex1.x, tri.vertex1.y, tri.vertex1.z);
+                // Vertex 2
+                rlVertex3f(tri.vertex2.x, tri.vertex2.y, tri.vertex2.z);
+            }
+            rlEnd();
+            
+            // Also draw wireframe edges for better definition
+            rlBegin(RL_LINES);
+            rlColor4ub(mesh_color.r, mesh_color.g, mesh_color.b, 255); // Full opacity for edges
+            
+            for (int tri_idx = 0; tri_idx < mesh->triCount; tri_idx++) {
+                const auto& tri = mesh->tri[tri_idx];
+                
+                // Edge 0-1
+                rlVertex3f(tri.vertex0.x, tri.vertex0.y, tri.vertex0.z);
+                rlVertex3f(tri.vertex1.x, tri.vertex1.y, tri.vertex1.z);
+                
+                // Edge 1-2
+                rlVertex3f(tri.vertex1.x, tri.vertex1.y, tri.vertex1.z);
+                rlVertex3f(tri.vertex2.x, tri.vertex2.y, tri.vertex2.z);
+                
+                // Edge 2-0
+                rlVertex3f(tri.vertex2.x, tri.vertex2.y, tri.vertex2.z);
+                rlVertex3f(tri.vertex0.x, tri.vertex0.y, tri.vertex0.z);
+            }
+            rlEnd();
+            
+            rlPopMatrix();
+        }
     }
     
     void render_ui() {
@@ -513,7 +723,11 @@ private:
         }
         
         // Test scene indicator
-        DrawText(TextFormat("Test Scene %d (Press 1-9 to change)", current_test_scene_), 10, 90, 16, LIGHTGRAY);
+        if (current_test_scene_ == 0) {
+            DrawText("Unit Test Scene (Press 0 for unit test, 1-9 for scenes)", 10, 90, 16, YELLOW);
+        } else {
+            DrawText(TextFormat("Test Scene %d (Press 0 for unit test, 1-9 to change)", current_test_scene_), 10, 90, 16, LIGHTGRAY);
+        }
         
         // Performance info
         double frame_time = Performance::Profiler::instance().get_frame_time_ms();
@@ -523,6 +737,22 @@ private:
         int total_instances_ = tlas_manager_->get_instance_count();
         DrawText(TextFormat("Scene: %d instances, %d triangles", 
                  total_instances_, total_triangles_), 10, 130, 14, LIGHTGRAY);
+        
+        // BVH visualization info
+        if (show_bvh_visualization_) {
+            const auto& settings = bvh_visualizer_->get_settings();
+            DrawText("BVH VISUALIZATION MODE", 10, 150, 16, YELLOW);
+            DrawText("Q:BLAS W:TLAS E:Leaf T:Interior Y:Colors U:Triangles", 10, 170, 12, LIGHTGRAY);
+            DrawText("UP/DOWN: Depth | B: Toggle visualization", 10, 185, 12, LIGHTGRAY);
+            DrawText(TextFormat("BLAS:%s TLAS:%s Leaf:%s Interior:%s Depth:%d", 
+                     settings.show_blas_bvh ? "ON" : "OFF",
+                     settings.show_tlas_bvh ? "ON" : "OFF",
+                     settings.show_leaf_nodes ? "ON" : "OFF",
+                     settings.show_interior_nodes ? "ON" : "OFF", 
+                     settings.max_depth_to_show), 10, 200, 12, LIGHTGRAY);
+        } else {
+            DrawText("Press B to toggle BVH visualization", 10, 150, 14, LIGHTGRAY);
+        }
         
         // Performance controls
         DrawText("Press P for performance stats, R to reset", 10, screen_height_ - 50, 14, LIGHTGRAY);
@@ -550,6 +780,7 @@ private:
     // Managers
     std::unique_ptr<BLASManager> blas_manager_;
     std::unique_ptr<TLASManager> tlas_manager_;
+    std::unique_ptr<BVHVisualizer> bvh_visualizer_;
     
     // BLAS handles
     BLASHandle cube_blas_;
@@ -561,6 +792,7 @@ private:
     Shader raytracing_shader_{};
     bool use_raytracing_ = false;
     int current_test_scene_ = 1;
+    bool show_bvh_visualization_ = false;
     
     // GPU textures are now managed by the managers themselves
     

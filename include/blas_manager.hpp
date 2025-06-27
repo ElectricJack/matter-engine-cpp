@@ -16,6 +16,7 @@ extern "C" {
 // Import the types we need from Tmpl8 namespace and global namespace
 using Tmpl8::Tri;
 using Tmpl8::BVH;
+using Tmpl8::BvhMesh;
 using Tmpl8::aabb;
 using uint = unsigned int;
 // float3 types come from precomp.h (global namespace)
@@ -54,6 +55,18 @@ struct BLASOffsets {
 
 class BLASManager {
 public:
+    // Forward declaration for visibility
+    struct BLASEntry {
+        BLASHandle handle;
+        std::unique_ptr<BvhMesh> mesh;
+        std::unique_ptr<BVH> bvh;
+        std::vector<Tri> triangles;
+        uint32_t hash;
+        
+        BLASEntry(BLASHandle h, std::unique_ptr<BvhMesh> m, std::unique_ptr<BVH> b, std::vector<Tri>&& tris, uint32_t hash_val) 
+            : handle(h), mesh(std::move(m)), bvh(std::move(b)), triangles(std::move(tris)), hash(hash_val) {}
+    };
+
     BLASManager();
     ~BLASManager();
     
@@ -69,8 +82,8 @@ public:
     BLASHandle register_triangles(Tri* triangles, int triangle_count);
     
     // Legacy interface for old Triangle format
-    BLASHandle register_triangles_legacy(const std::vector<LegacyTriangle>& triangles);
-    BLASHandle register_triangles_legacy(LegacyTriangle* triangles, int triangle_count);
+    //BLASHandle register_triangles_legacy(const std::vector<LegacyTriangle>& triangles);
+    //BLASHandle register_triangles_legacy(LegacyTriangle* triangles, int triangle_count);
     
     // Check if a BLAS exists
     bool has_blas(BLASHandle handle) const;
@@ -79,12 +92,15 @@ public:
     BVH* get_bvh(BLASHandle handle) const;
     
     // Get Mesh from handle 
-    Tmpl8::Mesh* get_mesh(BLASHandle handle) const;
+    BvhMesh* get_mesh(BLASHandle handle) const;
     
     // Get total counts for GPU texture generation
     int get_total_triangle_count() const;
     int get_total_node_count() const;
     int get_unique_blas_count() const { return static_cast<int>(entries_.size()); }
+    
+    // Access to internal entries for visualization
+    const std::vector<std::unique_ptr<BLASEntry>>& get_entries() const { return entries_; }
     
     // Get offsets for a specific BLAS in the combined arrays
     BLASOffsets get_offsets(BLASHandle handle) const;
@@ -94,7 +110,7 @@ public:
     void generate_node_data(std::vector<LegacyBVHNode>& output_nodes) const;
     
     // Legacy interface for old Triangle format
-    void generate_triangle_data_legacy(std::vector<LegacyTriangle>& output_triangles) const;
+    //void generate_triangle_data_legacy(std::vector<LegacyTriangle>& output_triangles) const;
     
     // GPU texture management (fully encapsulated)
     void ensure_gpu_textures_ready(); // Creates/updates textures if needed
@@ -105,7 +121,7 @@ public:
     void generate_node_texture_data(LegacyBVHNode* output_nodes) const;
     
     // Legacy interface for old Triangle format
-    void generate_triangle_texture_data_legacy(LegacyTriangle* output_triangles) const;
+    //void generate_triangle_texture_data_legacy(LegacyTriangle* output_triangles) const;
     
     // Statistics and debugging
     void print_stats() const;
@@ -116,17 +132,6 @@ private:
     static Tri convert_triangle(const LegacyTriangle& old_tri);
     static LegacyTriangle convert_triangle_back(const Tri& new_tri);
     
-    struct BLASEntry {
-        BLASHandle handle;
-        std::unique_ptr<Tmpl8::Mesh> mesh;
-        std::unique_ptr<BVH> bvh;
-        std::vector<Tri> triangles;
-        uint32_t hash;
-        
-        BLASEntry(BLASHandle h, std::unique_ptr<Tmpl8::Mesh> m, std::unique_ptr<BVH> b, std::vector<Tri>&& tris, uint32_t hash_val) 
-            : handle(h), mesh(std::move(m)), bvh(std::move(b)), triangles(std::move(tris)), hash(hash_val) {}
-    };
-    
     // Hash calculation
     uint32_t calculate_hash(const Tri* triangles, int count) const;
     bool triangles_equal(const std::vector<Tri>& a, const Tri* b, int count) const;
@@ -135,8 +140,8 @@ private:
     BLASHandle find_existing_blas(const Tri* triangles, int count, uint32_t hash) const;
     
     // Legacy hash calculation for old Triangle format
-    uint32_t calculate_hash_legacy(const LegacyTriangle* triangles, int count) const;
-    BLASHandle find_existing_blas_legacy(const LegacyTriangle* triangles, int count, uint32_t hash) const;
+    //uint32_t calculate_hash_legacy(const LegacyTriangle* triangles, int count) const;
+    //BLASHandle find_existing_blas_legacy(const LegacyTriangle* triangles, int count, uint32_t hash) const;
     
     // Update cached totals
     void update_totals() const;
@@ -164,9 +169,9 @@ namespace BLASFactory {
     std::vector<Tri> create_plane_triangles(float width, float height);
     
     // Legacy functions for backward compatibility
-    std::vector<LegacyTriangle> create_cube_triangles_legacy(float size = 1.0f);
-    std::vector<LegacyTriangle> create_sphere_triangles_legacy(float radius, int segments, int rings);
-    std::vector<LegacyTriangle> create_plane_triangles_legacy(float width, float height);
+    // std::vector<LegacyTriangle> create_cube_triangles_legacy(float size = 1.0f);
+    // std::vector<LegacyTriangle> create_sphere_triangles_legacy(float radius, int segments, int rings);
+    // std::vector<LegacyTriangle> create_plane_triangles_legacy(float width, float height);
     
     BLASHandle register_cube(BLASManager& manager, float size = 1.0f);
     BLASHandle register_sphere(BLASManager& manager, float radius, int segments = 32, int rings = 16);
