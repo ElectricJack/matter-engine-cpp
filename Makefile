@@ -125,9 +125,9 @@ $(shell mkdir -p $(BUILD_DIR))
 $(shell mkdir -p $(RAYLIB_PATH)/build/$(PLATFORM))
 
 # C++ main application
-SRC = main.cpp src/bvh.cpp src/object_allocator.c src/blas_manager.cpp src/tlas_manager.cpp src/bvh_visualizer.cpp
-OBJ = $(OBJ_DIR)/main.o $(OBJ_DIR)/bvh.o $(OBJ_DIR)/object_allocator.o $(OBJ_DIR)/blas_manager.o $(OBJ_DIR)/tlas_manager.o $(OBJ_DIR)/bvh_visualizer.o
-BIN = $(BUILD_DIR)/gpu_raytrace$(BIN_SUFFIX)
+SRC = main.cpp src/bvh.cpp src/object_allocator.c src/blas_manager.cpp src/tlas_manager.cpp src/bvh_visualizer.cpp src/open_particle_surface.c src/surface.c src/spatial_hash.c
+OBJ = $(OBJ_DIR)/main.o $(OBJ_DIR)/bvh.o $(OBJ_DIR)/object_allocator.o $(OBJ_DIR)/blas_manager.o $(OBJ_DIR)/tlas_manager.o $(OBJ_DIR)/bvh_visualizer.o $(OBJ_DIR)/open_particle_surface.o $(OBJ_DIR)/surface.o $(OBJ_DIR)/spatial_hash.o
+BIN = $(BUILD_DIR)/matter_surface_lib$(BIN_SUFFIX)
 PREPROCESSOR = $(BUILD_DIR)/shader_preprocessor
 
 all: dependencies shaders $(BIN)
@@ -201,20 +201,20 @@ endif
 	@echo "Built executable for $(PLATFORM): $@"
 	@echo "Copying executable to root directory for easy execution..."
 ifeq ($(TARGET),windows-native)
-	@cp $@ ./gpu_raytrace.exe
-	@echo "✓ Copied to ./gpu_raytrace.exe"
+	@cp $@ ./matter_surface_lib.exe
+	@echo "✓ Copied to ./matter_surface_lib.exe"
 else ifeq ($(PLATFORM),windows-native)
 	@cp $@ ./gpu_raytrace.exe
 	@echo "✓ Copied to ./gpu_raytrace.exe (WSL→Windows cross-compile)"
 else ifeq ($(PLATFORM),windows-mingw)
-	@cp $@ ./gpu_raytrace.exe
-	@echo "✓ Copied to ./gpu_raytrace.exe"
+	@cp $@ ./matter_surface_lib.exe
+	@echo "✓ Copied to ./matter_surface_lib.exe"
 else ifeq ($(PLATFORM),windows)
-	@cp $@ ./gpu_raytrace.exe
-	@echo "✓ Copied to ./gpu_raytrace.exe"
+	@cp $@ ./matter_surface_lib.exe
+	@echo "✓ Copied to ./matter_surface_lib.exe"
 else
-	@cp $@ ./gpu_raytrace
-	@echo "✓ Copied to ./gpu_raytrace"
+	@cp $@ ./matter_surface_lib
+	@echo "✓ Copied to ./matter_surface_lib"
 endif
 
 # Build rules for main target (C++)
@@ -236,20 +236,29 @@ $(OBJ_DIR)/tlas_manager.o: src/tlas_manager.cpp
 $(OBJ_DIR)/bvh_visualizer.o: src/bvh_visualizer.cpp
 	$(CXX) -c $< $(CXXFLAGS) -o $@
 
+$(OBJ_DIR)/open_particle_surface.o: src/open_particle_surface.c
+	$(CC) -c $< $(CFLAGS) -o $@
+
+$(OBJ_DIR)/surface.o: src/surface.c
+	$(CC) -c $< $(CFLAGS) -o $@
+
+$(OBJ_DIR)/spatial_hash.o: src/spatial_hash.c
+	$(CC) -c $< $(CFLAGS) -o $@
+
 # Platform-specific clean
 clean:
 	rm -rf $(BUILD_DIR)
 	rm -f *.o $(PREPROCESSOR) shaders/raytrace_tlas_blas_processed.fs
 ifeq ($(TARGET),windows-native)
-	-rm -f ./gpu_raytrace.exe
+	-rm -f ./matter_surface_lib.exe
 else ifeq ($(PLATFORM),windows-native)
-	-rm -f ./gpu_raytrace.exe
+	-rm -f ./matter_surface_lib.exe
 else ifeq ($(PLATFORM),windows-mingw)
-	-rm -f ./gpu_raytrace.exe
+	-rm -f ./matter_surface_lib.exe
 else ifeq ($(PLATFORM),windows)
-	-rm -f ./gpu_raytrace.exe
+	-rm -f ./matter_surface_lib.exe
 else
-	-rm -f ./gpu_raytrace
+	-rm -f ./matter_surface_lib
 endif
 
 # Clean all platforms
@@ -257,7 +266,7 @@ clean-all:
 	rm -rf build/
 	rm -rf $(RAYLIB_PATH)/build/
 	rm -f *.o shaders/raytrace_tlas_blas_processed.fs
-	-rm -f ./gpu_raytrace ./gpu_raytrace.exe
+	-rm -f ./matter_surface_lib ./matter_surface_lib.exe
 
 # Force rebuild raylib for current platform
 rebuild-raylib:
