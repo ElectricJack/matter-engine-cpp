@@ -4,7 +4,18 @@ RAYLIB_PATH = ../Libraries/raylib
 CFLAGS = -Wall -Wextra -O2 -I$(RAYLIB_PATH)/src -I./include
 CXXFLAGS = -Wall -Wextra -O2 -std=c++14 -Wno-missing-field-initializers -I$(RAYLIB_PATH)/src -I./include
 
-# Cross-compilation support
+# Build flags:
+# TARGET=windows-native : Cross-compile for Windows from Linux using MinGW
+# NO_MINGW=1           : Use alternative Windows toolchain instead of MinGW (Windows only)
+# WSL_LINUX=1          : Build Linux executable from WSL (default is Windows cross-compile)
+# 
+# Examples:
+#   make                     # Build for current platform (auto-detects WSL→Windows, Windows→MinGW)
+#   make WSL_LINUX=1         # Build Linux executable from WSL
+#   make NO_MINGW=1          # Build on Windows using alternative toolchain (MSVC, etc.)
+#   TARGET=windows-native make # Cross-compile from Linux to Windows
+
+# Cross-compilation and toolchain support
 ifeq ($(TARGET),windows-native)
     # Cross-compile for Windows from Linux/WSL
     CC = x86_64-w64-mingw32-gcc
@@ -17,24 +28,90 @@ ifeq ($(TARGET),windows-native)
 else
     # Auto-detect OS and set platform-specific variables
     UNAME_S := $(shell uname -s)
+    
+    # WSL detection
+    IS_WSL := 0
+    ifneq ($(shell uname -r | grep -i microsoft),)
+        IS_WSL := 1
+    endif
+    ifneq ($(shell uname -r | grep -i wsl),)
+        IS_WSL := 1
+    endif
+    ifneq ($(wildcard /proc/version),)
+        ifneq ($(shell grep -i microsoft /proc/version 2>/dev/null),)
+            IS_WSL := 1
+        endif
+    endif
+    
+    # Windows detection (multiple methods for robustness)
+    IS_WINDOWS := 0
+    ifneq ($(OS),)
+        ifeq ($(OS),Windows_NT)
+            IS_WINDOWS := 1
+        endif
+    endif
+    # Also check uname output for Windows patterns
+    ifneq ($(findstring CYGWIN,$(UNAME_S)),)
+        IS_WINDOWS := 1
+    endif
+    ifneq ($(findstring MINGW,$(UNAME_S)),)
+        IS_WINDOWS := 1
+    endif
+    ifneq ($(findstring MSYS,$(UNAME_S)),)
+        IS_WINDOWS := 1
+    endif
+    
     ifeq ($(UNAME_S),Darwin)
         PLATFORM = macos
         PLATFORM_DEFINE = PLATFORM_DESKTOP
         LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo -lm
         LDLIBS = $(RAYLIB_PATH)/build/$(PLATFORM)/libraylib.a
-    endif
-    ifeq ($(UNAME_S),Linux)
+    else ifeq ($(IS_WSL),1)
+        # WSL detected - default to cross-compile to Windows unless WSL_LINUX=1
+        ifeq ($(WSL_LINUX),1)
+            # User wants Linux executable from WSL
+            PLATFORM = linux
+            PLATFORM_DEFINE = PLATFORM_DESKTOP
+            LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -lGL -lm -lpthread -ldl -lrt -lX11
+            LDLIBS = $(RAYLIB_PATH)/build/$(PLATFORM)/libraylib.a
+        else
+            # Default: Cross-compile to Windows from WSL
+            CC = x86_64-w64-mingw32-gcc
+            CXX = x86_64-w64-mingw32-g++
+            PLATFORM = windows-native
+            PLATFORM_DEFINE = PLATFORM_DESKTOP
+            LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -static-libgcc -static-libstdc++ -lopengl32 -lgdi32 -lwinmm
+            LDLIBS = $(RAYLIB_PATH)/build/$(PLATFORM)/libraylib.a
+            BIN_SUFFIX = .exe
+        endif
+    else ifeq ($(UNAME_S),Linux)
         PLATFORM = linux
         PLATFORM_DEFINE = PLATFORM_DESKTOP
         LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -lGL -lm -lpthread -ldl -lrt -lX11
         LDLIBS = $(RAYLIB_PATH)/build/$(PLATFORM)/libraylib.a
-    endif
-    ifeq ($(OS),Windows_NT)
-        PLATFORM = windows
+    else ifeq ($(IS_WINDOWS),1)
         PLATFORM_DEFINE = PLATFORM_DESKTOP
-        LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -lopengl32 -lgdi32 -lwinmm
+        # On Windows, use MinGW by default for native .exe builds
+        # Set NO_MINGW=1 to use default Windows toolchain instead
+        ifeq ($(NO_MINGW),1)
+            # Alternative Windows toolchain (MSVC, regular gcc, etc.)
+            PLATFORM = windows
+            LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -lopengl32 -lgdi32 -lwinmm
+        else
+            # Default: Use MinGW toolchain for native Windows builds
+            CC = x86_64-w64-mingw32-gcc
+            CXX = x86_64-w64-mingw32-g++
+            PLATFORM = windows-mingw
+            LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -static-libgcc -static-libstdc++ -lopengl32 -lgdi32 -lwinmm
+        endif
         LDLIBS = $(RAYLIB_PATH)/build/$(PLATFORM)/libraylib.a
         BIN_SUFFIX = .exe
+    else
+        # Fallback for unknown platforms - assume Unix-like
+        PLATFORM = unknown
+        PLATFORM_DEFINE = PLATFORM_DESKTOP
+        LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -lGL -lm -lpthread -ldl -lrt -lX11
+        LDLIBS = $(RAYLIB_PATH)/build/$(PLATFORM)/libraylib.a
     endif
 endif
 
@@ -66,6 +143,9 @@ $(PREPROCESSOR): src/shader_preprocessor.cpp
 ifeq ($(TARGET),windows-native)
 	# For cross-compilation, build preprocessor for host (Linux) platform
 	g++ -Wall -Wextra -O2 -std=c++14 -o $@ $<
+else ifeq ($(PLATFORM),windows-native)
+	# For WSL cross-compilation, build preprocessor for host (Linux) platform
+	g++ -Wall -Wextra -O2 -std=c++14 -o $@ $<
 else
 	$(CXX) $(CXXFLAGS) -o $@ $<
 endif
@@ -86,6 +166,12 @@ $(RAYLIB_LIB): $(RAYLIB_FORCE_FILE)
 ifeq ($(TARGET),windows-native)
 	$(MAKE) -C $(RAYLIB_PATH)/src PLATFORM=$(PLATFORM_DEFINE) CC=$(CC) PLATFORM_OS=WINDOWS clean
 	$(MAKE) -C $(RAYLIB_PATH)/src PLATFORM=$(PLATFORM_DEFINE) CC=$(CC) PLATFORM_OS=WINDOWS
+else ifeq ($(PLATFORM),windows-native)
+	$(MAKE) -C $(RAYLIB_PATH)/src PLATFORM=$(PLATFORM_DEFINE) CC=$(CC) PLATFORM_OS=WINDOWS clean
+	$(MAKE) -C $(RAYLIB_PATH)/src PLATFORM=$(PLATFORM_DEFINE) CC=$(CC) PLATFORM_OS=WINDOWS
+else ifeq ($(PLATFORM),windows-mingw)
+	$(MAKE) -C $(RAYLIB_PATH)/src PLATFORM=$(PLATFORM_DEFINE) CC=$(CC) PLATFORM_OS=WINDOWS clean
+	$(MAKE) -C $(RAYLIB_PATH)/src PLATFORM=$(PLATFORM_DEFINE) CC=$(CC) PLATFORM_OS=WINDOWS
 else
 	$(MAKE) -C $(RAYLIB_PATH)/src PLATFORM=$(PLATFORM_DEFINE) CC=$(CC) clean
 	$(MAKE) -C $(RAYLIB_PATH)/src PLATFORM=$(PLATFORM_DEFINE) CC=$(CC)
@@ -103,12 +189,27 @@ $(BIN): $(OBJ) raylib
 ifeq ($(TARGET),windows-native)
 	# For Windows cross-compilation, link raylib first to avoid symbol conflicts
 	$(CXX) -o $@ $(OBJ) $(LDLIBS) $(LDFLAGS)
+else ifeq ($(PLATFORM),windows-native)
+	# For WSL→Windows cross-compilation, link raylib first to avoid symbol conflicts
+	$(CXX) -o $@ $(OBJ) $(LDLIBS) $(LDFLAGS)
+else ifeq ($(PLATFORM),windows-mingw)
+	# For Windows MinGW builds, link raylib first to avoid symbol conflicts
+	$(CXX) -o $@ $(OBJ) $(LDLIBS) $(LDFLAGS)
 else
 	$(CXX) -o $@ $(OBJ) $(LDFLAGS) $(LDLIBS)
 endif
 	@echo "Built executable for $(PLATFORM): $@"
 	@echo "Copying executable to root directory for easy execution..."
 ifeq ($(TARGET),windows-native)
+	@cp $@ ./gpu_raytrace.exe
+	@echo "✓ Copied to ./gpu_raytrace.exe"
+else ifeq ($(PLATFORM),windows-native)
+	@cp $@ ./gpu_raytrace.exe
+	@echo "✓ Copied to ./gpu_raytrace.exe (WSL→Windows cross-compile)"
+else ifeq ($(PLATFORM),windows-mingw)
+	@cp $@ ./gpu_raytrace.exe
+	@echo "✓ Copied to ./gpu_raytrace.exe"
+else ifeq ($(PLATFORM),windows)
 	@cp $@ ./gpu_raytrace.exe
 	@echo "✓ Copied to ./gpu_raytrace.exe"
 else
@@ -141,6 +242,12 @@ clean:
 	rm -f *.o $(PREPROCESSOR) shaders/raytrace_tlas_blas_processed.fs
 ifeq ($(TARGET),windows-native)
 	-rm -f ./gpu_raytrace.exe
+else ifeq ($(PLATFORM),windows-native)
+	-rm -f ./gpu_raytrace.exe
+else ifeq ($(PLATFORM),windows-mingw)
+	-rm -f ./gpu_raytrace.exe
+else ifeq ($(PLATFORM),windows)
+	-rm -f ./gpu_raytrace.exe
 else
 	-rm -f ./gpu_raytrace
 endif
@@ -159,8 +266,17 @@ rebuild-raylib:
 
 # Show current platform
 platform:
+	@echo "=== Platform Detection Debug ==="
+	@echo "UNAME_S: $(UNAME_S)"
+	@echo "OS: $(OS)"
+	@echo "IS_WSL: $(IS_WSL)"
+	@echo "IS_WINDOWS: $(IS_WINDOWS)"
+	@echo "WSL_LINUX: $(WSL_LINUX)"
 	@echo "Current platform: $(PLATFORM)"
+	@echo "Platform define: $(PLATFORM_DEFINE)"
 	@echo "Build directory: $(BUILD_DIR)"
 	@echo "Raylib library: $(RAYLIB_LIB)"
+	@echo "CC: $(CC)"
+	@echo "CXX: $(CXX)"
 
 .PHONY: all clean clean-all raylib shaders dependencies rebuild-raylib platform

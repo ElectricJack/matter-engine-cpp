@@ -658,7 +658,7 @@ private:
         }
         
         // Toggle rendering mode
-        if (IsKeyPressed(KEY_SPACE)) {
+        if (IsKeyPressed(KEY_LEFT_SHIFT)) {
             use_raytracing_ = !use_raytracing_ && (raytracing_shader_.id != 0);
             printf("Switched to %s mode\n", use_raytracing_ ? "raytracing" : "rasterization");
         }
@@ -687,7 +687,7 @@ private:
         }
         
         // Animation toggle
-        if (IsKeyPressed(KEY_A)) {
+        if (IsKeyPressed(KEY_N)) {
             animate_scenes_ = !animate_scenes_;
             printf("Animation %s\n", animate_scenes_ ? "enabled" : "disabled");
             if (!animate_scenes_) {
@@ -700,7 +700,7 @@ private:
         if (IsKeyPressed(KEY_P)) {
             PROFILE_PRINT();
         }
-        if (IsKeyPressed(KEY_R)) {
+        if (IsKeyPressed(KEY_X)) {
             printf("Resetting performance statistics...\n");
             PROFILE_RESET();
         }
@@ -715,16 +715,16 @@ private:
         if (show_bvh_visualization_) {
             auto& settings = bvh_visualizer_->get_settings();
             
-            // Use different keys to avoid conflict with scene selection
+            // Remapped keys to avoid conflict with WASD movement
             if (IsKeyPressed(KEY_Q)) {
                 settings.show_blas_bvh = !settings.show_blas_bvh;
                 printf("BLAS BVH visualization %s\n", settings.show_blas_bvh ? "enabled" : "disabled");
             }
-            if (IsKeyPressed(KEY_W)) {
+            if (IsKeyPressed(KEY_I)) {
                 settings.show_tlas_bvh = !settings.show_tlas_bvh;
                 printf("TLAS BVH visualization %s\n", settings.show_tlas_bvh ? "enabled" : "disabled");
             }
-            if (IsKeyPressed(KEY_E)) {
+            if (IsKeyPressed(KEY_V)) {
                 settings.show_leaf_nodes = !settings.show_leaf_nodes;
                 printf("Leaf nodes %s\n", settings.show_leaf_nodes ? "enabled" : "disabled");
             }
@@ -951,13 +951,13 @@ private:
         // Animation status
         if (animate_scenes_ && current_test_scene_ > 0) {
             DrawText("ANIMATION ENABLED - TLAS rebuilds every frame", 10, 110, 16, GREEN);
-            DrawText("Press A to toggle animation", 10, 130, 14, LIGHTGRAY);
+            DrawText("Press N to toggle animation", 10, 130, 14, LIGHTGRAY);
         } else if (current_test_scene_ > 0) {
             DrawText("Animation disabled - Static scene", 10, 110, 16, YELLOW);
-            DrawText("Press A to enable animation", 10, 130, 14, LIGHTGRAY);
+            DrawText("Press N to enable animation", 10, 130, 14, LIGHTGRAY);
         } else {
             DrawText("Unit Test Mode - Animation disabled", 10, 110, 16, LIGHTGRAY);
-            DrawText("Press A to toggle animation", 10, 130, 14, LIGHTGRAY);
+            DrawText("Press N to toggle animation", 10, 130, 14, LIGHTGRAY);
         }
         
         // Performance info
@@ -973,7 +973,7 @@ private:
         if (show_bvh_visualization_) {
             const auto& settings = bvh_visualizer_->get_settings();
             DrawText("BVH VISUALIZATION MODE", 10, 190, 16, YELLOW);
-            DrawText("Q:BLAS W:TLAS E:Leaf T:Interior Y:Colors U:Triangles", 10, 210, 12, LIGHTGRAY);
+            DrawText("Q:BLAS I:TLAS V:Leaf T:Interior Y:Colors U:Triangles", 10, 210, 12, LIGHTGRAY);
             DrawText("UP/DOWN: Depth | B: Toggle visualization", 10, 225, 12, LIGHTGRAY);
             DrawText(TextFormat("BLAS:%s TLAS:%s Leaf:%s Interior:%s Depth:%d", 
                      settings.show_blas_bvh ? "ON" : "OFF",
@@ -986,7 +986,7 @@ private:
         }
         
         // Animation and performance controls
-        DrawText("Controls: A=Animation, P=Performance stats, R=Reset", 10, screen_height_ - 90, 14, LIGHTGRAY);
+        DrawText("Controls: N=Animation, P=Performance stats, X=Reset", 10, screen_height_ - 90, 14, LIGHTGRAY);
         DrawText("BVH: B=Toggle visualization", 10, screen_height_ - 70, 14, LIGHTGRAY);
         
         // Mouse control info

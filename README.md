@@ -13,10 +13,15 @@ A cross-platform C++ ray tracing application using Raylib with BVH (Bounding Vol
 
 ## Requirements
 
-### Windows (WSL)
-- Windows Subsystem for Linux (WSL2) with Ubuntu
-- GCC/G++ compiler: `sudo apt install build-essential g++`
-- Development libraries: `sudo apt install libgl1-mesa-dev libx11-dev`
+### Windows
+- **Option 1 (Recommended)**: MinGW-w64 via MSYS2
+  - Install MSYS2 from https://www.msys2.org/
+  - Run: `pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-make`
+  - Add `C:\msys64\mingw64\bin` to Windows PATH
+- **Option 2**: Windows Subsystem for Linux (WSL2) with Ubuntu
+  - GCC/G++ compiler: `sudo apt install build-essential g++`
+  - Development libraries: `sudo apt install libgl1-mesa-dev libx11-dev`
+- **Option 3**: Visual Studio with vcpkg (advanced users)
 
 ### Linux
 - GCC/G++ compiler
@@ -29,24 +34,33 @@ A cross-platform C++ ray tracing application using Raylib with BVH (Bounding Vol
 
 ## Quick Start
 
-### Windows (Recommended)
+### Windows
 
-1. **Open PowerShell or Command Prompt**:
+1. **With MinGW-w64 installed (Recommended)**:
    ```cmd
-   # Run with PowerShell
-   .\run.ps1
+   # Build using Windows batch file
+   build.bat
    
-   # Or run with Command Prompt
-   .\run.bat
+   # Or use bash script (if available)
+   bash build.sh
    ```
 
-2. **Or use WSL directly**:
+2. **Using WSL (Alternative)**:
    ```bash
    # Build the project
    ./build.sh
    
    # Run the application
    ./run.sh
+   ```
+
+3. **Using PowerShell/Command Prompt (Legacy)**:
+   ```cmd
+   # Run with PowerShell
+   .\run.ps1
+   
+   # Or run with Command Prompt
+   .\run.bat
    ```
 
 ### Linux/macOS
@@ -85,33 +99,50 @@ A cross-platform C++ ray tracing application using Raylib with BVH (Bounding Vol
 
 For maximum performance, build a native Windows executable:
 
-#### Option 1: Cross-Compile from WSL (✅ Working)
+#### Option 1: Cross-Compile from Linux/WSL
 
 ```bash
 # Install MinGW cross-compiler (if not already installed)
 sudo apt update && sudo apt install -y mingw-w64 mingw-w64-tools
 
-# Build native Windows .exe
-./build-cross-compile.sh
+# Build native Windows .exe using cross-compilation
+./build.sh --cross-compile
 
-# Result: build/windows-native/gpu_raytrace.exe (2.4MB)
+# Or use make directly
+TARGET=windows-native make
+
+# Result: ./gpu_raytrace.exe (2.4MB)
 ```
 
-**Status**: ✅ **Fully Working** - Creates native Windows PE executable
-- Automatically handles Windows API compatibility
-- Builds raylib with correct Windows backend
-- Resolves symbol conflicts and library linking
-- Generates optimized 64-bit executable
+#### Option 2: Default Windows Build (MinGW)
 
-#### Option 2: Visual Studio (Best Performance)
+```bash
+# MinGW is now the default on Windows - builds native .exe
+./build.sh
 
-See `build-windows-native.md` for complete Visual Studio setup instructions.
+# Or use make directly  
+make
 
-#### Option 3: MSYS2 (Windows Native)
+# Result: ./gpu_raytrace.exe
+```
 
-1. Install MSYS2 from https://www.msys2.org/
-2. Install tools: `pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-make`
-3. Build: `make` in MSYS2 terminal
+#### Option 3: Alternative Windows Toolchain
+
+```bash
+# Use alternative Windows compiler (MSVC, regular gcc, etc.)
+./build.sh --no-mingw
+
+# Or use make directly
+make NO_MINGW=1
+
+# Result: ./gpu_raytrace.exe
+```
+
+**Status**: ✅ **All Options Working**
+- **Cross-compile**: Creates native Windows PE executable from Linux/WSL
+- **Default Windows**: Uses MinGW toolchain by default for native .exe builds
+- **Alternative Windows**: Uses system alternative compiler (MSVC, etc.)
+- All automatically handle Windows API compatibility and library linking
 
 ## Cross-Platform Build System
 
@@ -147,15 +178,28 @@ Symlink: ./gpu_raytrace -> ./build/linux/gpu_raytrace
 Shaders: ✓ Processed
 ```
 
-### Makefile Targets
+### Build Scripts and Targets
+
+#### Build Script Options
 
 ```bash
-make                 # Build for current platform
-make platform        # Show platform information
-make clean           # Clean current platform
-make clean-all       # Clean all platforms
-make rebuild-raylib  # Force rebuild raylib for current platform
-make shaders         # Process shaders only
+./build.sh                    # Build for current platform (MinGW default on Windows)
+./build.sh --no-mingw        # Build on Windows using alternative toolchain
+./build.sh --cross-compile   # Cross-compile from Linux/WSL to Windows
+./build.sh --help            # Show help and all options
+```
+
+#### Makefile Targets
+
+```bash
+make                          # Build for current platform (MinGW default on Windows)
+make NO_MINGW=1               # Use alternative toolchain on Windows
+TARGET=windows-native make    # Cross-compile to Windows from Linux/WSL
+make platform                 # Show platform information
+make clean                    # Clean current platform
+make clean-all                # Clean all platforms
+make rebuild-raylib           # Force rebuild raylib for current platform
+make shaders                  # Process shaders only
 ```
 
 ## Architecture
