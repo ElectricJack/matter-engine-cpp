@@ -1,9 +1,9 @@
 CC = gcc
 CXX = g++
 RAYLIB_PATH = ../Libraries/raylib
-ODE_PATH = ../Libraries/ode
-CFLAGS = -Wall -Wextra -O2 -I$(RAYLIB_PATH)/src -I$(ODE_PATH)/include -I$(ODE_BUILD_DIR)/include -I./include
-CXXFLAGS = -Wall -Wextra -O2 -std=c++14 -Wno-missing-field-initializers -I$(RAYLIB_PATH)/src -I$(ODE_PATH)/include -I$(ODE_BUILD_DIR)/include -I./include
+SPATIAL_QUERY_PATH = ../SpatialQueryLib
+CFLAGS = -Wall -Wextra -O2 -I$(RAYLIB_PATH)/src -I./include -I$(SPATIAL_QUERY_PATH)/include
+CXXFLAGS = -Wall -Wextra -O2 -std=c++14 -Wno-missing-field-initializers -I$(RAYLIB_PATH)/src -I./include -I$(SPATIAL_QUERY_PATH)/include
 
 # Build flags:
 # TARGET=linux           : Build Linux executable (overrides default Windows build)
@@ -28,20 +28,20 @@ ifeq ($(TARGET),windows-native)
     CXX = x86_64-w64-mingw32-g++
     PLATFORM = windows-native
     PLATFORM_DEFINE = PLATFORM_DESKTOP
-    LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -L$(ODE_BUILD_DIR) -static-libgcc -static-libstdc++ -lopengl32 -lgdi32 -lwinmm -lode_doubles
+    LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -static-libgcc -static-libstdc++ -lopengl32 -lgdi32 -lwinmm
     LDLIBS = $(RAYLIB_PATH)/build/$(PLATFORM)/libraylib.a
     BIN_SUFFIX = .exe
 else ifeq ($(TARGET),linux)
     # Build Linux executable
     PLATFORM = linux
     PLATFORM_DEFINE = PLATFORM_DESKTOP
-    LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -L$(ODE_BUILD_DIR) -lGL -lm -lpthread -ldl -lrt -lX11 -lode_doubles
+    LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -lGL -lm -lpthread -ldl -lrt -lX11
     LDLIBS = $(RAYLIB_PATH)/build/$(PLATFORM)/libraylib.a
 else ifeq ($(TARGET),macos)
     # Build macOS executable
     PLATFORM = macos
     PLATFORM_DEFINE = PLATFORM_DESKTOP
-    LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -L$(ODE_BUILD_DIR) -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo -lm -lode_doubles
+    LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo -lm
     LDLIBS = $(RAYLIB_PATH)/build/$(PLATFORM)/libraylib.a
 else
     # Fallback - any other TARGET value defaults to Windows
@@ -49,7 +49,7 @@ else
     CXX = x86_64-w64-mingw32-g++
     PLATFORM = windows-native
     PLATFORM_DEFINE = PLATFORM_DESKTOP
-    LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -L$(ODE_BUILD_DIR) -static-libgcc -static-libstdc++ -lopengl32 -lgdi32 -lwinmm -lode_doubles
+    LDFLAGS = -L$(RAYLIB_PATH)/build/$(PLATFORM) -static-libgcc -static-libstdc++ -lopengl32 -lgdi32 -lwinmm
     LDLIBS = $(RAYLIB_PATH)/build/$(PLATFORM)/libraylib.a
     BIN_SUFFIX = .exe
 endif
@@ -63,12 +63,12 @@ $(shell mkdir -p $(OBJ_DIR))
 $(shell mkdir -p $(BUILD_DIR))
 $(shell mkdir -p $(RAYLIB_PATH)/build/$(PLATFORM))
 
-# C++ main application
-SRC = main.cpp src/particle_system.cpp src/object_allocator.c
-OBJ = $(OBJ_DIR)/main.o $(OBJ_DIR)/particle_system.o $(OBJ_DIR)/object_allocator.o
+# C++ main application with spatial query library
+SRC = main.cpp src/particle_system.cpp src/object_allocator.c src/spatial_hash.c
+OBJ = $(OBJ_DIR)/main.o $(OBJ_DIR)/particle_system.o $(OBJ_DIR)/object_allocator.o $(OBJ_DIR)/spatial_hash.o
 BIN = $(BUILD_DIR)/particle_dynamics$(BIN_SUFFIX)
 
-all: dependencies ode $(BIN)
+all: dependencies $(BIN)
 	@echo "=== Build Complete ==="
 	@echo "Platform: $(PLATFORM)"
 	@echo "Target: $(TARGET)"
@@ -79,35 +79,10 @@ dependencies:
 	@echo "Setting up dependencies for $(PLATFORM)..."
 	@mkdir -p src
 	@cp ../ObjectAllocatorLib/src/object_allocator.c src/
+	@cp $(SPATIAL_QUERY_PATH)/src/spatial_hash.c src/
+	@echo "Dependencies copied successfully"
 
-# ODE library setup
-ODE_BUILD_DIR = $(ODE_PATH)/build
-ODE_LIB = $(ODE_BUILD_DIR)/libode.a
-ODE_FORCE_FILE = $(ODE_PATH)/.ode_built
-
-ode: $(ODE_LIB)
-
-$(ODE_LIB): $(ODE_FORCE_FILE)
-	@echo "Building ODE with CMake for $(PLATFORM)..."
-	@mkdir -p $(ODE_BUILD_DIR)
-ifeq ($(PLATFORM),windows-native)
-	@cd $(ODE_BUILD_DIR) && cmake .. -DBUILD_SHARED_LIBS=OFF -DODE_WITH_DEMOS=OFF -DODE_WITH_TESTS=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=../cmake/MinGW-W64-x86_64.cmake -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) || \
-	cd $(ODE_BUILD_DIR) && cmake .. -DBUILD_SHARED_LIBS=OFF -DODE_WITH_DEMOS=OFF -DODE_WITH_TESTS=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX)
-else
-	@cd $(ODE_BUILD_DIR) && cmake .. -DBUILD_SHARED_LIBS=OFF -DODE_WITH_DEMOS=OFF -DODE_WITH_TESTS=OFF -DCMAKE_BUILD_TYPE=Release
-endif
-	@cd $(ODE_BUILD_DIR) && cmake --build . --config Release
-	@echo "ODE built successfully for $(PLATFORM)"
-
-$(ODE_FORCE_FILE):
-	@echo "Creating ODE build marker..."
-	@mkdir -p $(ODE_PATH)
-	@if [ ! -d "$(ODE_PATH)/include" ]; then echo "ODE library not found. Please download ODE first with 'make download-ode'"; false; fi
-	@touch $(ODE_FORCE_FILE)
-
-download-ode:
-	@echo "Downloading Open Dynamics Engine..."
-	@cd ../Libraries && git clone https://github.com/ode/ode.git
+# No external physics library needed - using custom SoA system
 
 # Platform-specific raylib build with force rebuild check
 RAYLIB_LIB = $(RAYLIB_PATH)/build/$(PLATFORM)/libraylib.a
@@ -169,7 +144,6 @@ clean:
 
 clean-all: clean
 	rm -rf $(RAYLIB_PATH)/build/
-	@if [ -d "$(ODE_PATH)" ]; then $(MAKE) -C $(ODE_PATH) clean; fi
 
 help:
 	@echo "=== ParticleDynamicsExample Build System ==="
@@ -181,7 +155,6 @@ help:
 	@echo "  make TARGET=macos - Build macOS executable"
 	@echo ""
 	@echo "Utility targets:"
-	@echo "  make download-ode - Download ODE physics library"
 	@echo "  make clean        - Remove build files"
 	@echo "  make clean-all    - Remove all build files and libraries"
 	@echo ""
@@ -190,4 +163,4 @@ help:
 	@echo "  PLATFORM: $(PLATFORM)"
 	@echo "  Output: $(BIN)"
 
-.PHONY: all dependencies ode download-ode raylib clean clean-all help
+.PHONY: all dependencies raylib clean clean-all help

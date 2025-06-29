@@ -9,7 +9,7 @@ extern "C" {
 #include <cstring>
 #include <memory>
 #include <vector>
-#include <ode/ode.h>
+
 
 #include "particle_system.h"
 
@@ -20,7 +20,7 @@ public:
           debug_mode_(debug_mode), debug_frame_count_(0),
           particle_system_(std::make_unique<ParticleSystem>()) {
         
-        InitWindow(screen_width_, screen_height_, "Particle Dynamics with ODE Physics");
+        InitWindow(screen_width_, screen_height_, "Gravitational N-Body Simulation with Black Hole");
         SetTargetFPS(60);
         
         // Disable cursor for first person camera control
@@ -28,8 +28,8 @@ public:
         
         setup_scene();
         
-        printf("=== Particle Dynamics System Initialized ===\n");
-        printf("ODE version: %s\n", dGetConfiguration());
+        printf("=== Gravitational N-Body System Initialized ===\n");
+        printf("Physics: Custom Structure of Arrays system\n");
     }
     
     ~ParticleDynamicsDemo() {
@@ -39,43 +39,46 @@ public:
     }
     
     void run() {
-        int frame_count = 0;
-        
-        if (debug_mode_) {
-            printf("=== DEBUG MODE: Will auto-quit after 300 frames ===\n");
-        }
-        
+        // Main game loop
         while (!WindowShouldClose()) {
-            frame_count++;
-            debug_frame_count_ = frame_count;
+            PROFILE_FRAME_BEGIN();
             
-            // Debug mode auto-quit
-            if (debug_mode_ && frame_count >= 300) {
-                printf("DEBUG MODE: Reached 300 frames, auto-quitting...\n");
-                break;
+            // Auto-quit for debug mode
+            if (debug_mode_) {
+                debug_frame_count_++;
+                if (debug_frame_count_ >= 300) {
+                    printf("DEBUG MODE: Auto-quitting after 300 frames\n");
+                    break;
+                }
             }
             
-            // Print progress every 60 frames
-            if (frame_count % 60 == 0) {
-                printf("Frame %d - Particles: %d\n", frame_count, particle_system_->get_particle_count());
+            {
+                PROFILE_SECTION("Input & Update");
+                update();
             }
             
-            update();
-            render();
+            {
+                PROFILE_SECTION("Rendering");
+                render();
+            }
+            
+            PROFILE_FRAME_END();
         }
         
-        // Final stats
-        printf("\n=== Final Statistics ===\n");
-        printf("Total frames: %d\n", frame_count);
-        printf("Final particle count: %d\n", particle_system_->get_particle_count());
+        // Print final profiling stats before cleanup
+        if (debug_mode_) {
+            particle_system_->print_profiling_stats();
+        }
+        
+        cleanup();
     }
 
 private:
     void setup_scene() {
-        printf("=== Setting Up Particle Physics Scene ===\n");
+        printf("=== Setting Up Gravitational N-Body Simulation ===\n");
         
-        // Initialize camera
-        camera_.position = {0.0f, 10.0f, 20.0f};
+        // Initialize camera further out for orbital view
+        camera_.position = {0.0f, 15.0f, 30.0f};
         camera_.target = {0.0f, 0.0f, 0.0f};
         camera_.up = {0.0f, 1.0f, 0.0f};
         camera_.fovy = 45.0f;
@@ -84,24 +87,55 @@ private:
         // Initialize particle system
         particle_system_->initialize();
         
-        // Add some initial particles
-        for (int i = 0; i < 20; i++) {
-            float x = (i % 5 - 2) * 2.0f;
-            float z = (i / 5 - 2) * 2.0f;
-            float y = 10.0f + i * 0.5f;
+        // Create particle types (1/10 the size)
+        uint32_t light_type  = particle_system_->create_particle_type(0.01f, 0.008f, BLUE);
+        uint32_t medium_type = particle_system_->create_particle_type(0.02f, 0.015f, GREEN);
+        uint32_t heavy_type  = particle_system_->create_particle_type(0.04f, 0.025f, RED);
+        
+        // Create particles in orbital configuration around the black hole
+        for (int i = 0; i < 500; i++) {  // More particles to test performance
+            float angle = (float)i / 50.0f * 2.0f * PI;
+            float radius = 8.0f + (float)(rand() % 100) / 100.0f * 10.0f;  // Random orbital distances
+            float height = ((float)(rand() % 100) / 100.0f - 0.5f) * 2.0f;  // Reduced height variation
             
-            particle_system_->add_particle(Vector3{x, y, z}, Vector3{0, 0, 0}, 1.0f, 0.5f);
+            float x = cosf(angle) * radius;
+            float z = sinf(angle) * radius;
+            float y = height;
+            
+            // Calculate proper orbital velocity for stable orbit: v = sqrt(GM/r)
+            // Using gravitational constant 50.0 and black hole mass 100.0
+            float orbital_speed = sqrtf(50.0f * 100.0f / radius);
+            
+            // Add small random variation (±10%) to orbital speed for interesting dynamics
+            float speed_variation = 0.9f + (float)(rand() % 100) / 100.0f * 0.2f;  // 0.9 to 1.1 multiplier
+            orbital_speed *= speed_variation;
+            
+            // Calculate orbital velocity vector (perpendicular to radial direction)
+            float vel_x = -sinf(angle) * orbital_speed;
+            float vel_z = cosf(angle) * orbital_speed;
+            float vel_y = ((float)(rand() % 100) / 100.0f - 0.5f) * 1.0f;  // Small vertical velocity
+            
+            // Choose random particle type
+            uint32_t type_id;
+            if (i % 3 == 0) type_id = light_type;
+            else if (i % 3 == 1) type_id = medium_type;
+            else type_id = heavy_type;
+            
+            float temperature = 20.0f + (float)(rand() % 100) / 100.0f * 30.0f;  // Random initial temperature
+            
+            particle_system_->add_particle(type_id, Vector3{x, y, z}, Vector3{vel_x, vel_y, vel_z}, temperature);
         }
         
-        printf("Scene setup complete!\n");
+        printf("Orbital simulation setup complete!\n");
+        printf("Black hole at center, particles should form orbital dynamics\n");
     }
     
     void update() {
         // Handle input
         handle_input();
         
-        // Update physics
-        float dt = GetFrameTime();
+        // Update physics (slowed down 10x for stability)
+        float dt = GetFrameTime() * 0.05f;
         particle_system_->update(dt);
         
         // Update camera (DisableCursor handles mouse capture automatically)
@@ -121,12 +155,33 @@ private:
             }
         }
         
-        // Add particle at camera position
+        // Add particle with orbital velocity
         if (IsKeyPressed(KEY_SPACE)) {
             Vector3 pos = camera_.position;
-            Vector3 vel = Vector3Scale(Vector3Normalize(Vector3Subtract(camera_.target, camera_.position)), 10.0f);
-            particle_system_->add_particle(pos, vel, 1.0f, 0.3f);
-            printf("Added particle at camera position\n");
+            
+            // Calculate orbital velocity around black hole
+            float distance_to_center = Vector3Length(pos);
+            if (distance_to_center > 1.0f) {
+                // Cross product for orbital velocity direction
+                Vector3 to_center = Vector3Normalize(Vector3Scale(pos, -1.0f));
+                Vector3 up = {0, 1, 0};
+                Vector3 orbital_dir = Vector3CrossProduct(to_center, up);
+                
+                // Calculate proper orbital speed: v = sqrt(GM/r)
+                float orbital_speed = sqrtf(50.0f * 100.0f / distance_to_center);
+                
+                // Add small random variation (±10%)
+                float speed_variation = 0.9f + (float)(rand() % 100) / 100.0f * 0.2f;
+                orbital_speed *= speed_variation;
+                
+                Vector3 vel = Vector3Scale(orbital_dir, orbital_speed);
+                
+                // Use medium particle type (ID 1) 
+                uint32_t type_id = 1;
+                float temperature = 25.0f + (float)(rand() % 100) / 100.0f * 20.0f;
+                particle_system_->add_particle(type_id, pos, vel, temperature);
+                printf("Added particle with orbital velocity at distance %.2f\n", distance_to_center);
+            }
         }
         
         // Reset simulation
@@ -136,22 +191,77 @@ private:
             setup_scene();
         }
         
-        // Add explosion of particles
+        // Add multiple particles with varied orbits
         if (IsKeyPressed(KEY_E)) {
-            printf("Creating particle explosion...\n");
-            for (int i = 0; i < 50; i++) {
-                float angle1 = (float)i / 50.0f * 2.0f * PI;
-                float angle2 = ((float)rand() / RAND_MAX - 0.5f) * PI;
+            printf("Creating orbital particle cluster...\n");
+            for (int i = 0; i < 100; i++) {  // More particles to test new system
+                float angle = (float)rand() / RAND_MAX * 2.0f * PI;
+                float radius = 5.0f + (float)rand() / RAND_MAX * 15.0f;
+                float height = ((float)rand() / RAND_MAX - 0.5f) * 3.0f;  // Reduced height variation
                 
-                Vector3 pos = {0, 5, 0};
-                Vector3 vel = {
-                    cosf(angle1) * cosf(angle2) * 15.0f,
-                    sinf(angle2) * 15.0f + 5.0f,
-                    sinf(angle1) * cosf(angle2) * 15.0f
+                Vector3 pos = {
+                    cosf(angle) * radius,
+                    height,
+                    sinf(angle) * radius
                 };
                 
-                particle_system_->add_particle(pos, vel, 0.5f, 0.2f);
+                // Calculate proper orbital velocity: v = sqrt(GM/r)
+                float orbital_speed = sqrtf(50.0f * 100.0f / radius);
+                
+                // Add small random variation (±10%) to match initial setup
+                float speed_variation = 0.9f + (float)rand() / RAND_MAX * 0.2f;  // 0.9 to 1.1 multiplier
+                orbital_speed *= speed_variation;
+                
+                Vector3 vel = {
+                    -sinf(angle) * orbital_speed,
+                    ((float)rand() / RAND_MAX - 0.5f) * 1.5f,  // Small vertical velocity
+                    cosf(angle) * orbital_speed
+                };
+                
+                // Random particle type
+                uint32_t type_id = rand() % 3;  // 0, 1, or 2
+                float temperature = 15.0f + (float)rand() / RAND_MAX * 40.0f;
+                particle_system_->add_particle(type_id, pos, vel, temperature);
             }
+        }
+        
+        // Toggle debug spatial visualization
+        if (IsKeyPressed(KEY_D)) {
+            bool debug_enabled = !particle_system_->get_debug_spatial_visualization();
+            particle_system_->set_debug_spatial_visualization(debug_enabled);
+            if (debug_enabled) {
+                printf("Debug visualization ENABLED - showing gravity radii and spatial cells\n");
+            } else {
+                printf("Debug visualization DISABLED\n");
+            }
+        }
+        
+        // Toggle neighbor lines visualization
+        if (IsKeyPressed(KEY_N)) {
+            bool neighbor_lines_enabled = !particle_system_->get_debug_neighbor_lines();
+            particle_system_->set_debug_neighbor_lines(neighbor_lines_enabled);
+            if (neighbor_lines_enabled) {
+                printf("Neighbor lines ENABLED - showing particle interaction connections\n");
+            } else {
+                printf("Neighbor lines DISABLED\n");
+            }
+        }
+        
+        // Print detailed profiling stats
+        if (IsKeyPressed(KEY_P)) {
+            printf("\n=== Detailed Performance Profiling ===\n");
+            particle_system_->print_profiling_stats();
+        }
+        
+        // Reset profiling stats
+        if (IsKeyPressed(KEY_T)) {
+            particle_system_->reset_profiling_stats();
+            printf("Profiling statistics reset\n");
+        }
+        
+        // Toggle rendering mode for performance comparison
+        if (IsKeyPressed(KEY_I)) {
+            particle_system_->cycle_rendering_mode();
         }
     }
     
@@ -161,9 +271,7 @@ private:
         
         BeginMode3D(camera_);
         
-        // Draw ground plane
-        DrawPlane(Vector3{0, 0, 0}, Vector2{100, 100}, DARKGRAY);
-        DrawGrid(20, 1.0f);
+        // Clean space background (no ground plane or grid)
         
         // Draw coordinate axes
         DrawLine3D(Vector3{0, 0, 0}, Vector3{5, 0, 0}, RED);
@@ -182,20 +290,57 @@ private:
     
     void render_ui() {
         // System info
-        DrawText("PARTICLE DYNAMICS DEMO", 10, 10, 20, GREEN);
-        DrawText(TextFormat("Particles: %d", particle_system_->get_particle_count()), 10, 40, 16, WHITE);
+        DrawText("STRUCTURE OF ARRAYS N-BODY SIMULATION", 10, 10, 20, GREEN);
+        DrawText(TextFormat("Particles: %d in %d pages + 1 Black Hole", 
+                 particle_system_->get_particle_count(), particle_system_->get_page_count()), 10, 40, 16, WHITE);
         DrawText(TextFormat("FPS: %d", GetFPS()), 10, 60, 16, WHITE);
         
         // Controls
         DrawText("Controls:", 10, 100, 16, YELLOW);
-        DrawText("SPACE - Add particle at camera", 10, 120, 14, LIGHTGRAY);
-        DrawText("E - Particle explosion", 10, 140, 14, LIGHTGRAY);
-        DrawText("R - Reset simulation", 10, 160, 14, LIGHTGRAY);
-        DrawText("ESC - Toggle mouse capture", 10, 180, 14, LIGHTGRAY);
-        DrawText("WASD/Mouse - Camera control", 10, 200, 14, LIGHTGRAY);
+        DrawText("SPACE - Add particle with orbital velocity", 10, 120, 14, LIGHTGRAY);
+        DrawText("E - Add 100 particles (test performance!)", 10, 140, 14, LIGHTGRAY);
+        DrawText("D - Toggle debug visualization (spatial cells + gravity)", 10, 160, 14, LIGHTGRAY);
+        DrawText("N - Toggle neighbor lines (particle interactions)", 10, 180, 14, LIGHTGRAY);
+        DrawText("P - Print detailed profiling stats", 10, 200, 14, LIGHTGRAY);
+        DrawText("T - Reset profiling statistics", 10, 220, 14, LIGHTGRAY);
+        DrawText("I - Toggle rendering mode (performance test)", 10, 240, 14, LIGHTGRAY);
+        DrawText("R - Reset simulation", 10, 260, 14, LIGHTGRAY);
+        DrawText("ESC - Toggle mouse capture", 10, 280, 14, LIGHTGRAY);
+        DrawText("WASD/Mouse - Camera control", 10, 300, 14, LIGHTGRAY);
         
         // Physics info
-        DrawText(TextFormat("Physics step: %.2f ms", particle_system_->get_physics_time_ms()), 10, 240, 14, LIME);
+        DrawText(TextFormat("Physics step: %.2f ms", particle_system_->get_physics_time_ms()), 10, 330, 14, LIME);
+        DrawText("Physics: Stable orbits + inelastic collisions (10x slower)", 10, 350, 14, SKYBLUE);
+        DrawText("Particle types: Blue(light), Green(medium), Red(heavy)", 10, 370, 14, SKYBLUE);
+        DrawText("Particles merge when close (< 0.15 units)", 10, 390, 14, ORANGE);
+        
+        // Rendering info
+        DrawText(TextFormat("Rendering Mode: %s", particle_system_->get_rendering_mode_name()), 10, 420, 14, YELLOW);
+        
+        // Profiling info
+        DrawText("Profiling (averaged):", 10, 450, 14, SKYBLUE);
+        DrawText(TextFormat("  Spatial Hash: %.2f ms", particle_system_->get_profiling_section_time("Populate Spatial Hash")), 10, 470, 12, WHITE);
+        DrawText(TextFormat("  Gravity Forces: %.2f ms", particle_system_->get_profiling_section_time("Total Gravitational Forces")), 10, 490, 12, WHITE);
+        DrawText(TextFormat("  Collision Det: %.2f ms", particle_system_->get_profiling_section_time("Collision Detection")), 10, 510, 12, WHITE);
+        DrawText(TextFormat("  Integration: %.2f ms", particle_system_->get_profiling_section_time("Integrate Particles")), 10, 530, 12, WHITE);
+        DrawText(TextFormat("  Rendering: %.2f ms", particle_system_->get_profiling_section_time("Particle Rendering")), 10, 550, 12, WHITE);
+        
+        // Debug info
+        bool debug_vis = particle_system_->get_debug_spatial_visualization();
+        bool neighbor_lines = particle_system_->get_debug_neighbor_lines();
+        
+        Color debug_color = debug_vis ? LIME : GRAY;
+        Color neighbor_color = neighbor_lines ? LIME : GRAY;
+        
+        DrawText(TextFormat("Debug Visualization: %s", debug_vis ? "ON" : "OFF"), 10, 580, 14, debug_color);
+        DrawText(TextFormat("Neighbor Lines: %s", neighbor_lines ? "ON" : "OFF"), 10, 600, 14, neighbor_color);
+        
+        if (debug_vis) {
+            DrawText("Yellow cubes = spatial cells, Colored spheres = gravity influence", 10, 620, 12, YELLOW);
+        }
+        if (neighbor_lines) {
+            DrawText("Colored lines = particle interactions (brighter = stronger force)", 10, 640, 12, LIGHTGRAY);
+        }
         
         // Mouse control info
         if (cursor_disabled_) {
