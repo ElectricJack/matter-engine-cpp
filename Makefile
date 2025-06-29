@@ -63,9 +63,9 @@ $(shell mkdir -p $(OBJ_DIR))
 $(shell mkdir -p $(BUILD_DIR))
 $(shell mkdir -p $(RAYLIB_PATH)/build/$(PLATFORM))
 
-# C++ main application with spatial query library
-SRC = main.cpp src/particle_system.cpp src/object_allocator.c src/spatial_hash.c
-OBJ = $(OBJ_DIR)/main.o $(OBJ_DIR)/particle_system.o $(OBJ_DIR)/object_allocator.o $(OBJ_DIR)/spatial_hash.o
+# C++ main application with spatial query library and demos
+SRC = main.cpp src/particle_system.cpp src/solar_system_demo.cpp src/object_allocator.c src/spatial_hash.c
+OBJ = $(OBJ_DIR)/main.o $(OBJ_DIR)/particle_system.o $(OBJ_DIR)/solar_system_demo.o $(OBJ_DIR)/object_allocator.o $(OBJ_DIR)/spatial_hash.o
 BIN = $(BUILD_DIR)/particle_dynamics$(BIN_SUFFIX)
 
 all: dependencies $(BIN)
