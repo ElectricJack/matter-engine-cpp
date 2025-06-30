@@ -5,174 +5,11 @@
 #include <cstdio>
 #include <random>
 
-// Static member definitions
-std::vector<MaterialProperties> ParticleSystem::material_properties_;
-std::unordered_map<std::pair<MaterialType, MaterialType>, float,
-                   std::hash<std::pair<MaterialType, MaterialType>>> ParticleSystem::adhesion_matrix_;
-std::vector<ChemicalReaction> ParticleSystem::chemical_reactions_;
-bool ParticleSystem::static_data_initialized_ = false;
 
 
-
-// Static material properties initialization
-void ParticleSystem::initialize_material_properties() {
-    material_properties_.resize(static_cast<size_t>(MaterialType::COUNT));
-    
-    // Initialize material properties according to the design document
-    material_properties_[static_cast<size_t>(MaterialType::Water)] = 
-        MaterialProperties("Water", 1000.0f, 4184.0f, 0.6f, 334000.0f, 2260000.0f, 0.95f, 
-                          5e-6f, 80.0f, 3e6f, 0.0f, 100.0f, 0.05f, BLUE, PhaseState::Liquid);
-    
-    material_properties_[static_cast<size_t>(MaterialType::Oxygen)] = 
-        MaterialProperties("Oxygen", 1.43f, 918.0f, 0.026f, 139000.0f, 213000.0f, 0.20f,
-                          1e-18f, 1.0005f, 3e6f, -218.8f, -183.0f, 0.0f, SKYBLUE, PhaseState::Gas);
-    
-    material_properties_[static_cast<size_t>(MaterialType::Hydrogen)] = 
-        MaterialProperties("Hydrogen", 0.09f, 14300.0f, 0.18f, 60000.0f, 455000.0f, 0.10f,
-                          1e-18f, 1.0001f, 3e7f, -259.1f, -252.9f, 0.0f, LIGHTGRAY, PhaseState::Gas);
-    
-    material_properties_[static_cast<size_t>(MaterialType::Carbon)] = 
-        MaterialProperties("Carbon", 1800.0f, 710.0f, 1.5f, 113000.0f, 360000.0f, 0.80f,
-                          1e4f, 10.0f, 2e6f, 3550.0f, 4827.0f, 0.65f, BLACK, PhaseState::Solid);
-    
-    material_properties_[static_cast<size_t>(MaterialType::Rock)] = 
-        MaterialProperties("Rock", 2700.0f, 800.0f, 2.5f, 250000.0f, 1000000.0f, 0.90f,
-                          1e-8f, 5.0f, 3e6f, 1200.0f, 2800.0f, 0.85f, GRAY, PhaseState::Solid);
-    
-    material_properties_[static_cast<size_t>(MaterialType::Wood)] = 
-        MaterialProperties("Wood", 600.0f, 1700.0f, 0.12f, 200000.0f, 0.0f, 0.90f,
-                          1e-9f, 4.0f, 2e6f, 300.0f, 0.0f, 0.60f, BROWN, PhaseState::Solid);
-    
-    material_properties_[static_cast<size_t>(MaterialType::Plant)] = 
-        MaterialProperties("Plant", 400.0f, 2500.0f, 0.20f, 150000.0f, 0.0f, 0.90f,
-                          1e-8f, 8.0f, 2e6f, 200.0f, 0.0f, 0.50f, GREEN, PhaseState::Solid);
-    
-    material_properties_[static_cast<size_t>(MaterialType::Iron)] = 
-        MaterialProperties("Iron", 7874.0f, 450.0f, 80.0f, 272000.0f, 6200000.0f, 0.30f,
-                          1e7f, 1.0f, 1e8f, 1538.0f, 2862.0f, 0.80f, DARKGRAY, PhaseState::Solid);
-    
-    material_properties_[static_cast<size_t>(MaterialType::Copper)] = 
-        MaterialProperties("Copper", 8960.0f, 385.0f, 400.0f, 205000.0f, 4700000.0f, 0.05f,
-                          5.9e7f, 1.0f, 1e8f, 1085.0f, 2562.0f, 0.75f, Color{184, 115, 51, 255}, PhaseState::Solid);
-    
-    material_properties_[static_cast<size_t>(MaterialType::Gold)] = 
-        MaterialProperties("Gold", 19320.0f, 129.0f, 320.0f, 63700.0f, 1630000.0f, 0.02f,
-                          4.1e7f, 1.0f, 1e8f, 1064.0f, 2856.0f, 0.70f, GOLD, PhaseState::Solid);
-    
-    material_properties_[static_cast<size_t>(MaterialType::Oil)] = 
-        MaterialProperties("Oil", 800.0f, 2000.0f, 0.15f, 200000.0f, 800000.0f, 0.95f,
-                          1e-10f, 3.0f, 5e6f, -40.0f, 150.0f, 0.10f, Color{139, 69, 19, 255}, PhaseState::Liquid);
-    
-    material_properties_[static_cast<size_t>(MaterialType::Uranium)] = 
-        MaterialProperties("Uranium", 19050.0f, 116.0f, 27.0f, 50000.0f, 600000.0f, 0.30f,
-                          3e6f, 1.0f, 1e7f, 1135.0f, 4131.0f, 0.90f, Color{0, 128, 0, 255}, PhaseState::Solid);
-    
-    material_properties_[static_cast<size_t>(MaterialType::IronOxide)] = 
-        MaterialProperties("Iron Oxide", 5242.0f, 650.0f, 1.0f, 300000.0f, 1500000.0f, 0.85f,
-                          1e-6f, 12.0f, 1e6f, 1565.0f, 0.0f, 0.70f, Color{139, 69, 19, 255}, PhaseState::Solid);
-    
-    material_properties_[static_cast<size_t>(MaterialType::Plasma)] = 
-        MaterialProperties("Plasma", 1.0f, 5000.0f, 10.0f, 0.0f, 0.0f, 1.0f,
-                          1e6f, 1.0f, 1e10f, 10000.0f, 15000.0f, 0.0f, Color{255, 0, 255, 255}, PhaseState::Plasma);
-}
-
-void ParticleSystem::initialize_adhesion_matrix() {
-    // Initialize adhesion matrix according to the design document
-    adhesion_matrix_[{MaterialType::Rock, MaterialType::Rock}] = 0.85f;
-    adhesion_matrix_[{MaterialType::Rock, MaterialType::Iron}] = 0.80f;
-    adhesion_matrix_[{MaterialType::Rock, MaterialType::Copper}] = 0.75f;
-    adhesion_matrix_[{MaterialType::Rock, MaterialType::Water}] = 0.10f;
-    adhesion_matrix_[{MaterialType::Rock, MaterialType::Oil}] = 0.05f;
-    adhesion_matrix_[{MaterialType::Rock, MaterialType::Wood}] = 0.20f;
-    
-    adhesion_matrix_[{MaterialType::Iron, MaterialType::Rock}] = 0.80f;
-    adhesion_matrix_[{MaterialType::Iron, MaterialType::Iron}] = 0.80f;
-    adhesion_matrix_[{MaterialType::Iron, MaterialType::Copper}] = 0.70f;
-    adhesion_matrix_[{MaterialType::Iron, MaterialType::Water}] = 0.05f;
-    adhesion_matrix_[{MaterialType::Iron, MaterialType::Oil}] = 0.05f;
-    
-    adhesion_matrix_[{MaterialType::Copper, MaterialType::Rock}] = 0.75f;
-    adhesion_matrix_[{MaterialType::Copper, MaterialType::Iron}] = 0.70f;
-    adhesion_matrix_[{MaterialType::Copper, MaterialType::Copper}] = 0.75f;
-    adhesion_matrix_[{MaterialType::Copper, MaterialType::Oil}] = 0.05f;
-    
-    adhesion_matrix_[{MaterialType::Gold, MaterialType::Rock}] = 0.70f;
-    adhesion_matrix_[{MaterialType::Gold, MaterialType::Iron}] = 0.65f;
-    adhesion_matrix_[{MaterialType::Gold, MaterialType::Gold}] = 0.70f;
-    
-    adhesion_matrix_[{MaterialType::Wood, MaterialType::Rock}] = 0.20f;
-    adhesion_matrix_[{MaterialType::Wood, MaterialType::Iron}] = 0.10f;
-    adhesion_matrix_[{MaterialType::Wood, MaterialType::Water}] = 0.30f;
-    adhesion_matrix_[{MaterialType::Wood, MaterialType::Oil}] = 0.15f;
-    adhesion_matrix_[{MaterialType::Wood, MaterialType::Wood}] = 0.60f;
-    adhesion_matrix_[{MaterialType::Wood, MaterialType::Plant}] = 0.50f;
-    
-    adhesion_matrix_[{MaterialType::Plant, MaterialType::Wood}] = 0.50f;
-    adhesion_matrix_[{MaterialType::Plant, MaterialType::Water}] = 0.40f;
-    adhesion_matrix_[{MaterialType::Plant, MaterialType::Plant}] = 0.50f;
-    
-    adhesion_matrix_[{MaterialType::Water, MaterialType::Water}] = 0.05f;
-    adhesion_matrix_[{MaterialType::Water, MaterialType::Wood}] = 0.30f;
-    adhesion_matrix_[{MaterialType::Water, MaterialType::Plant}] = 0.40f;
-    adhesion_matrix_[{MaterialType::Water, MaterialType::Rock}] = 0.10f;
-    
-    adhesion_matrix_[{MaterialType::Oil, MaterialType::Water}] = 0.05f;
-    adhesion_matrix_[{MaterialType::Oil, MaterialType::Wood}] = 0.15f;
-    adhesion_matrix_[{MaterialType::Oil, MaterialType::Oil}] = 0.10f;
-    adhesion_matrix_[{MaterialType::Oil, MaterialType::Rock}] = 0.05f;
-    
-    adhesion_matrix_[{MaterialType::Carbon, MaterialType::Carbon}] = 0.65f;
-    adhesion_matrix_[{MaterialType::Carbon, MaterialType::Iron}] = 0.40f;
-    
-    adhesion_matrix_[{MaterialType::Uranium, MaterialType::Rock}] = 0.50f;
-    adhesion_matrix_[{MaterialType::Uranium, MaterialType::Iron}] = 0.60f;
-    adhesion_matrix_[{MaterialType::Uranium, MaterialType::Uranium}] = 0.90f;
-    
-    // Make adhesion matrix symmetric
-    auto keys = adhesion_matrix_;
-    for (const auto& pair : keys) {
-        MaterialType mat1 = pair.first.first;
-        MaterialType mat2 = pair.first.second;
-        float value = pair.second;
-        adhesion_matrix_[{mat2, mat1}] = value;
-    }
-}
-
-void ParticleSystem::initialize_chemical_reactions() {
-    // Wood + O2 → Carbon + Water
-    ChemicalReaction wood_combustion(300.0f, -1.8e7f, 0.001f);
-    wood_combustion.reactants[MaterialType::Wood] = 1;
-    wood_combustion.reactants[MaterialType::Oxygen] = 2;
-    wood_combustion.products[MaterialType::Carbon] = 1;
-    wood_combustion.products[MaterialType::Water] = 2;
-    chemical_reactions_.push_back(wood_combustion);
-    
-    // Hydrogen + O2 → Water
-    ChemicalReaction hydrogen_combustion(600.0f, -2.86e8f, 0.01f);
-    hydrogen_combustion.reactants[MaterialType::Hydrogen] = 2;
-    hydrogen_combustion.reactants[MaterialType::Oxygen] = 1;
-    hydrogen_combustion.products[MaterialType::Water] = 2;
-    chemical_reactions_.push_back(hydrogen_combustion);
-    
-    // Iron + O2 → Iron Oxide (rust)
-    ChemicalReaction iron_oxidation(50.0f, -8e4f, 0.0001f);
-    iron_oxidation.reactants[MaterialType::Iron] = 1;
-    iron_oxidation.reactants[MaterialType::Oxygen] = 1;
-    iron_oxidation.products[MaterialType::IronOxide] = 1;
-    chemical_reactions_.push_back(iron_oxidation);
-}
-
-ParticleSystem::ParticleSystem() 
-    : spatial_hash_(nullptr), physics_time_ms_(0.0f),
+ParticleSystem::ParticleSystem(MaterialManager& material_manager) 
+    : material_manager_(material_manager), spatial_hash_(nullptr), physics_time_ms_(0.0f),
       instanced_rendering_initialized_(false), use_instanced_rendering_(true) {
-    
-    // Initialize static data if not already done
-    if (!static_data_initialized_) {
-        initialize_material_properties();
-        initialize_adhesion_matrix();
-        initialize_chemical_reactions();
-        static_data_initialized_ = true;
-    }
 }
 
 ParticleSystem::~ParticleSystem() {
@@ -218,9 +55,9 @@ void ParticleSystem::initialize() {
     initialize_instanced_rendering();
     
     printf("Material-based particle system initialized successfully!\n");
-    printf("  Materials available: %zu\n", material_properties_.size());
-    printf("  Chemical reactions: %zu\n", chemical_reactions_.size());
-    printf("  Adhesion matrix entries: %zu\n", adhesion_matrix_.size());
+    printf("  Materials available: %zu\n", material_manager_.get_material_count());
+    printf("  Chemical reactions: %zu\n", material_manager_.get_reaction_count());
+    printf("  Adhesion matrix entries: %zu\n", material_manager_.get_adhesion_matrix_size());
     printf("  Black hole mass: %.2f\n", black_hole_.mass);
     printf("  Spatial cell size: %.2f\n", SPATIAL_CELL_SIZE);
     printf("  Instanced rendering: %s\n", instanced_rendering_initialized_ ? "ENABLED" : "DISABLED");
@@ -228,9 +65,6 @@ void ParticleSystem::initialize() {
 
 void ParticleSystem::cleanup() {
     printf("Cleaning up particle system...\n");
-    
-    // Cleanup lighting resources
-    cleanup_lighting_system();
     
     // Cleanup instanced rendering resources
     cleanup_instanced_rendering();
@@ -273,7 +107,7 @@ uint32_t ParticleSystem::create_particle_type(float radius, MaterialType materia
     uint32_t type_id = static_cast<uint32_t>(particle_types_.size());
     particle_types_.emplace_back(radius, material, mass, color);
     printf("Created particle type %u: material=%s, radius=%.2f, mass=%.2f\n", 
-           type_id, material_properties_[static_cast<size_t>(material)].name, radius, mass);
+           type_id, material_manager_.get_material_properties(material).name, radius, mass);
     return type_id;
 }
 
@@ -286,7 +120,7 @@ void ParticleSystem::add_particle(uint32_t type_id, const Vector3& position, con
     
     uint32_t index;
     const ParticleType& type = particle_types_[type_id];
-    const MaterialProperties& material = material_properties_[static_cast<size_t>(type.material)];
+    const MaterialProperties& material = material_manager_.get_material_properties(type.material);
     
     // Use free index if available, otherwise add to end
     if (!free_indices_.empty()) {
@@ -306,7 +140,6 @@ void ParticleSystem::add_particle(uint32_t type_id, const Vector3& position, con
         type_id_[index] = type_id;
         phase_state_[index] = material.default_phase;
         active_[index] = true;
-        bonds_[index].clear();
     } else {
         // Add new particle at end
         index = static_cast<uint32_t>(pos_x_.size());
@@ -322,7 +155,6 @@ void ParticleSystem::add_particle(uint32_t type_id, const Vector3& position, con
         type_id_.push_back(type_id);
         phase_state_.push_back(material.default_phase);
         active_.push_back(true);
-        bonds_.emplace_back();
     }
     
     printf("Added particle %u (%s) at (%.2f, %.2f, %.2f) T=%.1f°C Q=%.2f\n",
@@ -372,10 +204,7 @@ void ParticleSystem::update(float dt) {
         update_chemical_reactions(dt);
     }
     
-    if (bonding_simulation_) {
-        PROFILE_SECTION("Bonding System");
-        update_bonding_system(dt);
-    }
+
     
     // Handle particle collisions and merging using spatial queries
     {
@@ -769,21 +598,7 @@ void ParticleSystem::update_chemical_reactions(float dt) {
     process_chemical_reactions(dt);
 }
 
-void ParticleSystem::update_bonding_system(float dt) {
-    PROFILE_SECTION("Complete Bonding System");
-    
-    // Update particle bonds (formation and breaking)
-    {
-        PROFILE_SECTION("Bond Updates");
-        update_particle_bonds(dt);
-    }
-    
-    // Apply forces from bonds
-    {
-        PROFILE_SECTION("Bond Forces");
-        apply_bond_forces(dt);
-    }
-}
+
 
 void ParticleSystem::apply_thermal_conduction(float dt) {
     void* neighbors[MAX_NEIGHBORS];
@@ -793,7 +608,7 @@ void ParticleSystem::apply_thermal_conduction(float dt) {
         if (!active_[i]) continue;
         
         const ParticleType& particle_type = particle_types_[type_id_[i]];
-        const MaterialProperties& material = material_properties_[static_cast<size_t>(particle_type.material)];
+        const MaterialProperties& material = material_manager_.get_material_properties(particle_type.material);
         
         float px = pos_x_[i];
         float py = pos_y_[i];
@@ -835,7 +650,7 @@ void ParticleSystem::apply_phase_changes(float dt) {
         if (!active_[i]) continue;
         
         const ParticleType& particle_type = particle_types_[type_id_[i]];
-        const MaterialProperties& material = material_properties_[static_cast<size_t>(particle_type.material)];
+        const MaterialProperties& material = material_manager_.get_material_properties(particle_type.material);
         
         float temp = temperature_[i];
         PhaseState current_phase = phase_state_[i];
@@ -872,7 +687,7 @@ void ParticleSystem::apply_radiative_cooling(float dt) {
         if (!active_[i]) continue;
         
         const ParticleType& particle_type = particle_types_[type_id_[i]];
-        const MaterialProperties& material = material_properties_[static_cast<size_t>(particle_type.material)];
+        const MaterialProperties& material = material_manager_.get_material_properties(particle_type.material);
         
         // Stefan-Boltzmann cooling: P = σ * ε * A * T^4
         float temp_kelvin = temperature_[i] + 273.15f;
@@ -942,7 +757,7 @@ void ParticleSystem::apply_joule_heating(float dt) {
         if (!active_[i]) continue;
         
         const ParticleType& particle_type = particle_types_[type_id_[i]];
-        const MaterialProperties& material = material_properties_[static_cast<size_t>(particle_type.material)];
+        const MaterialProperties& material = material_manager_.get_material_properties(particle_type.material);
         
         // Calculate heating from current flow
         float current_density = charge_[i] / particle_type.mass;
@@ -963,7 +778,7 @@ void ParticleSystem::check_dielectric_breakdown() {
         if (!active_[i]) continue;
         
         const ParticleType& particle_type = particle_types_[type_id_[i]];
-        const MaterialProperties& material = material_properties_[static_cast<size_t>(particle_type.material)];
+        const MaterialProperties& material = material_manager_.get_material_properties(particle_type.material);
         
         // Only check gas particles for breakdown
         if (phase_state_[i] != PhaseState::Gas) continue;
@@ -1035,7 +850,7 @@ void ParticleSystem::process_chemical_reactions(float dt) {
         }
         
         // Check all chemical reactions
-        for (const auto& reaction : chemical_reactions_) {
+        for (const auto& reaction : material_manager_.get_chemical_reactions()) {
             if (temp >= reaction.activation_temperature && 
                 can_react(reaction.reactants, nearby_particles) &&
                 dis(gen) < reaction.probability) {
@@ -1052,133 +867,9 @@ void ParticleSystem::process_chemical_reactions(float dt) {
     }
 }
 
-void ParticleSystem::update_particle_bonds(float dt) {
-    void* neighbors[MAX_NEIGHBORS];
-    
-    // Update bonds for each particle
-    for (uint32_t i = 0; i < pos_x_.size(); ++i) {
-        if (!active_[i]) continue;
-        
-        const ParticleType& particle_type = particle_types_[type_id_[i]];
-        const MaterialProperties& material = material_properties_[static_cast<size_t>(particle_type.material)];
-        
-        float px = pos_x_[i];
-        float py = pos_y_[i];
-        float pz = pos_z_[i];
-        
-        // Query neighbors for potential bonding
-        float bond_radius = BOND_FORMATION_DISTANCE;
-        int neighbor_count = sh_query_radius(spatial_hash_, px, py, pz, bond_radius, neighbors, MAX_NEIGHBORS);
-        
-        for (int n = 0; n < neighbor_count; ++n) {
-            ParticleRef* neighbor_ref = (ParticleRef*)neighbors[n];
-            uint32_t neighbor_idx = neighbor_ref->particle_index;
-            
-            if (neighbor_idx == i || neighbor_idx >= active_.size() || !active_[neighbor_idx]) continue;
-            
-            float distance = sqrtf(powf(pos_x_[neighbor_idx] - px, 2) + 
-                                 powf(pos_y_[neighbor_idx] - py, 2) + 
-                                 powf(pos_z_[neighbor_idx] - pz, 2));
-            
-            if (distance < BOND_FORMATION_DISTANCE) {
-                const ParticleType& neighbor_type = particle_types_[type_id_[neighbor_idx]];
-                
-                // Check if bond already exists
-                bool bond_exists = false;
-                for (const auto& bond : bonds_[i]) {
-                    if (bond.particle_index == neighbor_idx) {
-                        bond_exists = true;
-                        break;
-                    }
-                }
-                
-                if (!bond_exists) {
-                    // Check adhesion matrix for bonding probability
-                    auto adhesion_key = std::make_pair(particle_type.material, neighbor_type.material);
-                    auto it = adhesion_matrix_.find(adhesion_key);
-                    if (it != adhesion_matrix_.end() && it->second > 0.1f) {
-                        // Form bond
-                        float bond_strength = it->second * 10.0f; // Scale for simulation
-                        bonds_[i].emplace_back(neighbor_idx, bond_strength, distance);
-                        bonds_[neighbor_idx].emplace_back(i, bond_strength, distance);
-                    }
-                }
-            }
-        }
-        
-        // Check for bond breaking
-        auto& particle_bonds = bonds_[i];
-        for (auto it = particle_bonds.begin(); it != particle_bonds.end();) {
-            uint32_t bonded_idx = it->particle_index;
-            
-            if (bonded_idx >= active_.size() || !active_[bonded_idx]) {
-                it = particle_bonds.erase(it);
-                continue;
-            }
-            
-            float distance = sqrtf(powf(pos_x_[bonded_idx] - px, 2) + 
-                                 powf(pos_y_[bonded_idx] - py, 2) + 
-                                 powf(pos_z_[bonded_idx] - pz, 2));
-            
-            float stretch = distance - it->rest_length;
-            if (stretch > 0 && stretch * it->strength > BOND_BREAK_FORCE) {
-                // Break bond
-                it = particle_bonds.erase(it);
-                
-                // Remove corresponding bond from neighbor
-                auto& neighbor_bonds = bonds_[bonded_idx];
-                for (auto nit = neighbor_bonds.begin(); nit != neighbor_bonds.end(); ++nit) {
-                    if (nit->particle_index == i) {
-                        neighbor_bonds.erase(nit);
-                        break;
-                    }
-                }
-            } else {
-                ++it;
-            }
-        }
-    }
-}
 
-void ParticleSystem::apply_bond_forces(float dt) {
-    // Apply forces from bonds
-    for (uint32_t i = 0; i < pos_x_.size(); ++i) {
-        if (!active_[i]) continue;
-        
-        const ParticleType& particle_type = particle_types_[type_id_[i]];
-        
-        float px = pos_x_[i];
-        float py = pos_y_[i];
-        float pz = pos_z_[i];
-        
-        for (const auto& bond : bonds_[i]) {
-            uint32_t bonded_idx = bond.particle_index;
-            
-            if (bonded_idx >= active_.size() || !active_[bonded_idx]) continue;
-            
-            float dx = pos_x_[bonded_idx] - px;
-            float dy = pos_y_[bonded_idx] - py;
-            float dz = pos_z_[bonded_idx] - pz;
-            
-            float distance = sqrtf(dx*dx + dy*dy + dz*dz);
-            if (distance > 0.0f) {
-                float stretch = distance - bond.rest_length;
-                float force_magnitude = bond.strength * stretch;
-                
-                // Apply spring force
-                float force_x = (dx / distance) * force_magnitude;
-                float force_y = (dy / distance) * force_magnitude;
-                float force_z = (dz / distance) * force_magnitude;
-                
-                // Apply force as acceleration
-                float inv_mass = 1.0f / particle_type.mass;
-                vel_x_[i] += force_x * inv_mass * dt;
-                vel_y_[i] += force_y * inv_mass * dt;
-                vel_z_[i] += force_z * inv_mass * dt;
-            }
-        }
-    }
-}
+
+
 
 void ParticleSystem::render() {
     PROFILE_SECTION("Particle Rendering");
@@ -1206,29 +897,6 @@ void ParticleSystem::render() {
 }
 
 void ParticleSystem::render_particles_individual() {
-    // Initialize lighting system if not done yet (only try once to avoid repeated failures)
-    static bool lighting_init_attempted = false;
-    if (!lighting_initialized_ && !lighting_init_attempted) {
-        initialize_lighting_system();
-        lighting_init_attempted = true;
-    }
-    
-    // Set up lighting system only if it's working
-    bool use_lighting = lighting_initialized_ && sphere_model_initialized_ && lighting_shader_.id != 0;
-    
-    if (use_lighting) {
-        // Update camera position for lighting calculations
-        float cameraPos[3] = { camera_position_.x, camera_position_.y, camera_position_.z };
-        SetShaderValue(lighting_shader_, lighting_shader_.locs[SHADER_LOC_VECTOR_VIEW], cameraPos, SHADER_UNIFORM_VEC3);
-        
-        // Update light values (ensure they're current)
-        for (int i = 0; i < MAX_LIGHTS; i++) {
-            if (lights_[i].enabled) {
-                UpdateLightValues(lighting_shader_, lights_[i]);
-            }
-        }
-    }
-    
     for (uint32_t i = 0; i < pos_x_.size(); ++i) {
         if (!active_[i]) continue;
         
@@ -1261,14 +929,8 @@ void ParticleSystem::render_particles_individual() {
         // Color based on material properties, temperature, and phase
         Color color = get_material_color(i);
         
-        if (use_lighting) {
-            // Use lit sphere model with proper scaling and positioning
-            lighting_sphere_model_.materials[0].maps[MATERIAL_MAP_DIFFUSE].color = color;
-            DrawModelEx(lighting_sphere_model_, pos, Vector3{0, 1, 0}, 0.0f, Vector3{visual_radius, visual_radius, visual_radius}, color);
-        } else {
-            // Fallback to basic sphere
-            DrawSphere(pos, visual_radius, color);
-        }
+        // Draw basic sphere
+        DrawSphere(pos, visual_radius, color);
     }
 }
 
@@ -1285,79 +947,7 @@ void ParticleSystem::render_black_hole() {
     DrawSphereWires(black_hole_.position, black_hole_.radius * 2.0f, 6, 6, Color{128, 0, 128, 32});
 }
 
-void ParticleSystem::initialize_lighting_system() {
-    if (lighting_initialized_) return;
-    
-    TraceLog(LOG_INFO, "Attempting to load lighting system...");
-    
-    // Try to load the lighting shader
-    lighting_shader_ = LoadShader("shaders/lighting.vs", "shaders/lighting.fs");
-    
-    if (lighting_shader_.id != 0) {
-        // Set up standard raylib shader locations
-        lighting_shader_.locs[SHADER_LOC_VECTOR_VIEW] = GetShaderLocation(lighting_shader_, "viewPos");
-        // NOTE: matModel and matNormal are automatically assigned by raylib
-        
-        // Set ambient light level
-        int ambientLoc = GetShaderLocation(lighting_shader_, "ambient");
-        float ambient[4] = { 0.1f, 0.1f, 0.1f, 1.0f };
-        SetShaderValue(lighting_shader_, ambientLoc, ambient, SHADER_UNIFORM_VEC4);
-        
-        // Create sphere model for particles (proper lighting support)
-        lighting_sphere_mesh_ = GenMeshSphere(1.0f, 16, 16); // Unit sphere, will scale in rendering
-        lighting_sphere_model_ = LoadModelFromMesh(lighting_sphere_mesh_);
-        lighting_sphere_model_.materials[0].shader = lighting_shader_;
-        sphere_model_initialized_ = true;
-        
-        lighting_initialized_ = true;
-        TraceLog(LOG_INFO, "Lighting shader loaded successfully (ID: %d)", lighting_shader_.id);
-        TraceLog(LOG_INFO, "Sphere model created for particle rendering");
-        
-        // Set up scene lights
-        setup_scene_lights();
-    } else {
-        TraceLog(LOG_WARNING, "Failed to load lighting shader (invalid ID), using default rendering");
-        lighting_initialized_ = false;
-    }
-}
 
-void ParticleSystem::cleanup_lighting_system() {
-    if (sphere_model_initialized_) {
-        UnloadModel(lighting_sphere_model_);
-        sphere_model_initialized_ = false;
-    }
-    if (lighting_initialized_) {
-        UnloadShader(lighting_shader_);
-        lighting_initialized_ = false;
-    }
-}
-
-void ParticleSystem::setup_scene_lights() {
-    if (!lighting_initialized_) return;
-    
-    TraceLog(LOG_INFO, "Setting up scene lights...");
-    
-    // Initialize all lights as disabled
-    for (int i = 0; i < MAX_LIGHTS; i++) {
-        lights_[i] = (Light){ 0 };
-    }
-    
-    // Create basic lighting setup
-    lights_[0] = CreateLight(LIGHT_POINT, (Vector3){ -10.0f, 10.0f, -10.0f }, Vector3Zero(), WHITE, lighting_shader_);
-    lights_[1] = CreateLight(LIGHT_POINT, (Vector3){ 10.0f, 10.0f, 10.0f }, Vector3Zero(), Color{255, 255, 200, 255}, lighting_shader_);
-    lights_[2] = CreateLight(LIGHT_POINT, (Vector3){ 0.0f, 15.0f, 0.0f }, Vector3Zero(), Color{200, 200, 255, 255}, lighting_shader_);
-    
-    TraceLog(LOG_INFO, "Scene lights setup complete");
-}
-
-void ParticleSystem::render_lit_sphere(const Vector3& position, float radius, Color color) {
-    // This function is now deprecated - using shader-based rendering instead
-    DrawSphere(position, radius, color);
-}
-
-void ParticleSystem::set_camera_position(const Vector3& camera_pos) {
-    camera_position_ = camera_pos;
-}
 
 
 
@@ -1401,12 +991,12 @@ float ParticleSystem::get_physics_time_ms() const {
 
 // Material properties access methods
 const MaterialProperties& ParticleSystem::get_material_properties(MaterialType material) const {
-    return material_properties_[static_cast<size_t>(material)];
+    return material_manager_.get_material_properties(material);
 }
 
 const std::unordered_map<std::pair<MaterialType, MaterialType>, float,
-                        std::hash<std::pair<MaterialType, MaterialType>>>& ParticleSystem::get_adhesion_matrix() {
-    return adhesion_matrix_;
+                        std::hash<std::pair<MaterialType, MaterialType>>>& ParticleSystem::get_adhesion_matrix() const {
+    return material_manager_.get_adhesion_matrix();
 }
 
 float ParticleSystem::get_average_temperature() const {
@@ -1439,20 +1029,10 @@ float ParticleSystem::get_total_electrical_energy() const {
 
 int ParticleSystem::get_active_reactions_count() const {
     // Simple estimate - could be more sophisticated
-    return static_cast<int>(chemical_reactions_.size());
+    return static_cast<int>(material_manager_.get_reaction_count());
 }
 
-int ParticleSystem::get_total_bonds_count() const {
-    int total_bonds = 0;
-    
-    for (uint32_t i = 0; i < bonds_.size(); ++i) {
-        if (active_[i]) {
-            total_bonds += static_cast<int>(bonds_[i].size());
-        }
-    }
-    
-    return total_bonds / 2; // Each bond is counted twice
-}
+
 
 // Helper methods for material physics
 Color ParticleSystem::get_material_color(uint32_t particle_index) const {
@@ -1461,7 +1041,7 @@ Color ParticleSystem::get_material_color(uint32_t particle_index) const {
     }
     
     const ParticleType& type = particle_types_[type_id_[particle_index]];
-    const MaterialProperties& material = material_properties_[static_cast<size_t>(type.material)];
+    const MaterialProperties& material = material_manager_.get_material_properties(type.material);
     
     // Base color from material properties
     Color base_color = material.base_color;
@@ -1503,8 +1083,8 @@ float ParticleSystem::calculate_thermal_conductivity_between(uint32_t p1, uint32
         return 0.0f;
     }
     
-    const MaterialProperties& mat1 = material_properties_[static_cast<size_t>(particle_types_[type_id_[p1]].material)];
-    const MaterialProperties& mat2 = material_properties_[static_cast<size_t>(particle_types_[type_id_[p2]].material)];
+    const MaterialProperties& mat1 = material_manager_.get_material_properties(particle_types_[type_id_[p1]].material);
+    const MaterialProperties& mat2 = material_manager_.get_material_properties(particle_types_[type_id_[p2]].material);
     
     // Harmonic mean of thermal conductivities
     return 2.0f * mat1.thermal_conductivity * mat2.thermal_conductivity / 
@@ -1516,8 +1096,8 @@ float ParticleSystem::calculate_electrical_conductivity_between(uint32_t p1, uin
         return 0.0f;
     }
     
-    const MaterialProperties& mat1 = material_properties_[static_cast<size_t>(particle_types_[type_id_[p1]].material)];
-    const MaterialProperties& mat2 = material_properties_[static_cast<size_t>(particle_types_[type_id_[p2]].material)];
+    const MaterialProperties& mat1 = material_manager_.get_material_properties(particle_types_[type_id_[p1]].material);
+    const MaterialProperties& mat2 = material_manager_.get_material_properties(particle_types_[type_id_[p2]].material);
     
     // Harmonic mean of electrical conductivities
     float cond1 = mat1.electrical_conductivity;
@@ -1601,7 +1181,7 @@ void ParticleSystem::spawn_products(const std::unordered_map<MaterialType, int>&
         
         if (!found_type) {
             // Create new particle type for this material
-            const MaterialProperties& mat_props = material_properties_[static_cast<size_t>(material)];
+            const MaterialProperties& mat_props = material_manager_.get_material_properties(material);
             float radius = 0.3f; // Default radius
             float mass = mat_props.density * (4.0f/3.0f) * 3.14159f * powf(radius, 3); // Volume * density
             product_type_id = create_particle_type(radius, material, mass, mat_props.base_color);
@@ -1635,7 +1215,7 @@ void ParticleSystem::spawn_products(const std::unordered_map<MaterialType, int>&
 // Debug visualization methods
 void ParticleSystem::render_debug_spatial_info() {
     if (!debug_spatial_vis_ && !debug_neighbor_lines_ && 
-        !debug_thermal_vis_ && !debug_electrical_vis_ && !debug_bonds_vis_) return;
+        !debug_thermal_vis_ && !debug_electrical_vis_) return;
     
     // Draw neighbor connections first (so they appear behind other elements)
     if (debug_neighbor_lines_) {
@@ -1655,11 +1235,7 @@ void ParticleSystem::render_debug_spatial_info() {
         draw_electrical_visualization();
     }
     
-    // Draw bonds visualization
-    if (debug_bonds_vis_) {
-        PROFILE_SECTION("Draw Bonds Visualization");
-        draw_bonds_visualization();
-    }
+
 }
 
 void ParticleSystem::draw_spatial_cell_boundaries(float x, float y, float z) {
@@ -1885,47 +1461,7 @@ void ParticleSystem::draw_electrical_visualization() {
     }
 }
 
-void ParticleSystem::draw_bonds_visualization() {
-    // Draw bonds between particles
-    for (uint32_t i = 0; i < pos_x_.size(); ++i) {
-        if (!active_[i]) continue;
-        
-        Vector3 pos = {pos_x_[i], pos_y_[i], pos_z_[i]};
-        
-        for (const auto& bond : bonds_[i]) {
-            uint32_t bonded_idx = bond.particle_index;
-            
-            if (bonded_idx >= active_.size() || !active_[bonded_idx] || bonded_idx <= i) {
-                continue; // Skip invalid bonds or draw each bond only once
-            }
-            
-            Vector3 bonded_pos = {pos_x_[bonded_idx], pos_y_[bonded_idx], pos_z_[bonded_idx]};
-            
-            // Color based on bond strength
-            float strength_factor = std::min(1.0f, bond.strength / 20.0f);
-            Color bond_color = Color{
-                static_cast<unsigned char>(255 * strength_factor),
-                static_cast<unsigned char>(255 * (1.0f - strength_factor)),
-                0,
-                150
-            };
-            
-            // Draw bond as line
-            DrawLine3D(pos, bonded_pos, bond_color);
-            
-            // Draw bond strength as cylinder thickness (multiple lines for thick bonds)
-            if (bond.strength > 10.0f) {
-                Vector3 offset1 = {pos.x + 0.05f, pos.y, pos.z};
-                Vector3 offset2 = {bonded_pos.x + 0.05f, bonded_pos.y, bonded_pos.z};
-                DrawLine3D(offset1, offset2, bond_color);
-                
-                Vector3 offset3 = {pos.x, pos.y + 0.05f, pos.z};
-                Vector3 offset4 = {bonded_pos.x, bonded_pos.y + 0.05f, bonded_pos.z};
-                DrawLine3D(offset3, offset4, bond_color);
-            }
-        }
-    }
-}
+
 
 // Profiling interface methods
 void ParticleSystem::print_profiling_stats() const {

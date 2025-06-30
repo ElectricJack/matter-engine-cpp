@@ -11,6 +11,8 @@ extern "C" {
 #include <vector>
 
 #include "particle_system.h"
+#include "material_manager.h"
+#include "cluster_manager.h"
 #include "demo_interface.h"
 #include "solar_system_demo.h"
 #include "material_sandbox_demo.h"
@@ -25,7 +27,9 @@ public:
         : screen_width_(width), screen_height_(height),
           debug_mode_(debug_mode), debug_frame_count_(0),
           current_demo_index_(0), current_demo_(nullptr),
-          particle_system_(std::make_shared<ParticleSystem>()),
+          material_manager_(std::make_unique<MaterialManager>()),
+          particle_system_(std::make_shared<ParticleSystem>(*material_manager_)),
+          cluster_manager_(std::make_unique<ClusterManager>(*material_manager_)),
           camera_(), cursor_disabled_(true) {
         
         printf("DEBUG: Starting DemoManager initialization...\n");
@@ -195,6 +199,11 @@ private:
             float dt = GetFrameTime() * current_demo_->get_timestep_multiplier();
             particle_system_->update(dt);
             
+            // Update clusters (pass particle types from particle system)
+            // TODO: Add getter for particle types in ParticleSystem
+            std::vector<ParticleType> empty_types; // Placeholder until we add proper getter
+            cluster_manager_->update_clusters(dt, empty_types);
+            
             // Let the demo handle its specific input
             current_demo_->handle_input(camera_, particle_system_);
             
@@ -253,11 +262,12 @@ private:
             current_demo_->render_3d(particle_system_);
         }
         
-        // Update camera position for shader lighting
-        particle_system_->set_camera_position(camera_.position);
-        
         // Render particles
         particle_system_->render();
+        
+        // Render clusters
+        cluster_manager_->render_clusters();
+        cluster_manager_->render_cluster_bounds();
         
         EndMode3D();
         
@@ -346,7 +356,9 @@ private:
     DemoInterface* current_demo_ = nullptr;
     
     // Shared systems
+    std::unique_ptr<MaterialManager> material_manager_;
     std::shared_ptr<ParticleSystem> particle_system_;
+    std::unique_ptr<ClusterManager> cluster_manager_;
     
     // Rendering
     Camera camera_;
