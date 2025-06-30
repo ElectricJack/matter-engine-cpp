@@ -72,4 +72,16 @@ public:
      * @param camera Camera to reset
      */
     virtual void reset(std::shared_ptr<ParticleSystem> particle_system, Camera& camera) = 0;
+    
+    /**
+     * Get the timestep multiplier for this demo
+     * @return Multiplier for delta time (1.0 = normal speed, 0.05 = 5% speed for orbital mechanics)
+     */
+    virtual float get_timestep_multiplier() const = 0;
+    
+    /**
+     * Whether this demo should show the mouse cursor by default
+     * @return true if cursor should be visible, false if hidden for FPS camera control
+     */
+    virtual bool should_show_cursor() const = 0;
 }; 

@@ -26,6 +26,8 @@ public:
     void render_ui(int screen_width, int screen_height, std::shared_ptr<ParticleSystem> particle_system) override;
     void render_3d(std::shared_ptr<ParticleSystem> particle_system) override;
     void reset(std::shared_ptr<ParticleSystem> particle_system, Camera& camera) override;
+    float get_timestep_multiplier() const override;
+    bool should_show_cursor() const override;
 
 private:
     void setup_solar_system(std::shared_ptr<ParticleSystem> particle_system);

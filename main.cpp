@@ -13,6 +13,7 @@ extern "C" {
 #include "particle_system.h"
 #include "demo_interface.h"
 #include "solar_system_demo.h"
+#include "material_sandbox_demo.h"
 
 /**
  * Demo Manager - handles multiple particle system demos
@@ -27,9 +28,14 @@ public:
           particle_system_(std::make_shared<ParticleSystem>()),
           camera_(), cursor_disabled_(true) {
         
+        printf("DEBUG: Starting DemoManager initialization...\n");
+        
+        printf("DEBUG: Initializing window...\n");
         InitWindow(screen_width_, screen_height_, "Matter Engine 2 - Particle Dynamics Demos");
         SetTargetFPS(60);
+        printf("DEBUG: Window initialized successfully\n");
         
+        printf("DEBUG: Setting up cursor and camera...\n");
         // Disable cursor for first person camera control
         DisableCursor();
         
@@ -39,14 +45,24 @@ public:
         camera_.up = {0.0f, 1.0f, 0.0f};
         camera_.fovy = 45.0f;
         camera_.projection = CAMERA_PERSPECTIVE;
+        printf("DEBUG: Camera setup complete\n");
         
+        printf("DEBUG: Initializing particle system...\n");
+        particle_system_->initialize();
+        printf("DEBUG: Particle system initialized\n");
+        
+        printf("DEBUG: Registering demos...\n");
         // Register demos
         register_demos();
+        printf("DEBUG: Demos registered, count: %zu\n", demos_.size());
         
+        printf("DEBUG: Initializing first demo...\n");
         // Initialize the first demo
         if (!demos_.empty()) {
             current_demo_ = demos_[current_demo_index_].get();
+            printf("DEBUG: About to initialize demo: %s\n", current_demo_->get_name());
             current_demo_->initialize(particle_system_, camera_);
+            printf("DEBUG: Demo initialized successfully\n");
         }
         
         printf("=== Matter Engine 2 Demo Manager Initialized ===\n");
@@ -63,6 +79,8 @@ public:
     }
     
     void run() {
+        printf("DEBUG: Starting main game loop...\n");
+        
         // Main game loop
         while (!WindowShouldClose()) {
             PROFILE_FRAME_BEGIN();
@@ -89,17 +107,21 @@ public:
             PROFILE_FRAME_END();
         }
         
+        printf("DEBUG: Exited main game loop\n");
+        
         // Print final profiling stats before cleanup
         if (debug_mode_ && current_demo_) {
             particle_system_->print_profiling_stats();
         }
         
         cleanup();
+        printf("DEBUG: Cleanup complete\n");
     }
 
 private:
     void register_demos() {
-        // Add all available demos here
+        // Add all available demos here - Material Sandbox is now primary
+        demos_.push_back(std::make_unique<MaterialSandboxDemo>());
         demos_.push_back(std::make_unique<SolarSystemDemo>());
         
         // Future demos can be added here:
@@ -125,6 +147,10 @@ private:
             current_demo_->cleanup();
         }
         
+        // Reset the particle system to clear all particles from previous demo
+        printf("Resetting particle system...\n");
+        particle_system_->reset();
+        
         // Switch to new demo
         current_demo_index_ = new_index;
         current_demo_ = demos_[current_demo_index_].get();
@@ -135,7 +161,15 @@ private:
         // Initialize new demo
         current_demo_->initialize(particle_system_, camera_);
         
-        printf("Demo switch complete!\n");
+        // Set cursor visibility based on demo preference
+        cursor_disabled_ = !current_demo_->should_show_cursor();
+        if (cursor_disabled_) {
+            DisableCursor();
+        } else {
+            EnableCursor();
+        }
+        
+        printf("Demo switch complete! Cursor %s\n", cursor_disabled_ ? "disabled" : "enabled");
     }
     
     void next_demo() {
@@ -157,8 +191,8 @@ private:
         
         // Update current demo
         if (current_demo_) {
-            // Update physics (slowed down for stability)
-            float dt = GetFrameTime() * 0.05f;
+            // Update physics with demo-specific timestep multiplier
+            float dt = GetFrameTime() * current_demo_->get_timestep_multiplier();
             particle_system_->update(dt);
             
             // Let the demo handle its specific input
@@ -218,6 +252,9 @@ private:
         if (current_demo_) {
             current_demo_->render_3d(particle_system_);
         }
+        
+        // Update camera position for shader lighting
+        particle_system_->set_camera_position(camera_.position);
         
         // Render particles
         particle_system_->render();
@@ -318,10 +355,12 @@ private:
 
 int main(int argc, char* argv[]) {
     printf("=== Matter Engine 2 - Particle Dynamics Demo System ===\n");
+    printf("DEBUG: Main function started\n");
     
     bool debug_mode = false;
     
     // Check for debug flag
+    printf("DEBUG: Checking command line arguments\n");
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--debug") == 0 || strcmp(argv[i], "-d") == 0) {
             debug_mode = true;
@@ -329,11 +368,18 @@ int main(int argc, char* argv[]) {
         }
     }
     
+    printf("DEBUG: About to create DemoManager\n");
     try {
+        printf("DEBUG: Creating DemoManager instance\n");
         DemoManager demo_manager(1280, 800, debug_mode);
+        printf("DEBUG: DemoManager created, about to run\n");
         demo_manager.run();
+        printf("DEBUG: DemoManager run completed\n");
     } catch (const std::exception& e) {
-        printf("Error: %s\n", e.what());
+        printf("EXCEPTION: %s\n", e.what());
+        return 1;
+    } catch (...) {
+        printf("UNKNOWN EXCEPTION caught\n");
         return 1;
     }
     

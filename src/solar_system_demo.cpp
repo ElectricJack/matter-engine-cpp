@@ -33,11 +33,14 @@ void SolarSystemDemo::initialize(std::shared_ptr<ParticleSystem> particle_system
     // Initialize particle system
     particle_system->initialize();
     
+    // Enable black hole for solar system demo
+    particle_system->set_black_hole_enabled(true);
+    
     // Create particle types for different celestial bodies
-    star_type_id_ = particle_system->create_particle_type(0.8f, 0.6f, YELLOW);      // Large star
-    planet_type_id_ = particle_system->create_particle_type(0.15f, 0.1f, BLUE);     // Planets
-    asteroid_type_id_ = particle_system->create_particle_type(0.02f, 0.015f, GRAY); // Asteroids
-    moon_type_id_ = particle_system->create_particle_type(0.05f, 0.03f, WHITE);     // Moons
+    star_type_id_ = particle_system->create_particle_type(0.8f, MaterialType::Plasma, 0.6f, YELLOW);      // Large star
+    planet_type_id_ = particle_system->create_particle_type(0.15f, MaterialType::Rock, 0.1f, BLUE);       // Planets
+    asteroid_type_id_ = particle_system->create_particle_type(0.02f, MaterialType::Rock, 0.015f, GRAY);   // Asteroids
+    moon_type_id_ = particle_system->create_particle_type(0.05f, MaterialType::Rock, 0.03f, WHITE);       // Moons
     
     setup_solar_system(particle_system);
     
@@ -274,7 +277,7 @@ void SolarSystemDemo::add_planet(std::shared_ptr<ParticleSystem> particle_system
                                 float orbital_radius, float planet_mass, float planet_radius, 
                                 Color color, const char* name, float orbital_speed_multiplier) {
     // Create a new particle type for this planet with specific properties
-    uint32_t planet_type = particle_system->create_particle_type(planet_mass, planet_radius, color);
+    uint32_t planet_type = particle_system->create_particle_type(planet_radius, MaterialType::Rock, planet_mass, color);
     
     // Random starting angle
     float start_angle = (float)rand() / RAND_MAX * 2.0f * PI;
@@ -332,4 +335,14 @@ void SolarSystemDemo::add_asteroid_belt(std::shared_ptr<ParticleSystem> particle
         float temperature = 5.0f + (float)rand() / RAND_MAX * 20.0f;
         particle_system->add_particle(asteroid_type_id_, pos, vel, temperature);
     }
+}
+
+float SolarSystemDemo::get_timestep_multiplier() const {
+    // Slow timestep for stable orbital mechanics at planetary scale
+    return 0.05f * simulation_speed_;
+}
+
+bool SolarSystemDemo::should_show_cursor() const {
+    // Hide cursor for first-person camera control
+    return false;
 } 
