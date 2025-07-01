@@ -10,6 +10,7 @@ extern "C" {
 
 #include "include/blas_manager.hpp"
 #include "include/tlas_manager.hpp"
+#include "include/bvh_visualizer.hpp"
 #include "include/cluster.h"
 #include "include/cell.h"
 
@@ -19,6 +20,7 @@ public:
         : screen_width_(width), screen_height_(height),
           blas_manager_(std::make_unique<BLASManager>()),
           tlas_manager_(std::make_unique<TLASManager>(1000)),
+          bvh_visualizer_(std::make_unique<BVHVisualizer>()),
           test_cluster_(std::make_unique<Cluster>(0, 3.0f)) {
         
         InitWindow(screen_width_, screen_height_, "MatterSurfaceLib - Cluster and Cell System");
@@ -136,10 +138,55 @@ private:
         
         // Toggle rendering modes
         if (IsKeyPressed(KEY_R)) {
-            render_mode_ = (render_mode_ + 1) % 3; // Cycle through 4 modes
+            render_mode_ = (render_mode_ + 1) % 4; // Cycle through 4 modes
             printf("Render mode: %s\n", 
                    render_mode_ == 0 ? "Ray Tracing" : 
-                   render_mode_ == 1 ? "Surface Meshes" : "Wireframe Meshes" );
+                   render_mode_ == 1 ? "Surface Meshes" : 
+                   render_mode_ == 2 ? "Wireframe Meshes" : "Debug BVH");
+        }
+        
+        // BVH visualization toggle
+        if (IsKeyPressed(KEY_B)) {
+            show_bvh_visualization_ = !show_bvh_visualization_;
+            printf("BVH visualization %s\n", show_bvh_visualization_ ? "enabled" : "disabled");
+        }
+        
+        // BVH visualization settings (only work when visualization is enabled)
+        if (show_bvh_visualization_) {
+            auto& settings = bvh_visualizer_->get_settings();
+            
+            if (IsKeyPressed(KEY_Q)) {
+                settings.show_blas_bvh = !settings.show_blas_bvh;
+                printf("BLAS BVH visualization %s\n", settings.show_blas_bvh ? "enabled" : "disabled");
+            }
+            if (IsKeyPressed(KEY_I)) {
+                settings.show_tlas_bvh = !settings.show_tlas_bvh;
+                printf("TLAS BVH visualization %s\n", settings.show_tlas_bvh ? "enabled" : "disabled");
+            }
+            if (IsKeyPressed(KEY_V)) {
+                settings.show_leaf_nodes = !settings.show_leaf_nodes;
+                printf("Leaf nodes %s\n", settings.show_leaf_nodes ? "enabled" : "disabled");
+            }
+            if (IsKeyPressed(KEY_T)) {
+                settings.show_interior_nodes = !settings.show_interior_nodes;
+                printf("Interior nodes %s\n", settings.show_interior_nodes ? "enabled" : "disabled");
+            }
+            if (IsKeyPressed(KEY_Y)) {
+                settings.use_depth_colors = !settings.use_depth_colors;
+                printf("Depth colors %s\n", settings.use_depth_colors ? "enabled" : "disabled");
+            }
+            if (IsKeyPressed(KEY_U)) {
+                settings.show_triangles = !settings.show_triangles;
+                printf("Triangle wireframes %s\n", settings.show_triangles ? "enabled" : "disabled");
+            }
+            if (IsKeyPressed(KEY_UP)) {
+                settings.max_depth_to_show = std::min(15, settings.max_depth_to_show + 1);
+                printf("Max depth to show: %d\n", settings.max_depth_to_show);
+            }
+            if (IsKeyPressed(KEY_DOWN)) {
+                settings.max_depth_to_show = std::max(1, settings.max_depth_to_show - 1);
+                printf("Max depth to show: %d\n", settings.max_depth_to_show);
+            }
         }
         
         // Add dynamic particle movement
@@ -175,14 +222,26 @@ private:
             
             
             if (render_mode_ == 1) {
-                // Render solid surface meshes
-                test_cluster_->render_cells(false);
+                // Render solid surface meshes with improved style
+                render_scene_meshes();
                 test_cluster_->render_debug_bounds();
             } else if (render_mode_ == 2) {
                 // Render wireframe meshes
                 test_cluster_->render_cells(true);
                 test_cluster_->render_debug_bounds();
+            } else if (render_mode_ == 3) {
+                // Debug BVH mode - render scene meshes transparently with BVH overlay
+                render_scene_meshes();
+                test_cluster_->render_debug_bounds();
             }
+            
+            // Render BVH visualization if enabled or in debug mode
+            if (show_bvh_visualization_ || render_mode_ == 3) {
+                bvh_visualizer_->render(*blas_manager_, *tlas_manager_);
+            }
+            
+            // Draw reference grid
+            DrawGrid(20, 1.0f);
             
             EndMode3D();
             
@@ -190,7 +249,7 @@ private:
             DrawText(TextFormat("Render Mode: %s (Press R to cycle)", 
                                render_mode_ == 0 ? "Ray Tracing" : 
                                render_mode_ == 1 ? "Surface Meshes" : 
-                               render_mode_ == 2 ? "Wireframe Meshes" : "Debug Bounds"), 
+                               render_mode_ == 2 ? "Wireframe Meshes" : "Debug BVH"), 
                      10, 10, 20, WHITE);
             DrawText("Press SPACE to add random particles", 10, 40, 20, WHITE);
             DrawText("Press ESC to toggle cursor", 10, 70, 20, WHITE);
@@ -198,6 +257,22 @@ private:
                                test_cluster_->get_particle_count(),
                                test_cluster_->get_cell_count()), 
                      10, 100, 20, WHITE);
+            
+            // BVH visualization info
+            if (show_bvh_visualization_ || render_mode_ == 3) {
+                const auto& settings = bvh_visualizer_->get_settings();
+                DrawText("BVH VISUALIZATION MODE", 10, 130, 16, YELLOW);
+                DrawText("Q:BLAS I:TLAS V:Leaf T:Interior Y:Colors U:Triangles", 10, 150, 12, LIGHTGRAY);
+                DrawText("UP/DOWN: Depth | B: Toggle visualization", 10, 165, 12, LIGHTGRAY);
+                DrawText(TextFormat("BLAS:%s TLAS:%s Leaf:%s Interior:%s Depth:%d", 
+                         settings.show_blas_bvh ? "ON" : "OFF",
+                         settings.show_tlas_bvh ? "ON" : "OFF",
+                         settings.show_leaf_nodes ? "ON" : "OFF",
+                         settings.show_interior_nodes ? "ON" : "OFF", 
+                         settings.max_depth_to_show), 10, 180, 12, LIGHTGRAY);
+            } else {
+                DrawText("Press B to toggle BVH visualization", 10, 130, 14, LIGHTGRAY);
+            }
         }
         
         EndDrawing();
@@ -222,6 +297,80 @@ private:
         EndShaderMode();
     }
     
+    void render_scene_meshes() {
+        // Render meshes using draw records from TLAS manager to get proper transforms
+        const auto& draw_records = tlas_manager_->get_draw_records();
+        
+        for (size_t i = 0; i < draw_records.size(); i++) {
+            const auto& record = draw_records[i];
+            
+            // Get the mesh for this BLAS handle
+            auto* mesh = blas_manager_->get_mesh(record.blas_handle);
+            if (!mesh || !mesh->tri || mesh->triCount == 0) {
+                continue;
+            }
+            
+            // Choose color based on material ID and instance
+            Color mesh_colors[] = {GREEN, BLUE, RED, YELLOW, PURPLE, ORANGE};
+            Color mesh_color = mesh_colors[(record.material_id + record.instance_id) % 6];
+            
+            // Apply transform matrix
+            rlPushMatrix();
+            
+            // Convert Matrix4x4 to OpenGL matrix format (column-major)
+            const auto& m = record.transform.m;
+            float gl_matrix[16] = {
+                m[0], m[4], m[8],  m[12],
+                m[1], m[5], m[9],  m[13],
+                m[2], m[6], m[10], m[14],
+                m[3], m[7], m[11], m[15]
+            };
+            rlMultMatrixf(gl_matrix);
+            
+            // Determine transparency based on render mode
+            unsigned char alpha = (render_mode_ == 3) ? 80 : 120; // More transparent in debug mode
+            
+            // Render mesh as filled triangles with transparency
+            rlBegin(RL_TRIANGLES);
+            rlColor4ub(mesh_color.r, mesh_color.g, mesh_color.b, alpha);
+            
+            for (int tri_idx = 0; tri_idx < mesh->triCount; tri_idx++) {
+                const auto& tri = mesh->tri[tri_idx];
+                
+                // Vertex 0
+                rlVertex3f(tri.vertex0.x, tri.vertex0.y, tri.vertex0.z);
+                // Vertex 1  
+                rlVertex3f(tri.vertex1.x, tri.vertex1.y, tri.vertex1.z);
+                // Vertex 2
+                rlVertex3f(tri.vertex2.x, tri.vertex2.y, tri.vertex2.z);
+            }
+            rlEnd();
+            
+            // Also draw wireframe edges for better definition
+            rlBegin(RL_LINES);
+            rlColor4ub(mesh_color.r, mesh_color.g, mesh_color.b, 255); // Full opacity for edges
+            
+            for (int tri_idx = 0; tri_idx < mesh->triCount; tri_idx++) {
+                const auto& tri = mesh->tri[tri_idx];
+                
+                // Edge 0-1
+                rlVertex3f(tri.vertex0.x, tri.vertex0.y, tri.vertex0.z);
+                rlVertex3f(tri.vertex1.x, tri.vertex1.y, tri.vertex1.z);
+                
+                // Edge 1-2
+                rlVertex3f(tri.vertex1.x, tri.vertex1.y, tri.vertex1.z);
+                rlVertex3f(tri.vertex2.x, tri.vertex2.y, tri.vertex2.z);
+                
+                // Edge 2-0
+                rlVertex3f(tri.vertex2.x, tri.vertex2.y, tri.vertex2.z);
+                rlVertex3f(tri.vertex0.x, tri.vertex0.y, tri.vertex0.z);
+            }
+            rlEnd();
+            
+            rlPopMatrix();
+        }
+    }
+    
     
     void cleanup() {
         if (raytracing_shader_.id != 0) UnloadShader(raytracing_shader_);
@@ -234,13 +383,15 @@ private:
     
     std::unique_ptr<BLASManager> blas_manager_;
     std::unique_ptr<TLASManager> tlas_manager_;
+    std::unique_ptr<BVHVisualizer> bvh_visualizer_;
     std::unique_ptr<Cluster> test_cluster_;
     
     
     Camera camera_;
     Shader raytracing_shader_{};
     bool cursor_disabled_ = true;
-    int render_mode_ = 0; // 0=raytracing, 1=solid_meshes, 2=wireframe_meshes, 3=debug
+    int render_mode_ = 0; // 0=raytracing, 1=solid_meshes, 2=wireframe_meshes, 3=debug_bvh
+    bool show_bvh_visualization_ = false;
     
     int camera_pos_loc_;
     int camera_target_loc_;
