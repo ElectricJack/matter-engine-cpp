@@ -362,6 +362,38 @@ void Cluster::set_lod_level(int lod_level) {
     }
 }
 
+void Cluster::set_lod_level(int lod_level, BLASManager* blas_manager_to_clear) {
+    if (lod_level < 0 || lod_level > 10) {
+        printf("Warning: LOD level %d out of range [0-10], clamping\n", lod_level);
+        lod_level = (lod_level < 0) ? 0 : 10;
+    }
+    
+    if (lod_level != current_lod_level_) {
+        printf("===== LOD CHANGE WITH BLAS CLEAR: %d -> %d =====\n", current_lod_level_, lod_level);
+        printf("Old cell size: %.2f\n", get_current_cell_size());
+        
+        // Clear BLAS manager FIRST to prevent accumulation of unused entries
+        if (blas_manager_to_clear) {
+            blas_manager_to_clear->clear();
+        }
+        
+        current_lod_level_ = lod_level;
+        
+        printf("New cell size: %.2f\n", get_current_cell_size());
+        
+        // Clear all existing cells since they're at the wrong LOD level
+        clear_all_cells();
+        
+        // Mark all particles as needing new cell assignment
+        for (const auto& particle : particles_) {
+            mark_cells_dirty_around_particle(particle.position, particle.radius);
+        }
+        
+        printf("Created %zu new cells, %u dirty cells\n", cells_.size(), get_dirty_cell_count());
+        printf("==========================================\n");
+    }
+}
+
 void Cluster::force_rebuild_all_cells(BLASManager& blas_manager) {
     printf("Cluster %u: Force rebuilding all cells at LOD level %d\n", cluster_id_, current_lod_level_);
     

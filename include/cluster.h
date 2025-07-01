@@ -65,6 +65,7 @@ public:
     
     // LOD level management
     void set_lod_level(int lod_level);
+    void set_lod_level(int lod_level, BLASManager* blas_manager_to_clear);
     int get_lod_level() const { return current_lod_level_; }
     float get_current_cell_size() const { return smallest_cell_size_ * (1 << current_lod_level_); }
     void force_rebuild_all_cells(BLASManager& blas_manager);

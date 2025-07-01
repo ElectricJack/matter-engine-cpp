@@ -95,7 +95,7 @@ private:
         printf("Setting up matter system with cluster and cells...\n");
         
         // Add particles in a roughly spherical distribution
-        for (int i = 0; i < 200; ++i) {
+        for (int i = 0; i < 100; ++i) {
             float angle1 = (float)i * 0.05f;
             float angle2 = (float)i * 0.025f;
             
@@ -106,6 +106,21 @@ private:
             };
             
             uint32_t material = 0;//i % 3; // Cycle through materials
+            test_cluster_->add_particle(position, 1.0f, material);
+        }
+
+                // Add particles in a roughly spherical distribution
+        for (int i = 0; i < 100; ++i) {
+            float angle1 = (float)i * 0.15f;
+            float angle2 = (float)i * 0.035f;
+            
+            Vector3 position = {
+                5 + cosf(angle1) * sinf(angle2) * 10.0f,
+                -sinf(angle1) * sinf(angle2) * 10.0f,
+                cosf(angle2) * 10.0f
+            };
+            
+            uint32_t material = 1;//i % 3; // Cycle through materials
             test_cluster_->add_particle(position, 1.0f, material);
         }
         
@@ -195,6 +210,17 @@ private:
                 show_meshes_ = !show_meshes_;
                 printf("Mesh visibility %s\n", show_meshes_ ? "enabled" : "disabled");
             }
+            
+            // Manual BLAS manager clear (for debugging)
+            if (IsKeyPressed(KEY_C)) {
+                printf("Manual BLAS manager clear requested\n");
+                blas_manager_->clear();
+                
+                // Rebuild everything
+                test_cluster_->rebuild_dirty_cells(*blas_manager_);
+                rebuild_tlas_after_cell_changes();
+                printf("BLAS manager cleared and scene rebuilt\n");
+            }
         }
         
         {
@@ -266,29 +292,89 @@ private:
             PROFILE_SECTION("LOD Controls");
             // LOD level controls
             if (IsKeyPressed(KEY_ONE)) {
-                test_cluster_->set_lod_level(0);
+                printf("\n=== LOD CHANGE TO 0 ===\n");
+                printf("BEFORE: ");
+                blas_manager_->print_stats();
+                
+                test_cluster_->set_lod_level(0, blas_manager_.get());
                 test_cluster_->rebuild_dirty_cells(*blas_manager_);
+                
+                printf("AFTER REBUILD: ");
+                blas_manager_->print_stats();
+                
                 rebuild_tlas_after_cell_changes();
+                
+                printf("AFTER TLAS REBUILD: ");
+                blas_manager_->print_stats();
+                printf("========================\n");
             }
             if (IsKeyPressed(KEY_TWO)) {
-                test_cluster_->set_lod_level(1);
+                printf("\n=== LOD CHANGE TO 1 ===\n");
+                printf("BEFORE: ");
+                blas_manager_->print_stats();
+                
+                test_cluster_->set_lod_level(1, blas_manager_.get());
                 test_cluster_->rebuild_dirty_cells(*blas_manager_);
+                
+                printf("AFTER REBUILD: ");
+                blas_manager_->print_stats();
+                
                 rebuild_tlas_after_cell_changes();
+                
+                printf("AFTER TLAS REBUILD: ");
+                blas_manager_->print_stats();
+                printf("========================\n");
             }
             if (IsKeyPressed(KEY_THREE)) {
-                test_cluster_->set_lod_level(2);
+                printf("\n=== LOD CHANGE TO 2 ===\n");
+                printf("BEFORE: ");
+                blas_manager_->print_stats();
+                
+                test_cluster_->set_lod_level(2, blas_manager_.get());
                 test_cluster_->rebuild_dirty_cells(*blas_manager_);
+                
+                printf("AFTER REBUILD: ");
+                blas_manager_->print_stats();
+                
                 rebuild_tlas_after_cell_changes();
+                
+                printf("AFTER TLAS REBUILD: ");
+                blas_manager_->print_stats();
+                printf("========================\n");
             }
             if (IsKeyPressed(KEY_FOUR)) {
-                test_cluster_->set_lod_level(3);
+                printf("\n=== LOD CHANGE TO 3 ===\n");
+                printf("BEFORE: ");
+                blas_manager_->print_stats();
+                
+                test_cluster_->set_lod_level(3, blas_manager_.get());
                 test_cluster_->rebuild_dirty_cells(*blas_manager_);
+                
+                printf("AFTER REBUILD: ");
+                blas_manager_->print_stats();
+                
                 rebuild_tlas_after_cell_changes();
+                
+                printf("AFTER TLAS REBUILD: ");
+                blas_manager_->print_stats();
+                printf("========================\n");
             }
             if (IsKeyPressed(KEY_FIVE)) {
-                test_cluster_->set_lod_level(4);
+                printf("\n=== LOD CHANGE TO 4 ===\n");
+                printf("BEFORE: ");
+                blas_manager_->print_stats();
+                
+                test_cluster_->set_lod_level(4, blas_manager_.get());
                 test_cluster_->rebuild_dirty_cells(*blas_manager_);
+                
+                printf("AFTER REBUILD: ");
+                blas_manager_->print_stats();
+                
                 rebuild_tlas_after_cell_changes();
+                
+                printf("AFTER TLAS REBUILD: ");
+                blas_manager_->print_stats();
+                printf("========================\n");
             }
         }
         
@@ -549,6 +635,14 @@ private:
                                show_meshes_ ? "ON" : "OFF"), 
                      10, 330, 12, show_meshes_ ? GREEN : RED);
         }
+        
+        // BLAS Manager statistics
+        DrawText(TextFormat("BLAS Entries: %d, Triangles: %d (Press C to clear)", 
+                           blas_manager_->get_unique_blas_count(),
+                           blas_manager_->get_total_triangle_count()), 
+                 10, 350, 12, blas_manager_->get_unique_blas_count() > 50 ? RED : WHITE);
+        
+        DrawText("Note: LOD changes now auto-clear BLAS to prevent buffer overflow", 10, 370, 10, LIGHTGRAY);
     }
     
     void print_rendering_stats() {

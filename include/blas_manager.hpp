@@ -124,6 +124,9 @@ public:
     // Statistics and debugging
     void print_stats() const;
     void reset_stats();
+    
+    // Clear all BLAS entries (use with caution - invalidates all existing handles)
+    void clear();
 
 private:
     // Mark data as dirty when BLAS changes
