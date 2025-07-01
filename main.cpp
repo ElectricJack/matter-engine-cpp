@@ -18,7 +18,7 @@ public:
     MatterSurfaceLibDemo(int width, int height) 
         : screen_width_(width), screen_height_(height),
           blas_manager_(std::make_unique<BLASManager>()),
-          tlas_manager_(std::make_unique<TLASManager>(50)),
+          tlas_manager_(std::make_unique<TLASManager>(1000)),
           test_cluster_(std::make_unique<Cluster>(0, 2.0f)) {
         
         InitWindow(screen_width_, screen_height_, "MatterSurfaceLib - Cluster and Cell System");
@@ -26,9 +26,9 @@ public:
         
         DisableCursor();
         
-        setup_scene();
         setup_rendering();
         setup_matter_system();
+        setup_scene();
     }
     
     ~MatterSurfaceLibDemo() {
@@ -65,7 +65,7 @@ private:
         printf("Setting up matter system with cluster and cells...\n");
         
         // Add particles in a roughly spherical distribution
-        for (int i = 0; i < 100; ++i) {
+        for (int i = 0; i < 20; ++i) {
             float angle1 = (float)i * 0.15f;
             float angle2 = (float)i * 0.25f;
             
@@ -75,15 +75,15 @@ private:
                 cosf(angle2) * 5.0f
             };
             
-            uint32_t material = i % 3; // Cycle through materials
-            test_cluster_->add_particle(position, 0.5f, material);
+            uint32_t material = 2;//i % 3; // Cycle through materials
+            test_cluster_->add_particle(position, 1.0f, material);
         }
         
         // Add some additional particles in a line
-        for (int i = 0; i < 20; ++i) {
-            Vector3 position = {(float)i - 10.0f, 0.0f, 0.0f};
-            test_cluster_->add_particle(position, 0.8f, 1);
-        }
+        // for (int i = 0; i < 10; ++i) {
+        //     Vector3 position = {(float)i - 10.0f, 0.0f, 0.0f};
+        //     test_cluster_->add_particle(position, 0.8f, 1);
+        // }
         
         printf("Added %u particles to cluster\n", test_cluster_->get_particle_count());
         
@@ -136,11 +136,10 @@ private:
         
         // Toggle rendering modes
         if (IsKeyPressed(KEY_R)) {
-            render_mode_ = (render_mode_ + 1) % 4; // Cycle through 4 modes
+            render_mode_ = (render_mode_ + 1) % 3; // Cycle through 4 modes
             printf("Render mode: %s\n", 
                    render_mode_ == 0 ? "Ray Tracing" : 
-                   render_mode_ == 1 ? "Surface Meshes" : 
-                   render_mode_ == 2 ? "Wireframe Meshes" : "Debug Bounds");
+                   render_mode_ == 1 ? "Surface Meshes" : "Wireframe Meshes" );
         }
         
         // Add dynamic particle movement
@@ -178,11 +177,10 @@ private:
             if (render_mode_ == 1) {
                 // Render solid surface meshes
                 test_cluster_->render_cells(false);
+                test_cluster_->render_debug_bounds();
             } else if (render_mode_ == 2) {
                 // Render wireframe meshes
                 test_cluster_->render_cells(true);
-            } else if (render_mode_ == 3) {
-                // Debug bounds mode
                 test_cluster_->render_debug_bounds();
             }
             
@@ -242,7 +240,7 @@ private:
     Camera camera_;
     Shader raytracing_shader_{};
     bool cursor_disabled_ = true;
-    int render_mode_ = 1; // 0=raytracing, 1=solid_meshes, 2=wireframe_meshes, 3=debug
+    int render_mode_ = 0; // 0=raytracing, 1=solid_meshes, 2=wireframe_meshes, 3=debug
     
     int camera_pos_loc_;
     int camera_target_loc_;

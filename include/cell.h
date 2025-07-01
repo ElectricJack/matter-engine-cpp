@@ -47,6 +47,7 @@ struct Cell {
     
     // Rendering
     void render(bool wireframe = false) const;
+    void render_transformed(const Matrix& transform, bool wireframe = false) const;
     void render_debug_bounds() const;
     
     // BLAS access

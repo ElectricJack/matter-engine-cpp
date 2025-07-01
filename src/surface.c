@@ -669,7 +669,7 @@ static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int 
 // Combined calculation to eliminate duplicate distance calculations
 static ScalarMaterialPair CalculateScalarAndMaterial(Vector3 position, SpatialHash* spatialHash, float particleRadius) {
     ScalarMaterialPair result;
-    result.scalarValue = INFINITY;
+    result.scalarValue = 1000.0f;  // Large positive value instead of INFINITY
     result.materialId = 0;
     
     // Query nearby particles using spatial hash instead of checking all particles
@@ -683,7 +683,7 @@ static ScalarMaterialPair CalculateScalarAndMaterial(Vector3 position, SpatialHa
     
     // Calculate distance to only the nearby particles in a single pass
     // Optimization: use squared distances for comparison to avoid expensive sqrt
-    float minDistanceSquared = INFINITY;
+    float minDistanceSquared = 1000000.0f;  // Large finite value instead of INFINITY
     
     for (int i = 0; i < foundCount; i++) {
         Vector3 diff = {
@@ -704,7 +704,12 @@ static ScalarMaterialPair CalculateScalarAndMaterial(Vector3 position, SpatialHa
     }
     
     // Only compute sqrt once at the end and calculate scalar field value
-    result.scalarValue = (minDistanceSquared < INFINITY) ? sqrtf(minDistanceSquared) - particleRadius : INFINITY;
+    if (minDistanceSquared < 1000000.0f) {
+        result.scalarValue = sqrtf(minDistanceSquared) - particleRadius;
+    } else {
+        // No particles found, use a large positive distance value
+        result.scalarValue = 100.0f;  // Large positive value to indicate outside surface
+    }
     
     return result;
 }
@@ -729,15 +734,43 @@ static int CalculateCubeIndex(GridCell cell, float isovalue) {
 static Vector3 VertexInterpolation(Vector3 v1, float val1, Vector3 v2, float val2, float isovalue) {
     Vector3 result;
     
+    // Handle infinite values that can cause NaN results
+    if (!isfinite(val1) || !isfinite(val2)) {
+        // If either value is infinite, use the vertex with the finite value
+        if (isfinite(val1) && !isfinite(val2)) {
+            return v1;
+        } else if (!isfinite(val1) && isfinite(val2)) {
+            return v2;
+        } else {
+            // Both infinite, return midpoint
+            result.x = (v1.x + v2.x) * 0.5f;
+            result.y = (v1.y + v2.y) * 0.5f;
+            result.z = (v1.z + v2.z) * 0.5f;
+            return result;
+        }
+    }
+    
     if (fabs(isovalue - val1) < 0.00001f) return v1;
     if (fabs(isovalue - val2) < 0.00001f) return v2;
     if (fabs(val1 - val2) < 0.00001f) return v1;
     
     float mu = (isovalue - val1) / (val2 - val1);
     
+    // Clamp mu to prevent extrapolation that could lead to invalid results
+    if (mu < 0.0f) mu = 0.0f;
+    if (mu > 1.0f) mu = 1.0f;
+    
     result.x = v1.x + mu * (v2.x - v1.x);
     result.y = v1.y + mu * (v2.y - v1.y);
     result.z = v1.z + mu * (v2.z - v1.z);
+    
+    // Validate the result
+    if (!isfinite(result.x) || !isfinite(result.y) || !isfinite(result.z)) {
+        // Fallback to midpoint if result is invalid
+        result.x = (v1.x + v2.x) * 0.5f;
+        result.y = (v1.y + v2.y) * 0.5f;
+        result.z = (v1.z + v2.z) * 0.5f;
+    }
     
     return result;
 }

@@ -1,11 +1,13 @@
 #include "../include/cluster.h"
 #include "../include/cell.h"
+#include "../include/tlas_manager.hpp"
 extern "C" {
 #include "../include/spatial_hash.h"
 }
 #include <cmath>
 #include <cstdio>
 #include <algorithm>
+
 
 // Raymath function prototypes we need (without including the problematic header)
 extern "C" {
@@ -17,6 +19,7 @@ extern "C" {
     Vector3 Vector3Scale(Vector3 v, float scalar);
     float Vector3Length(Vector3 v);
     float Vector3DotProduct(Vector3 v1, Vector3 v2);
+    Matrix MatrixTranslate(float x, float y, float z);
 }
 
 Cluster::Cluster(uint32_t cluster_id, float smallest_cell_size)
@@ -63,7 +66,6 @@ uint32_t Cluster::add_particle(const Vector3& local_position, float radius, uint
     
     // Add particle to storage
     particles_.emplace_back(local_position, radius, material_id);
-    uint32_t particle_index = static_cast<uint32_t>(particles_.size() - 1);
     
     // Mark cells dirty around this particle
     mark_cells_dirty_around_particle(local_position, radius);
@@ -273,11 +275,20 @@ std::vector<Cell*> Cluster::get_cells_in_region(const Vector3& min_bound, const 
 }
 
 void Cluster::render_cells(bool wireframe) const {
+    // Create transform matrix for cluster world position
+    Matrix cluster_transform = MatrixTranslate(position_.x, position_.y, position_.z);
+    
+    uint32_t cells_with_meshes = 0;
     for (const auto& cell : cells_) {
         if (cell->has_meshes) {
-            // TODO: Transform meshes to world space using cluster transform
-            cell->render(wireframe);
+            cells_with_meshes++;
+            cell->render_transformed(cluster_transform, wireframe);
         }
+    }
+    
+    static int debug_counter = 0;
+    if (debug_counter++ % 60 == 0) { // Print every 60 frames
+        printf("Cluster render: %u/%zu cells have meshes\n", cells_with_meshes, cells_.size());
     }
 }
 
@@ -299,10 +310,10 @@ void Cluster::add_to_tlas(TLASManager& tlas_manager) const {
                 if (blas_handle > 0) {
                     // TODO: Apply cluster transform (position + rotation)
                     // For now, just add at identity transform
-                    // tlas_manager.load_identity();
-                    // tlas_manager.translate(position_.x, position_.y, position_.z);
-                    // tlas_manager.rotate_quaternion(rotation_);
-                    // tlas_manager.draw(blas_handle, material_id);
+                    tlas_manager.load_identity();
+                    tlas_manager.translate(position_.x, position_.y, position_.z);
+                    //tlas_manager.rotate_quaternion(rotation_);
+                    tlas_manager.draw(blas_handle, material_id);
                 }
             }
         }

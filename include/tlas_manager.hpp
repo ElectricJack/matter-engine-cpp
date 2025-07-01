@@ -133,26 +133,26 @@ public:
     
     // Statistics and debugging
     void print_stats() const;
-    int get_draw_record_count() const { return static_cast<int>(draw_records_.size()); }
-    int get_matrix_stack_depth() const { return static_cast<int>(matrix_stack_.size()); }
+    int  get_draw_record_count() const { return static_cast<int>(draw_records_.size()); }
+    int  get_matrix_stack_depth() const { return static_cast<int>(matrix_stack_.size()); }
 
 private:
     // Conversion utilities
-    static mat4 convert_matrix(const Matrix4x4& legacy_matrix);
+    static mat4      convert_matrix(const Matrix4x4& legacy_matrix);
     static Matrix4x4 convert_matrix_back(const mat4& new_matrix);
     
     // Get current matrix from top of stack
     const Matrix4x4& get_current_matrix() const;
-    Matrix4x4& get_current_matrix();
+    Matrix4x4&       get_current_matrix();
     
-    std::stack<Matrix4x4> matrix_stack_;
-    std::vector<DrawRecord> draw_records_;
-    std::unique_ptr<TLAS> tlas_;
+    std::stack<Matrix4x4>    matrix_stack_;
+    std::vector<DrawRecord>  draw_records_;
+    std::unique_ptr<TLAS>    tlas_;
     std::vector<std::unique_ptr<BVHInstance>> instances_; // Deprecated - kept for compatibility
-    BVHInstance* instance_array_ = nullptr; // Contiguous array for TLAS
-    size_t instance_array_size_ = 0;
-    uint32_t next_instance_id_;
-    int max_instances_;
+    BVHInstance*  instance_array_ = nullptr; // Contiguous array for TLAS
+    size_t        instance_array_size_ = 0;
+    uint32_t      next_instance_id_;
+    int           max_instances_;
     
     // GPU texture management
     mutable Texture2D nodes_texture_{};

@@ -1,5 +1,6 @@
 #include "../include/cell.h"
 #include "../include/cluster.h"
+#include "../include/blas_manager.hpp"
 #include <cmath>
 #include <cstdio>
 #include <algorithm>
@@ -24,11 +25,14 @@ extern "C" {
     Vector3 Vector3Add(Vector3 v1, Vector3 v2);
     Vector3 Vector3Subtract(Vector3 v1, Vector3 v2);
     Vector3 Vector3Scale(Vector3 v, float scalar);
+    Vector3 Vector3Transform(Vector3 v, Matrix mat);
     float Vector3Length(Vector3 v);
     float Vector3DotProduct(Vector3 v1, Vector3 v2);
     Material LoadMaterialDefault(void);
     void DrawMesh(Mesh mesh, Material material, Matrix transform);
+    void DrawLine3D(Vector3 startPos, Vector3 endPos, Color color);
     Matrix MatrixIdentity(void);
+    Matrix MatrixTranslate(float x, float y, float z);
     void DrawCubeWires(Vector3 position, float width, float height, float length, Color color);
     void DrawSphere(Vector3 centerPos, float radius, Color color);
     void RL_FREE(void *ptr);
@@ -130,6 +134,80 @@ void Cell::rebuild_meshes(const std::vector<StaticParticle>& cluster_particles, 
     has_meshes = !material_meshes.empty();
 }
 
+// Helper function to convert Raylib Mesh to triangles for BLAS registration
+std::vector<Tri> convert_mesh_to_triangles(const Mesh& mesh) {
+    std::vector<Tri> triangles;
+    
+    if (mesh.vertexCount == 0 || mesh.triangleCount == 0 || !mesh.vertices) {
+        return triangles;
+    }
+    
+    triangles.reserve(mesh.triangleCount);
+    
+    for (int i = 0; i < mesh.triangleCount; i++) {
+        Tri tri;
+        
+        // Get vertex indices (either from indices array or sequential)
+        int idx0, idx1, idx2;
+        if (mesh.indices) {
+            idx0 = mesh.indices[i * 3 + 0];
+            idx1 = mesh.indices[i * 3 + 1]; 
+            idx2 = mesh.indices[i * 3 + 2];
+        } else {
+            idx0 = i * 3 + 0;
+            idx1 = i * 3 + 1;
+            idx2 = i * 3 + 2;
+        }
+        
+        // Bounds check to prevent segmentation fault
+        if (idx0 >= mesh.vertexCount || idx1 >= mesh.vertexCount || idx2 >= mesh.vertexCount) {
+            printf("Warning: Vertex index out of bounds in mesh conversion (triangle %d, vertices %d %d %d, max %d)\\n", 
+                   i, idx0, idx1, idx2, mesh.vertexCount);
+            continue;
+        }
+        
+        // Extract vertex positions
+        float v0x = mesh.vertices[idx0 * 3 + 0];
+        float v0y = mesh.vertices[idx0 * 3 + 1];
+        float v0z = mesh.vertices[idx0 * 3 + 2];
+        float v1x = mesh.vertices[idx1 * 3 + 0];
+        float v1y = mesh.vertices[idx1 * 3 + 1];
+        float v1z = mesh.vertices[idx1 * 3 + 2];
+        float v2x = mesh.vertices[idx2 * 3 + 0];
+        float v2y = mesh.vertices[idx2 * 3 + 1];
+        float v2z = mesh.vertices[idx2 * 3 + 2];
+        
+        // Check for invalid floating point values (NaN or infinity)
+        if (!isfinite(v0x) || !isfinite(v0y) || !isfinite(v0z) ||
+            !isfinite(v1x) || !isfinite(v1y) || !isfinite(v1z) ||
+            !isfinite(v2x) || !isfinite(v2y) || !isfinite(v2z)) {
+            printf("Warning: Triangle %d has invalid vertex coordinates, skipping\\n", i);
+            continue;
+        }
+        
+        tri.vertex0 = make_float3(v0x, v0y, v0z);
+        tri.vertex1 = make_float3(v1x, v1y, v1z);
+        tri.vertex2 = make_float3(v2x, v2y, v2z);
+        
+        // Calculate centroid
+        float cx = (tri.vertex0.x + tri.vertex1.x + tri.vertex2.x) / 3.0f;
+        float cy = (tri.vertex0.y + tri.vertex1.y + tri.vertex2.y) / 3.0f;
+        float cz = (tri.vertex0.z + tri.vertex1.z + tri.vertex2.z) / 3.0f;
+        
+        // Validate centroid
+        if (!isfinite(cx) || !isfinite(cy) || !isfinite(cz)) {
+            printf("Warning: Triangle %d has invalid centroid, skipping\\n", i);
+            continue;
+        }
+        
+        tri.centroid = make_float3(cx, cy, cz);
+        
+        triangles.push_back(tri);
+    }
+    
+    return triangles;
+}
+
 void Cell::generate_mesh_for_material(uint32_t material_id, const std::vector<StaticParticle>& cluster_particles, BLASManager& blas_manager) {
     auto material_it = material_particle_indices.find(material_id);
     if (material_it == material_particle_indices.end() || material_it->second.empty()) {
@@ -182,15 +260,33 @@ void Cell::generate_mesh_for_material(uint32_t material_id, const std::vector<St
     if (mesh.vertexCount > 0) {
         // Store the mesh
         material_meshes[material_id] = mesh;
+
+        UploadMesh(&material_meshes[material_id], false);
         
-        // Create BLAS for this mesh for ray tracing
-        // Note: We'll need to include the BLASManager header and implement this properly
-        // For now, this is a placeholder
-        material_blas[material_id] = 0; // TODO: Register mesh with BLAS manager
+        // Register mesh with BLAS manager for ray tracing
+        try {
+            std::vector<Tri> triangles = convert_mesh_to_triangles(mesh);
+            printf("Converting mesh to %zu triangles for BLAS registration\\n", triangles.size());
+            
+            if (!triangles.empty() && triangles.size() > 0) {
+                printf("Registering %zu triangles with BLAS manager...\\n", triangles.size());
+                material_blas[material_id] = blas_manager.register_triangles(triangles);
+                printf("Successfully registered mesh with BLAS manager, handle %u\\n", material_blas[material_id]);
+            } else {
+                material_blas[material_id] = 0;
+                printf("No valid triangles to register with BLAS manager\\n");
+            }
+        } catch (const std::exception& e) {
+            printf("Error registering mesh with BLAS manager: %s\\n", e.what());
+            material_blas[material_id] = 0;
+        } catch (...) {
+            printf("Unknown error registering mesh with BLAS manager\\n");
+            material_blas[material_id] = 0;
+        }
         
-        printf("Generated mesh for cell (%.0f,%.0f,%.0f) material %u size %.1f: %d vertices, %d triangles\n",
+        printf("Generated mesh for cell (%.0f,%.0f,%.0f) material %u size %.1f: %d vertices, %d triangles, BLAS handle %u\n",
                coordinates.x, coordinates.y, coordinates.z, material_id, actual_size,
-               mesh.vertexCount, mesh.triangleCount);
+               mesh.vertexCount, mesh.triangleCount, material_blas[material_id]);
     }
 }
 
@@ -210,6 +306,10 @@ void Cell::clear_meshes() {
 }
 
 void Cell::render(bool wireframe) const {
+    render_transformed(MatrixIdentity(), wireframe);
+}
+
+void Cell::render_transformed(const Matrix& transform, bool wireframe) const {
     if (!has_meshes || material_meshes.empty()) {
         return;
     }
@@ -223,13 +323,54 @@ void Cell::render(bool wireframe) const {
         material_initialized = true;
     }
     
-    // TODO: Set wireframe mode on material if wireframe == true
-    
-    // Draw all material meshes
-    for (const auto& mesh_entry : material_meshes) {
-        const Mesh& mesh = mesh_entry.second;
-        if (mesh.vertexCount > 0) {
-            DrawMesh(mesh, default_material, MatrixIdentity());
+    if (wireframe) {
+        // Render wireframe by drawing mesh triangles as lines
+        for (const auto& mesh_entry : material_meshes) {
+            const Mesh& mesh = mesh_entry.second;
+            if (mesh.vertexCount > 0 && mesh.triangleCount > 0 && mesh.vertices && mesh.indices) {
+                // Draw wireframe triangles
+                for (int i = 0; i < mesh.triangleCount; i++) {
+                    // Get the three vertices of the triangle
+                    int idx0 = mesh.indices[i * 3 + 0];
+                    int idx1 = mesh.indices[i * 3 + 1];
+                    int idx2 = mesh.indices[i * 3 + 2];
+                    
+                    // Get vertex positions
+                    Vector3 v0 = {
+                        mesh.vertices[idx0 * 3 + 0],
+                        mesh.vertices[idx0 * 3 + 1],
+                        mesh.vertices[idx0 * 3 + 2]
+                    };
+                    Vector3 v1 = {
+                        mesh.vertices[idx1 * 3 + 0],
+                        mesh.vertices[idx1 * 3 + 1],
+                        mesh.vertices[idx1 * 3 + 2]
+                    };
+                    Vector3 v2 = {
+                        mesh.vertices[idx2 * 3 + 0],
+                        mesh.vertices[idx2 * 3 + 1],
+                        mesh.vertices[idx2 * 3 + 2]
+                    };
+                    
+                    // Transform vertices by the transform matrix
+                    v0 = Vector3Transform(v0, transform);
+                    v1 = Vector3Transform(v1, transform);
+                    v2 = Vector3Transform(v2, transform);
+                    
+                    // Draw the three edges of the triangle
+                    DrawLine3D(v0, v1, WHITE);
+                    DrawLine3D(v1, v2, WHITE);
+                    DrawLine3D(v2, v0, WHITE);
+                }
+            }
+        }
+    } else {
+        // Draw solid meshes normally
+        for (const auto& mesh_entry : material_meshes) {
+            const Mesh& mesh = mesh_entry.second;
+            if (mesh.vertexCount > 0) {
+                DrawMesh(mesh, default_material, transform);
+            }
         }
     }
 }

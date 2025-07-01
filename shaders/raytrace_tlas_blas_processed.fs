@@ -1047,6 +1047,8 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, inout uint seed) {
             color += attenuation * (skyColor + sunColor);
             break;
         }
+
+        //return vec3(1.0,0.0,0.0);
         
         // Get intersection details
         vec3 hitPos = rayPos + rayDir * hit.t;
