@@ -22,10 +22,12 @@ extern "C" {
     Matrix MatrixTranslate(float x, float y, float z);
 }
 
-Cluster::Cluster(uint32_t cluster_id, float smallest_cell_size)
+Cluster::Cluster(uint32_t cluster_id, BLASManager& blas_manager, TLASManager& tlas_manager, float smallest_cell_size)
     : cluster_id_(cluster_id),
       position_({0.0f, 0.0f, 0.0f}),
       rotation_(QuaternionIdentity()),
+      blas_manager_(blas_manager),
+      tlas_manager_(tlas_manager),
       next_particle_id_(0),
       smallest_cell_size_(smallest_cell_size),
       current_lod_level_(0) {
@@ -195,7 +197,7 @@ Cell* Cluster::find_or_create_cell(const Vector3& cell_coords) {
     return cell_ptr;
 }
 
-void Cluster::rebuild_dirty_cells(BLASManager& blas_manager) {
+void Cluster::rebuild_dirty_cells() {
     uint32_t rebuilt_count = 0;
     uint32_t total_cells = static_cast<uint32_t>(cells_.size());
     uint32_t dirty_cells = get_dirty_cell_count();
@@ -206,7 +208,7 @@ void Cluster::rebuild_dirty_cells(BLASManager& blas_manager) {
         if (cell->is_dirty) {
             printf("  Rebuilding cell at (%.0f,%.0f,%.0f) size=%.1f\n", 
                    cell->coordinates.x, cell->coordinates.y, cell->coordinates.z, cell->actual_size);
-            update_cell_meshes(cell.get(), blas_manager);
+            update_cell_meshes(cell.get());
             cell->is_dirty = false;
             rebuilt_count++;
         }
@@ -215,7 +217,7 @@ void Cluster::rebuild_dirty_cells(BLASManager& blas_manager) {
     printf("REBUILD: Completed %u cells\n", rebuilt_count);
 }
 
-void Cluster::update_cell_meshes(Cell* cell, BLASManager& blas_manager) {
+void Cluster::update_cell_meshes(Cell* cell) {
     if (!cell) return;
     
     // Clear existing particle indices
@@ -232,7 +234,7 @@ void Cluster::update_cell_meshes(Cell* cell, BLASManager& blas_manager) {
     
     // Rebuild meshes for all materials if we have particles
     if (!cell->material_particle_indices.empty()) {
-        cell->rebuild_meshes(particles_, blas_manager);
+        cell->rebuild_meshes(particles_, blas_manager_);
     } else {
         cell->clear_meshes();
     }
@@ -299,7 +301,7 @@ void Cluster::render_debug_bounds() const {
     }
 }
 
-void Cluster::add_to_tlas(TLASManager& tlas_manager) const {
+void Cluster::add_to_tlas() const {
     // Add all cell meshes to the TLAS for ray tracing
     for (const auto& cell : cells_) {
         if (cell->has_meshes) {
@@ -311,10 +313,10 @@ void Cluster::add_to_tlas(TLASManager& tlas_manager) const {
                 if (blas_handle > 0) {
                     // TODO: Apply cluster transform (position + rotation)
                     // For now, just add at identity transform
-                    tlas_manager.load_identity();
-                    tlas_manager.translate(position_.x, position_.y, position_.z);
+                    tlas_manager_.load_identity();
+                    tlas_manager_.translate(position_.x, position_.y, position_.z);
                     //tlas_manager.rotate_quaternion(rotation_);
-                    tlas_manager.draw(blas_handle, material_id);
+                    tlas_manager_.draw(blas_handle, material_id);
                 }
             }
         }
@@ -335,66 +337,57 @@ uint32_t Cluster::get_dirty_cell_count() const {
     return count;
 }
 
-void Cluster::set_lod_level(int lod_level) {
+void Cluster::set_lod_level(int lod_level, bool clear_blas) {
     if (lod_level < 0 || lod_level > 10) {
         printf("Warning: LOD level %d out of range [0-10], clamping\n", lod_level);
         lod_level = (lod_level < 0) ? 0 : 10;
     }
     
     if (lod_level != current_lod_level_) {
-        printf("===== LOD CHANGE: %d -> %d =====\n", current_lod_level_, lod_level);
-        printf("Old cell size: %.2f\n", get_current_cell_size());
-        
-        current_lod_level_ = lod_level;
-        
-        printf("New cell size: %.2f\n", get_current_cell_size());
-        
-        // Clear all existing cells since they're at the wrong LOD level
-        clear_all_cells();
-        
-        // Mark all particles as needing new cell assignment
-        for (const auto& particle : particles_) {
-            mark_cells_dirty_around_particle(particle.position, particle.radius);
+        if (clear_blas) {
+            printf("===== LOD CHANGE WITH BLAS CLEAR: %d -> %d =====\n", current_lod_level_, lod_level);
+            printf("Old cell size: %.2f\n", get_current_cell_size());
+            
+            // Clear BLAS manager FIRST to prevent accumulation of unused entries
+            blas_manager_.clear();
+            
+            current_lod_level_ = lod_level;
+            
+            printf("New cell size: %.2f\n", get_current_cell_size());
+            
+            // Clear all existing cells since they're at the wrong LOD level
+            clear_all_cells();
+            
+            // Mark all particles as needing new cell assignment
+            for (const auto& particle : particles_) {
+                mark_cells_dirty_around_particle(particle.position, particle.radius);
+            }
+            
+            printf("Created %zu new cells, %u dirty cells\n", cells_.size(), get_dirty_cell_count());
+            printf("==========================================\n");
+        } else {
+            printf("===== LOD CHANGE: %d -> %d =====\n", current_lod_level_, lod_level);
+            printf("Old cell size: %.2f\n", get_current_cell_size());
+            
+            current_lod_level_ = lod_level;
+            
+            printf("New cell size: %.2f\n", get_current_cell_size());
+            
+            // Clear all existing cells since they're at the wrong LOD level
+            clear_all_cells();
+            
+            // Mark all particles as needing new cell assignment
+            for (const auto& particle : particles_) {
+                mark_cells_dirty_around_particle(particle.position, particle.radius);
+            }
+            
+            printf("Created %zu new cells, %u dirty cells\n", cells_.size(), get_dirty_cell_count());
+            printf("===================================\n");
         }
-        
-        printf("Created %zu new cells, %u dirty cells\n", cells_.size(), get_dirty_cell_count());
-        printf("===================================\n");
     }
 }
 
-void Cluster::set_lod_level(int lod_level, BLASManager* blas_manager_to_clear) {
-    if (lod_level < 0 || lod_level > 10) {
-        printf("Warning: LOD level %d out of range [0-10], clamping\n", lod_level);
-        lod_level = (lod_level < 0) ? 0 : 10;
-    }
-    
-    if (lod_level != current_lod_level_) {
-        printf("===== LOD CHANGE WITH BLAS CLEAR: %d -> %d =====\n", current_lod_level_, lod_level);
-        printf("Old cell size: %.2f\n", get_current_cell_size());
-        
-        // Clear BLAS manager FIRST to prevent accumulation of unused entries
-        if (blas_manager_to_clear) {
-            blas_manager_to_clear->clear();
-        }
-        
-        current_lod_level_ = lod_level;
-        
-        printf("New cell size: %.2f\n", get_current_cell_size());
-        
-        // Clear all existing cells since they're at the wrong LOD level
-        clear_all_cells();
-        
-        // Mark all particles as needing new cell assignment
-        for (const auto& particle : particles_) {
-            mark_cells_dirty_around_particle(particle.position, particle.radius);
-        }
-        
-        printf("Created %zu new cells, %u dirty cells\n", cells_.size(), get_dirty_cell_count());
-        printf("==========================================\n");
-    }
-}
-
-void Cluster::force_rebuild_all_cells(BLASManager& blas_manager) {
+void Cluster::force_rebuild_all_cells() {
     printf("Cluster %u: Force rebuilding all cells at LOD level %d\n", cluster_id_, current_lod_level_);
     
     // Clear all existing cells
@@ -406,7 +399,7 @@ void Cluster::force_rebuild_all_cells(BLASManager& blas_manager) {
     }
     
     // Rebuild all dirty cells
-    rebuild_dirty_cells(blas_manager);
+    rebuild_dirty_cells();
 }
 
 void Cluster::clear_all_cells() {

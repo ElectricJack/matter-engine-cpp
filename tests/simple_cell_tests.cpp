@@ -31,13 +31,27 @@ private:
     uint32_t last_handle_ = 0;
 };
 
+// Minimal mock for testing without TLAS manager
+class MockTLASManager {
+public:
+    void clear() {}
+    void load_identity() {}
+    void translate(float x, float y, float z) {}
+    void draw(uint32_t blas_handle, uint32_t material_id) {}
+    void build(MockBLASManager& blas_manager) {}
+    int get_instance_count() const { return 0; }
+    int get_node_count() const { return 0; }
+};
+
 // Test to verify cell coordinate hashing produces unique, non-overlapping cells
 bool test_cell_coordinate_uniqueness() {
     printf("=== Testing Cell Coordinate Uniqueness ===\n");
     
     // Create cluster with specific cell size
     float cell_size = 2.0f;
-    Cluster cluster(0, cell_size);
+    MockBLASManager blas_manager;
+    MockTLASManager tlas_manager;
+    Cluster cluster(0, blas_manager, tlas_manager, cell_size);
     
     // Add particles in a grid pattern that should create specific cells
     printf("Adding particles to test cell creation...\n");
@@ -165,7 +179,9 @@ bool test_cell_coordinate_uniqueness() {
 bool test_multiple_lod_overlap() {
     printf("\n=== Testing Multiple LOD Overlap Issue ===\n");
     
-    Cluster cluster(1, 1.0f);
+    MockBLASManager blas_manager;
+    MockTLASManager tlas_manager;
+    Cluster cluster(1, blas_manager, tlas_manager, 1.0f);
     
     // Add a single particle that will trigger multiple LOD levels
     Vector3 particle_pos = {1.5f, 1.5f, 1.5f};

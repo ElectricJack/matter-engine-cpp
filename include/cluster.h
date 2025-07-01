@@ -24,7 +24,7 @@ struct StaticParticle {
 
 class Cluster {
 public:
-    Cluster(uint32_t cluster_id, float smallest_cell_size = 1.0f);
+    Cluster(uint32_t cluster_id, BLASManager& blas_manager, TLASManager& tlas_manager, float smallest_cell_size = 1.0f);
     ~Cluster();
     
     // Cluster management
@@ -51,24 +51,23 @@ public:
     
     // Cell management
     void mark_cells_dirty_around_particle(const Vector3& local_position, float radius);
-    void rebuild_dirty_cells(BLASManager& blas_manager);
+    void rebuild_dirty_cells();
     std::vector<Cell*> get_cells_in_region(const Vector3& min_bound, const Vector3& max_bound);
     
     // Rendering and TLAS integration
     void render_cells(bool wireframe = false) const;
     void render_debug_bounds() const;
-    void add_to_tlas(TLASManager& tlas_manager) const;
+    void add_to_tlas() const;
     
     // LOD configuration
     void set_smallest_cell_size(float size) { smallest_cell_size_ = size; }
     float get_smallest_cell_size() const { return smallest_cell_size_; }
     
     // LOD level management
-    void set_lod_level(int lod_level);
-    void set_lod_level(int lod_level, BLASManager* blas_manager_to_clear);
+    void set_lod_level(int lod_level, bool clear_blas = false);
     int get_lod_level() const { return current_lod_level_; }
     float get_current_cell_size() const { return smallest_cell_size_ * (1 << current_lod_level_); }
-    void force_rebuild_all_cells(BLASManager& blas_manager);
+    void force_rebuild_all_cells();
     
     // Statistics
     uint32_t get_cell_count() const;
@@ -79,6 +78,10 @@ private:
     uint32_t cluster_id_;
     Vector3 position_;          // World position
     Quaternion rotation_;       // World rotation
+    
+    // Manager references (set at construction time)
+    BLASManager& blas_manager_;
+    TLASManager& tlas_manager_;
     
     // Particle storage
     std::vector<StaticParticle> particles_;
@@ -93,7 +96,7 @@ private:
     // Helper methods
     Vector3 get_cell_coordinates(const Vector3& local_position) const;
     Cell* find_or_create_cell(const Vector3& cell_coords);
-    void update_cell_meshes(Cell* cell, BLASManager& blas_manager);
+    void update_cell_meshes(Cell* cell);
     void clear_all_cells();
 };
 

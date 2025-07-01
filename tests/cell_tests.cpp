@@ -13,6 +13,7 @@ extern "C" {
 #include "../include/cluster.h"
 #include "../include/cell.h"
 #include "../include/blas_manager.hpp"
+#include "../include/tlas_manager.hpp"
 
 // Test utilities
 bool vectors_equal(const Vector3& a, const Vector3& b, float epsilon = 1e-6f) {
@@ -25,8 +26,9 @@ bool vectors_equal(const Vector3& a, const Vector3& b, float epsilon = 1e-6f) {
 bool test_cell_coordinate_uniqueness() {
     printf("=== Testing Cell Coordinate Uniqueness ===\n");
     
-    Cluster cluster(0, 1.0f);
     BLASManager blas_manager;
+    TLASManager tlas_manager(1000); // Pass capacity
+    Cluster cluster(0, blas_manager, tlas_manager, 1.0f);
     
     // Add particles in a grid pattern
     float spacing = 0.5f;
@@ -45,7 +47,7 @@ bool test_cell_coordinate_uniqueness() {
     }
     
     // Rebuild cells
-    cluster.rebuild_dirty_cells(blas_manager);
+    cluster.rebuild_dirty_cells();
     
     // Get all cells
     Vector3 min_bound = {-1.0f, -1.0f, -1.0f};
@@ -112,8 +114,9 @@ bool test_cell_coordinate_uniqueness() {
 bool test_one_mesh_per_cell_per_material() {
     printf("\n=== Testing One Mesh Per Cell Per Material ===\n");
     
-    Cluster cluster(1, 1.0f);
     BLASManager blas_manager;
+    TLASManager tlas_manager(1000);
+    Cluster cluster(1, blas_manager, tlas_manager, 1.0f);
     
     // Add particles with different materials in specific patterns
     // Material 0 particles
@@ -128,7 +131,7 @@ bool test_one_mesh_per_cell_per_material() {
     cluster.add_particle({0.7f, 0.7f, 0.5f}, 0.3f, 2);
     cluster.add_particle({1.3f, 1.3f, 0.5f}, 0.3f, 2);
     
-    cluster.rebuild_dirty_cells(blas_manager);
+    cluster.rebuild_dirty_cells();
     
     // Get all cells
     Vector3 min_bound = {-1.0f, -1.0f, -1.0f};
@@ -211,8 +214,9 @@ bool test_one_mesh_per_cell_per_material() {
 bool test_particle_cell_assignment() {
     printf("\n=== Testing Particle Cell Assignment ===\n");
     
-    Cluster cluster(2, 2.0f); // 2.0 unit cell size
     BLASManager blas_manager;
+    TLASManager tlas_manager(1000);
+    Cluster cluster(2, blas_manager, tlas_manager, 2.0f); // 2.0 unit cell size
     
     // Add particles at known positions
     struct TestParticle {
@@ -239,7 +243,7 @@ bool test_particle_cell_assignment() {
                tp.expected_cell_coords.x, tp.expected_cell_coords.y, tp.expected_cell_coords.z);
     }
     
-    cluster.rebuild_dirty_cells(blas_manager);
+    cluster.rebuild_dirty_cells();
     
     // Get all cells
     Vector3 min_bound = {-3.0f, -3.0f, -3.0f};

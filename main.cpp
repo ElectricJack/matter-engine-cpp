@@ -22,7 +22,7 @@ public:
           blas_manager_(std::make_unique<BLASManager>()),
           tlas_manager_(std::make_unique<TLASManager>(1000)),
           bvh_visualizer_(std::make_unique<BVHVisualizer>()),
-          test_cluster_(std::make_unique<Cluster>(0, 3.0f)) {
+          test_cluster_(std::make_unique<Cluster>(0, *blas_manager_, *tlas_manager_, 3.0f)) {
         
         InitWindow(screen_width_, screen_height_, "MatterSurfaceLib - Cluster and Cell System");
         SetTargetFPS(60);
@@ -84,7 +84,7 @@ private:
         
         // Add cluster meshes to TLAS for ray tracing
         if (test_cluster_) {
-            test_cluster_->add_to_tlas(*tlas_manager_);
+            test_cluster_->add_to_tlas();
         }
         
         tlas_manager_->build(*blas_manager_);
@@ -119,7 +119,7 @@ private:
                 -sinf(angle1) * sinf(angle2) * 10.0f,
                 cosf(angle2) * 10.0f
             };
-            
+             
             uint32_t material = 1;//i % 3; // Cycle through materials
             test_cluster_->add_particle(position, 1.0f, material);
         }
@@ -137,7 +137,7 @@ private:
         
         // Force initial mesh rebuild
         test_cluster_->set_lod_level(1);
-        test_cluster_->rebuild_dirty_cells(*blas_manager_);
+        test_cluster_->rebuild_dirty_cells();
         
         printf("Cluster has %u cells, %u dirty\n", 
                test_cluster_->get_cell_count(), test_cluster_->get_dirty_cell_count());
@@ -217,7 +217,7 @@ private:
                 blas_manager_->clear();
                 
                 // Rebuild everything
-                test_cluster_->rebuild_dirty_cells(*blas_manager_);
+                test_cluster_->rebuild_dirty_cells();
                 rebuild_tlas_after_cell_changes();
                 printf("BLAS manager cleared and scene rebuilt\n");
             }
@@ -280,7 +280,7 @@ private:
                 
                 {
                     PROFILE_SECTION("Rebuild Dirty Cells");
-                    test_cluster_->rebuild_dirty_cells(*blas_manager_);
+                    test_cluster_->rebuild_dirty_cells();
                     rebuild_tlas_after_cell_changes();
                 }
                 printf("Added 10 random particles. Cluster now has %u cells\n", 
@@ -293,88 +293,88 @@ private:
             // LOD level controls
             if (IsKeyPressed(KEY_ONE)) {
                 printf("\n=== LOD CHANGE TO 0 ===\n");
-                printf("BEFORE: ");
-                blas_manager_->print_stats();
+                // printf("BEFORE: ");
+                // blas_manager_->print_stats();
                 
-                test_cluster_->set_lod_level(0, blas_manager_.get());
-                test_cluster_->rebuild_dirty_cells(*blas_manager_);
+                test_cluster_->set_lod_level(0, true);  // clear_blas = true
+                test_cluster_->rebuild_dirty_cells();
                 
-                printf("AFTER REBUILD: ");
-                blas_manager_->print_stats();
+                // printf("AFTER REBUILD: ");
+                // blas_manager_->print_stats();
                 
                 rebuild_tlas_after_cell_changes();
                 
-                printf("AFTER TLAS REBUILD: ");
-                blas_manager_->print_stats();
-                printf("========================\n");
+                // printf("AFTER TLAS REBUILD: ");
+                // blas_manager_->print_stats();
+                // printf("========================\n");
             }
             if (IsKeyPressed(KEY_TWO)) {
                 printf("\n=== LOD CHANGE TO 1 ===\n");
-                printf("BEFORE: ");
-                blas_manager_->print_stats();
+                // printf("BEFORE: ");
+                // blas_manager_->print_stats();
                 
-                test_cluster_->set_lod_level(1, blas_manager_.get());
-                test_cluster_->rebuild_dirty_cells(*blas_manager_);
+                test_cluster_->set_lod_level(1, true);  // clear_blas = true
+                test_cluster_->rebuild_dirty_cells();
                 
-                printf("AFTER REBUILD: ");
-                blas_manager_->print_stats();
+                // printf("AFTER REBUILD: ");
+                // blas_manager_->print_stats();
                 
                 rebuild_tlas_after_cell_changes();
                 
-                printf("AFTER TLAS REBUILD: ");
-                blas_manager_->print_stats();
-                printf("========================\n");
+                // printf("AFTER TLAS REBUILD: ");
+                // blas_manager_->print_stats();
+                // printf("========================\n");
             }
             if (IsKeyPressed(KEY_THREE)) {
                 printf("\n=== LOD CHANGE TO 2 ===\n");
-                printf("BEFORE: ");
-                blas_manager_->print_stats();
+                // printf("BEFORE: ");
+                // blas_manager_->print_stats();
                 
-                test_cluster_->set_lod_level(2, blas_manager_.get());
-                test_cluster_->rebuild_dirty_cells(*blas_manager_);
+                test_cluster_->set_lod_level(2, true);  // clear_blas = true
+                test_cluster_->rebuild_dirty_cells();
                 
-                printf("AFTER REBUILD: ");
-                blas_manager_->print_stats();
+                // printf("AFTER REBUILD: ");
+                // blas_manager_->print_stats();
                 
                 rebuild_tlas_after_cell_changes();
                 
-                printf("AFTER TLAS REBUILD: ");
-                blas_manager_->print_stats();
-                printf("========================\n");
+                // printf("AFTER TLAS REBUILD: ");
+                // blas_manager_->print_stats();
+                // printf("========================\n");
             }
             if (IsKeyPressed(KEY_FOUR)) {
                 printf("\n=== LOD CHANGE TO 3 ===\n");
-                printf("BEFORE: ");
-                blas_manager_->print_stats();
+                // printf("BEFORE: ");
+                // blas_manager_->print_stats();
                 
-                test_cluster_->set_lod_level(3, blas_manager_.get());
-                test_cluster_->rebuild_dirty_cells(*blas_manager_);
+                test_cluster_->set_lod_level(3, true);  // clear_blas = true
+                test_cluster_->rebuild_dirty_cells();
                 
-                printf("AFTER REBUILD: ");
-                blas_manager_->print_stats();
+                // printf("AFTER REBUILD: ");
+                // blas_manager_->print_stats();
                 
                 rebuild_tlas_after_cell_changes();
                 
-                printf("AFTER TLAS REBUILD: ");
-                blas_manager_->print_stats();
-                printf("========================\n");
+                // printf("AFTER TLAS REBUILD: ");
+                // blas_manager_->print_stats();
+                // printf("========================\n");
             }
             if (IsKeyPressed(KEY_FIVE)) {
                 printf("\n=== LOD CHANGE TO 4 ===\n");
-                printf("BEFORE: ");
-                blas_manager_->print_stats();
+                // printf("BEFORE: ");
+                // blas_manager_->print_stats();
                 
-                test_cluster_->set_lod_level(4, blas_manager_.get());
-                test_cluster_->rebuild_dirty_cells(*blas_manager_);
+                test_cluster_->set_lod_level(4, true);  // clear_blas = true
+                test_cluster_->rebuild_dirty_cells();
                 
-                printf("AFTER REBUILD: ");
-                blas_manager_->print_stats();
+                // printf("AFTER REBUILD: ");
+                // blas_manager_->print_stats();
                 
                 rebuild_tlas_after_cell_changes();
                 
-                printf("AFTER TLAS REBUILD: ");
-                blas_manager_->print_stats();
-                printf("========================\n");
+                // printf("AFTER TLAS REBUILD: ");
+                // blas_manager_->print_stats();
+                // printf("========================\n");
             }
         }
         
@@ -697,7 +697,7 @@ private:
         tlas_manager_->clear();
         
         // Re-add all cluster meshes to TLAS
-        test_cluster_->add_to_tlas(*tlas_manager_);
+        test_cluster_->add_to_tlas();
         
         // Build the new TLAS structure
         tlas_manager_->build(*blas_manager_);
