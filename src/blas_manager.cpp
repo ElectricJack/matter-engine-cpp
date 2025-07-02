@@ -54,24 +54,6 @@ uint32_t BLASManager::calculate_hash(const Tri* triangles, int count) const {
     return hash;
 }
 
-// uint32_t BLASManager::calculate_hash_legacy(const LegacyTriangle* triangles, int count) const {
-//     PROFILE_SECTION("BLAS Hash Calculation Legacy");
-    
-//     uint32_t hash = 2166136261u; // FNV-1a offset basis
-    
-//     for (int i = 0; i < count; i++) {
-//         // Hash vertex positions only (ignore normals/materials for deduplication)
-//         const float* data = reinterpret_cast<const float*>(&triangles[i]);
-//         for (int j = 0; j < 9; j++) { // 3 vertices * 3 components each
-//             uint32_t val = *reinterpret_cast<const uint32_t*>(&data[j]);
-//             hash ^= val;
-//             hash *= 16777619u; // FNV-1a prime
-//         }
-//     }
-    
-//     return hash;
-// }
-
 bool BLASManager::triangles_equal(const std::vector<Tri>& a, const Tri* b, int count) const {
     if (a.size() != static_cast<size_t>(count)) return false;
     
@@ -94,35 +76,12 @@ BLASHandle BLASManager::find_existing_blas(const Tri* triangles, int count, uint
     return INVALID_BLAS_HANDLE;
 }
 
-// BLASHandle BLASManager::find_existing_blas_legacy(const LegacyTriangle* triangles, int count, uint32_t hash) const {
-//     PROFILE_SECTION("BLAS Deduplication Check Legacy");
-    
-//     // Convert to new format and check
-//     std::vector<Tri> converted_triangles;
-//     converted_triangles.reserve(count);
-//     for (int i = 0; i < count; i++) {
-//         converted_triangles.push_back(convert_triangle(triangles[i]));
-//     }
-    
-//     auto range = hash_to_entry_.equal_range(hash);
-//     for (auto it = range.first; it != range.second; ++it) {
-//         const auto& entry = entries_[it->second];
-//         if (triangles_equal(entry->triangles, converted_triangles.data(), count)) {
-//             return entry->handle;
-//         }
-//     }
-//     return INVALID_BLAS_HANDLE;
-// }
 
 BLASHandle BLASManager::register_triangles(const std::vector<Tri>& triangles) {
     return register_triangles(const_cast<Tri*>(triangles.data()), 
                              static_cast<int>(triangles.size()));
 }
 
-// BLASHandle BLASManager::register_triangles_legacy(const std::vector<LegacyTriangle>& triangles) {
-//     return register_triangles_legacy(const_cast<LegacyTriangle*>(triangles.data()), 
-//                                     static_cast<int>(triangles.size()));
-// }
 
 BLASHandle BLASManager::register_triangles(Tri* triangles, int triangle_count) {
     PROFILE_SECTION("BLAS Registration");
@@ -185,22 +144,6 @@ BLASHandle BLASManager::register_triangles(Tri* triangles, int triangle_count) {
     }
 }
 
-// BLASHandle BLASManager::register_triangles_legacy(LegacyTriangle* triangles, int triangle_count) {
-//     PROFILE_SECTION("BLAS Registration Legacy");
-    
-//     if (!triangles || triangle_count <= 0) {
-//         return INVALID_BLAS_HANDLE;
-//     }
-    
-//     // Convert to new format
-//     std::vector<Tri> converted_triangles;
-//     converted_triangles.reserve(triangle_count);
-//     for (int i = 0; i < triangle_count; i++) {
-//         converted_triangles.push_back(convert_triangle(triangles[i]));
-//     }
-    
-//     return register_triangles(converted_triangles.data(), triangle_count);
-// }
 
 bool BLASManager::has_blas(BLASHandle handle) const {
     if (handle == INVALID_BLAS_HANDLE) return false;
@@ -306,21 +249,6 @@ void BLASManager::generate_triangle_data(std::vector<Tri>& output_triangles) con
     }
 }
 
-// void BLASManager::generate_triangle_data_legacy(std::vector<LegacyTriangle>& output_triangles) const {
-//     PROFILE_SECTION("BLAS Triangle Data Generation Legacy");
-    
-//     output_triangles.clear();
-//     output_triangles.reserve(get_total_triangle_count());
-    
-//     for (const auto& entry : entries_) {
-//         if (entry->mesh && entry->bvh) {
-//             for (const auto& tri : entry->triangles) {
-//                 output_triangles.push_back(convert_triangle_back(tri));
-//             }
-//         }
-//     }
-// }
-
 void BLASManager::generate_node_data(std::vector<LegacyBVHNode>& output_nodes) const {
     PROFILE_SECTION("BLAS Node Data Generation");
     
@@ -368,13 +296,6 @@ void BLASManager::generate_triangle_texture_data(Tri* output_triangles) const {
     std::copy(temp.begin(), temp.end(), output_triangles);
 }
 
-// void BLASManager::generate_triangle_texture_data_legacy(LegacyTriangle* output_triangles) const {
-//     if (!output_triangles) return;
-    
-//     std::vector<LegacyTriangle> temp;
-//     generate_triangle_data_legacy(temp);
-//     std::copy(temp.begin(), temp.end(), output_triangles);
-// }
 
 void BLASManager::generate_node_texture_data(LegacyBVHNode* output_nodes) const {
     if (!output_nodes) return;
@@ -576,27 +497,27 @@ void BLASManager::bind_to_shader(Shader shader) const {
 }
 
 void BLASManager::print_stats() const {
-    update_totals();
+    // update_totals();
     
-    printf("=== BLAS Manager Statistics ===\n");
-    printf("Unique BLAS count: %zu\n", entries_.size());
-    printf("Total triangles: %d\n", cached_total_triangles_);
-    printf("Total nodes: %d\n", cached_total_nodes_);
-    printf("Next handle: %u\n", next_handle_);
+    // printf("=== BLAS Manager Statistics ===\n");
+    // printf("Unique BLAS count: %zu\n", entries_.size());
+    // printf("Total triangles: %d\n", cached_total_triangles_);
+    // printf("Total nodes: %d\n", cached_total_nodes_);
+    // printf("Next handle: %u\n", next_handle_);
     
-    // Hash table statistics
-    std::unordered_map<uint32_t, int> bucket_sizes;
-    for (const auto& pair : hash_to_entry_) {
-        bucket_sizes[pair.first]++;
-    }
+    // // Hash table statistics
+    // std::unordered_map<uint32_t, int> bucket_sizes;
+    // for (const auto& pair : hash_to_entry_) {
+    //     bucket_sizes[pair.first]++;
+    // }
     
-    int max_bucket_size = 0;
-    for (const auto& pair : bucket_sizes) {
-        max_bucket_size = std::max(max_bucket_size, pair.second);
-    }
+    // int max_bucket_size = 0;
+    // for (const auto& pair : bucket_sizes) {
+    //     max_bucket_size = std::max(max_bucket_size, pair.second);
+    // }
     
-    printf("Hash buckets: %zu used, max chain length: %d\n", 
-           bucket_sizes.size(), max_bucket_size);
+    // printf("Hash buckets: %zu used, max chain length: %d\n", 
+    //        bucket_sizes.size(), max_bucket_size);
 }
 
 void BLASManager::reset_stats() {

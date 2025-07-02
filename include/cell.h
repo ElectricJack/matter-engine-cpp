@@ -9,6 +9,8 @@
 // Forward declarations
 struct StaticParticle;
 class BLASManager;
+class CellVisitor;
+class CellRenderVisitor;
 typedef uint32_t BLASHandle;
 
 struct Cell {
@@ -45,10 +47,9 @@ struct Cell {
     void remove_particle_index(uint32_t particle_index, uint32_t material_id);
     void clear_particle_indices();
     
-    // Rendering
-    void render(bool wireframe = false) const;
-    void render_transformed(const Matrix& transform, bool wireframe = false) const;
-    void render_debug_bounds() const;
+    // Visitor pattern support
+    void accept(CellVisitor& visitor) const;
+    void accept_transformed(CellRenderVisitor& visitor, const Matrix& transform) const;
     
     // BLAS access
     const std::map<uint32_t, BLASHandle>& get_material_blas() const { return material_blas; }

@@ -213,7 +213,7 @@ void SurfaceLibCleanup(void) {
 
 // Internal mesh generation function with configuration
 static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int particleCount, Bounds volume, MeshGenerationConfig config) {
-    TIMER_START(total);
+    //TIMER_START(total);
     
     // Initialize mesh
     Mesh mesh = {0};
@@ -253,7 +253,7 @@ static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int 
         }
     }
     
-    TIMER_START(spatial_hash);
+    //TIMER_START(spatial_hash);
     
     // Create spatial hash for efficient particle queries
     // Optimized cell size: smaller cells (1.5x radius) for better spatial locality
@@ -273,9 +273,9 @@ static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int 
         sh_insert(spatialHash, particles[i].position.x, particles[i].position.y, particles[i].position.z, &particles[i]);
     }
     
-    TIMER_END(spatial_hash, "Spatial Hash Setup");
+    // TIMER_END(spatial_hash, "Spatial Hash Setup");
     
-    TIMER_START(scalar_field);
+    //TIMER_START(scalar_field);
     
     // Fill scalar field with implicit function values (now using combined calculation)
     for (int z = 0; z < gridSize; z++) {
@@ -297,7 +297,7 @@ static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int 
         }
     }
     
-    TIMER_END(scalar_field, "Scalar Field Computation");
+    //TIMER_END(scalar_field, "Scalar Field Computation");
     
     // Create temporary buffers for storing mesh data using memory pool if enabled
     int maxVertices = data.totalCells * 3; // Maximum possible vertices per cell is typically 3-5
@@ -367,7 +367,7 @@ static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int 
     // Value for isosurface threshold
     const float isovalue = 0.0f; // Surface at zero level
     
-    TIMER_START(marching_cubes);
+    //TIMER_START(marching_cubes);
     
     // Run marching cubes algorithm on each grid cell
     for (int z = 0; z < gridSize - 1; z++) {
@@ -578,9 +578,9 @@ static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int 
         }
     }
     
-    TIMER_END(marching_cubes, "Marching Cubes Algorithm");
+    //TIMER_END(marching_cubes, "Marching Cubes Algorithm");
     
-    TIMER_START(mesh_assembly);
+    //TIMER_START(mesh_assembly);
     
     // Calculate normals
     for (int i = 0; i < vertexCount; i++) {
@@ -673,7 +673,7 @@ static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int 
         mesh.colors[i*4+3] = color.a;
     }
     
-    TIMER_END(mesh_assembly, "Mesh Assembly");
+    //TIMER_END(mesh_assembly, "Mesh Assembly");
     
     // Clean up temporary data (only free if not using memory pool)
     if (!config.enableMemoryReuse) {
@@ -690,7 +690,7 @@ static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int 
     }
     sh_destroy(spatialHash);
     
-    TIMER_END(total, "Total Mesh Generation");
+    //TIMER_END(total, "Total Mesh Generation");
     
     return mesh;
 }

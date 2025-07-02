@@ -1,6 +1,7 @@
 #include "../include/cluster.h"
 #include "../include/cell.h"
 #include "../include/tlas_manager.hpp"
+#include "../include/cell_visitor.h"
 extern "C" {
 #include "../include/spatial_hash.h"
 }
@@ -206,8 +207,8 @@ void Cluster::rebuild_dirty_cells() {
     
     for (auto& cell : cells_) {
         if (cell->is_dirty) {
-            printf("  Rebuilding cell at (%.0f,%.0f,%.0f) size=%.1f\n", 
-                   cell->coordinates.x, cell->coordinates.y, cell->coordinates.z, cell->actual_size);
+            // printf("  Rebuilding cell at (%.0f,%.0f,%.0f) size=%.1f\n", 
+            //        cell->coordinates.x, cell->coordinates.y, cell->coordinates.z, cell->actual_size);
             update_cell_meshes(cell.get());
             cell->is_dirty = false;
             rebuilt_count++;
@@ -215,6 +216,24 @@ void Cluster::rebuild_dirty_cells() {
     }
     
     printf("REBUILD: Completed %u cells\n", rebuilt_count);
+    
+    // Automatically update TLAS if any cells were rebuilt
+    if (rebuilt_count > 0) {
+        PROFILE_SECTION("Auto TLAS Rebuild After Cell Changes");
+        
+        // Clear old TLAS data
+        tlas_manager_.clear();
+        
+        // Re-add all cluster meshes to TLAS
+        add_to_tlas();
+        
+        // Build the new TLAS structure
+        tlas_manager_.build(blas_manager_);
+        
+        printf("TLAS auto-rebuilt: %d instances, %d nodes\n", 
+               tlas_manager_.get_instance_count(), 
+               tlas_manager_.get_node_count());
+    }
 }
 
 void Cluster::update_cell_meshes(Cell* cell) {
@@ -277,7 +296,11 @@ std::vector<Cell*> Cluster::get_cells_in_region(const Vector3& min_bound, const 
     return result;
 }
 
-void Cluster::render_cells(bool wireframe) const {
+void Cluster::accept(CellVisitor& visitor) const {
+    visitor.visit_cluster(*this);
+}
+
+void Cluster::visit_cells(CellRenderVisitor& visitor) const {
     // Create transform matrix for cluster world position
     Matrix cluster_transform = MatrixTranslate(position_.x, position_.y, position_.z);
     
@@ -285,19 +308,19 @@ void Cluster::render_cells(bool wireframe) const {
     for (const auto& cell : cells_) {
         if (cell->has_meshes) {
             cells_with_meshes++;
-            cell->render_transformed(cluster_transform, wireframe);
+            cell->accept_transformed(visitor, cluster_transform);
         }
     }
     
-    static int debug_counter = 0;
-    if (debug_counter++ % 60 == 0) { // Print every 60 frames
-        printf("Cluster render: %u/%zu cells have meshes\n", cells_with_meshes, cells_.size());
-    }
+    // static int debug_counter = 0;
+    // if (debug_counter++ % 60 == 0) { // Print every 60 frames
+    //     printf("Cluster render: %u/%zu cells have meshes\n", cells_with_meshes, cells_.size());
+    // }
 }
 
-void Cluster::render_debug_bounds() const {
+void Cluster::visit_all_cells(CellVisitor& visitor) const {
     for (const auto& cell : cells_) {
-        cell->render_debug_bounds();
+        cell->accept(visitor);
     }
 }
 

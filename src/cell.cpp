@@ -1,6 +1,7 @@
 #include "../include/cell.h"
 #include "../include/cluster.h"
 #include "../include/blas_manager.hpp"
+#include "../include/cell_visitor.h"
 #include <cmath>
 #include <cstdio>
 #include <algorithm>
@@ -310,85 +311,12 @@ void Cell::clear_meshes() {
     has_meshes = false;
 }
 
-void Cell::render(bool wireframe) const {
-    render_transformed(MatrixIdentity(), wireframe);
+void Cell::accept(CellVisitor& visitor) const {
+    visitor.visit_cell(*this);
 }
 
-void Cell::render_transformed(const Matrix& transform, bool wireframe) const {
-    if (!has_meshes || material_meshes.empty()) {
-        return;
-    }
-    
-    // Create a simple material for rendering
-    static Material default_material = {0};
-    static bool material_initialized = false;
-    
-    if (!material_initialized) {
-        default_material = LoadMaterialDefault();
-        material_initialized = true;
-    }
-    
-    if (wireframe) {
-        // Render wireframe by drawing mesh triangles as lines
-        for (const auto& mesh_entry : material_meshes) {
-            const Mesh& mesh = mesh_entry.second;
-            if (mesh.vertexCount > 0 && mesh.triangleCount > 0 && mesh.vertices && mesh.indices) {
-                // Draw wireframe triangles
-                for (int i = 0; i < mesh.triangleCount; i++) {
-                    // Get the three vertices of the triangle
-                    int idx0 = mesh.indices[i * 3 + 0];
-                    int idx1 = mesh.indices[i * 3 + 1];
-                    int idx2 = mesh.indices[i * 3 + 2];
-                    
-                    // Get vertex positions
-                    Vector3 v0 = {
-                        mesh.vertices[idx0 * 3 + 0],
-                        mesh.vertices[idx0 * 3 + 1],
-                        mesh.vertices[idx0 * 3 + 2]
-                    };
-                    Vector3 v1 = {
-                        mesh.vertices[idx1 * 3 + 0],
-                        mesh.vertices[idx1 * 3 + 1],
-                        mesh.vertices[idx1 * 3 + 2]
-                    };
-                    Vector3 v2 = {
-                        mesh.vertices[idx2 * 3 + 0],
-                        mesh.vertices[idx2 * 3 + 1],
-                        mesh.vertices[idx2 * 3 + 2]
-                    };
-                    
-                    // Transform vertices by the transform matrix
-                    v0 = Vector3Transform(v0, transform);
-                    v1 = Vector3Transform(v1, transform);
-                    v2 = Vector3Transform(v2, transform);
-                    
-                    // Draw the three edges of the triangle
-                    DrawLine3D(v0, v1, WHITE);
-                    DrawLine3D(v1, v2, WHITE);
-                    DrawLine3D(v2, v0, WHITE);
-                }
-            }
-        }
-    } else {
-        // Draw solid meshes normally
-        for (const auto& mesh_entry : material_meshes) {
-            const Mesh& mesh = mesh_entry.second;
-            if (mesh.vertexCount > 0) {
-                DrawMesh(mesh, default_material, transform);
-            }
-        }
-    }
-}
-
-void Cell::render_debug_bounds() const {
-    // Draw wireframe cube for cell bounds
-    Vector3 size = Vector3Subtract(max_bound, min_bound);
-    Color color = is_dirty ? RED : (has_meshes ? GREEN : GRAY);
-    
-    DrawCubeWires(center, size.x, size.y, size.z, color);
-    
-    // Draw a small sphere at the center
-    DrawSphere(center, 0.1f, color);
+void Cell::accept_transformed(CellRenderVisitor& visitor, const Matrix& transform) const {
+    visitor.visit_cell_transformed(*this, transform);
 }
 
 float Cell::get_diagonal_length() const {

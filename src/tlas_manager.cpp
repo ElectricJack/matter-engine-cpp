@@ -580,17 +580,17 @@ void TLASManager::bind_to_shader(Shader shader, const BLASManager& blas_manager)
 }
 
 void TLASManager::print_stats() const {
-    printf("=== TLAS Manager Statistics ===\n");
-    printf("Draw records: %zu/%d\n", draw_records_.size(), max_instances_);
-    printf("Matrix stack depth: %zu\n", matrix_stack_.size());
-    printf("Next instance ID: %u\n", next_instance_id_);
+    // printf("=== TLAS Manager Statistics ===\n");
+    // printf("Draw records: %zu/%d\n", draw_records_.size(), max_instances_);
+    // printf("Matrix stack depth: %zu\n", matrix_stack_.size());
+    // printf("Next instance ID: %u\n", next_instance_id_);
     
-    if (tlas_) {
-        printf("Built TLAS: %d instances, %d nodes\n", 
-               tlas_->blasCount, tlas_->nodesUsed);
-    } else {
-        printf("TLAS: Not built\n");
-    }
+    // if (tlas_) {
+    //     printf("Built TLAS: %d instances, %d nodes\n", 
+    //            tlas_->blasCount, tlas_->nodesUsed);
+    // } else {
+    //     printf("TLAS: Not built\n");
+    // }
 }
 
 // Scene building utilities implementation

@@ -11,6 +11,8 @@ struct Cell;
 struct SpatialHash;
 class BLASManager;
 class TLASManager;
+class CellVisitor;
+class CellRenderVisitor;
 
 // Static particle structure for matter representation
 struct StaticParticle {
@@ -54,9 +56,12 @@ public:
     void rebuild_dirty_cells();
     std::vector<Cell*> get_cells_in_region(const Vector3& min_bound, const Vector3& max_bound);
     
-    // Rendering and TLAS integration
-    void render_cells(bool wireframe = false) const;
-    void render_debug_bounds() const;
+    // Visitor pattern support
+    void accept(CellVisitor& visitor) const;
+    void visit_cells(CellRenderVisitor& visitor) const;
+    void visit_all_cells(CellVisitor& visitor) const;  // Visit all cells regardless of mesh status
+    
+    // TLAS integration
     void add_to_tlas() const;
     
     // LOD configuration

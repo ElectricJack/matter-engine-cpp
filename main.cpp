@@ -13,6 +13,7 @@ extern "C" {
 #include "include/bvh_visualizer.hpp"
 #include "include/cluster.h"
 #include "include/cell.h"
+#include "include/cell_debug_renderer.h"
 #include "include/profiler.hpp"
 
 class MatterSurfaceLibDemo {
@@ -22,7 +23,8 @@ public:
           blas_manager_(std::make_unique<BLASManager>()),
           tlas_manager_(std::make_unique<TLASManager>(1000)),
           bvh_visualizer_(std::make_unique<BVHVisualizer>()),
-          test_cluster_(std::make_unique<Cluster>(0, *blas_manager_, *tlas_manager_, 3.0f)) {
+          test_cluster_(std::make_unique<Cluster>(0, *blas_manager_, *tlas_manager_, 5.0f)),
+          cell_debug_renderer_(std::make_unique<CellDebugRenderer>()) {
         
         InitWindow(screen_width_, screen_height_, "MatterSurfaceLib - Cluster and Cell System");
         SetTargetFPS(60);
@@ -30,8 +32,8 @@ public:
         DisableCursor();
         
         setup_rendering();
+        register_scene_geometry();
         setup_matter_system();
-        setup_scene();
     }
     
     ~MatterSurfaceLibDemo() {
@@ -46,56 +48,47 @@ public:
         
         while (!WindowShouldClose()) {
             PROFILE_FRAME_BEGIN();
-            
-            {
-                PROFILE_SECTION("Update");
                 update();
-            }
-            
-            {
-                PROFILE_SECTION("Render");
                 render();
-            }
-            
             PROFILE_FRAME_END();
             
             // Print performance stats every 60 frames (roughly once per second at 60 FPS)
-            static int frame_counter = 0;
-            frame_counter++;
-            if (frame_counter >= 60) {
-                printf("\n=== FRAME %d PERFORMANCE REPORT ===\n", frame_counter);
-                PROFILE_PRINT();
-                print_rendering_stats();
+            // static int frame_counter = 0;
+            // frame_counter++;
+            // if (frame_counter >= 60) {
+            //     printf("\n=== FRAME %d PERFORMANCE REPORT ===\n", frame_counter);
+            //     PROFILE_PRINT();
+            //     print_rendering_stats();
                 
-                // Reset profiler stats to show per-period performance instead of cumulative
-                PROFILE_RESET();
-                frame_counter = 0;
-            }
+            //     // Reset profiler stats to show per-period performance instead of cumulative
+            //     PROFILE_RESET();
+            //     frame_counter = 0;
+            // }
         }
     }
 
 private:
-    void setup_scene() {
-        create_example_scene();
-    }
-    
-    void create_example_scene() {
-        tlas_manager_->clear();
+    void register_scene_geometry() {
+        printf("=== Registering Scene Geometry ===\n");
         
-        // Add cluster meshes to TLAS for ray tracing
-        if (test_cluster_) {
-            test_cluster_->add_to_tlas();
-        }
+        // Register sphere BLAS for reflective sphere
+        sphere_blas_ = BLASFactory::register_sphere(*blas_manager_, 1.0f, 32, 16);
+        printf("  Sphere BLAS registered: handle=%u\n", sphere_blas_);
         
-        tlas_manager_->build(*blas_manager_);
+        // Register plane BLAS for ground
+        ground_blas_ = BLASFactory::register_plane(*blas_manager_, 50.0f, 50.0f);
+        printf("  Ground plane BLAS registered: handle=%u\n", ground_blas_);
+        
+        printf("=== Scene Geometry Registration Complete ===\n");
     }
-    
+
+
     void setup_matter_system() {
         // Create a cluster of particles to demonstrate the system
         printf("Setting up matter system with cluster and cells...\n");
         
-        // Add particles in a roughly spherical distribution
-        for (int i = 0; i < 100; ++i) {
+        // Add particles in a roughly spherical distribution - First cluster
+        for (int i = 0; i < 150; ++i) {
             float angle1 = (float)i * 0.05f;
             float angle2 = (float)i * 0.025f;
             
@@ -105,12 +98,13 @@ private:
                 cosf(angle2) * 10.0f
             };
             
-            uint32_t material = 0;//i % 3; // Cycle through materials
+            // Cycle through first 4 materials (0-3): Red metallic, Blue diffuse, Green ground, Gold metallic
+            uint32_t material = (i / 20) % 4;
             test_cluster_->add_particle(position, 1.0f, material);
         }
 
-                // Add particles in a roughly spherical distribution
-        for (int i = 0; i < 100; ++i) {
+        // Add particles in a roughly spherical distribution - Second cluster
+        for (int i = 0; i < 150; ++i) {
             float angle1 = (float)i * 0.15f;
             float angle2 = (float)i * 0.035f;
             
@@ -120,7 +114,8 @@ private:
                 cosf(angle2) * 10.0f
             };
              
-            uint32_t material = 1;//i % 3; // Cycle through materials
+            // Cycle through materials 4-7: Glass, Emissive light, Green glass, Water
+            uint32_t material = 4 + ((i / 20) % 4);
             test_cluster_->add_particle(position, 1.0f, material);
         }
         
@@ -218,7 +213,6 @@ private:
                 
                 // Rebuild everything
                 test_cluster_->rebuild_dirty_cells();
-                rebuild_tlas_after_cell_changes();
                 printf("BLAS manager cleared and scene rebuilt\n");
             }
         }
@@ -275,13 +269,14 @@ private:
                     float z = (GetRandomValue(-50, 50) / 10.0f);
                     
                     Vector3 new_pos = {x, y, z};
-                    test_cluster_->add_particle(new_pos, 0.5f, GetRandomValue(0, 2));
+                    // Use all 8 material types (0-7) for dynamic particles
+                    uint32_t material = GetRandomValue(0, 7);
+                    test_cluster_->add_particle(new_pos, 0.5f, material);
                 }
                 
                 {
                     PROFILE_SECTION("Rebuild Dirty Cells");
                     test_cluster_->rebuild_dirty_cells();
-                    rebuild_tlas_after_cell_changes();
                 }
                 printf("Added 10 random particles. Cluster now has %u cells\n", 
                        test_cluster_->get_cell_count());
@@ -302,8 +297,6 @@ private:
                 // printf("AFTER REBUILD: ");
                 // blas_manager_->print_stats();
                 
-                rebuild_tlas_after_cell_changes();
-                
                 // printf("AFTER TLAS REBUILD: ");
                 // blas_manager_->print_stats();
                 // printf("========================\n");
@@ -318,8 +311,6 @@ private:
                 
                 // printf("AFTER REBUILD: ");
                 // blas_manager_->print_stats();
-                
-                rebuild_tlas_after_cell_changes();
                 
                 // printf("AFTER TLAS REBUILD: ");
                 // blas_manager_->print_stats();
@@ -336,8 +327,6 @@ private:
                 // printf("AFTER REBUILD: ");
                 // blas_manager_->print_stats();
                 
-                rebuild_tlas_after_cell_changes();
-                
                 // printf("AFTER TLAS REBUILD: ");
                 // blas_manager_->print_stats();
                 // printf("========================\n");
@@ -353,8 +342,6 @@ private:
                 // printf("AFTER REBUILD: ");
                 // blas_manager_->print_stats();
                 
-                rebuild_tlas_after_cell_changes();
-                
                 // printf("AFTER TLAS REBUILD: ");
                 // blas_manager_->print_stats();
                 // printf("========================\n");
@@ -369,8 +356,6 @@ private:
                 
                 // printf("AFTER REBUILD: ");
                 // blas_manager_->print_stats();
-                
-                rebuild_tlas_after_cell_changes();
                 
                 // printf("AFTER TLAS REBUILD: ");
                 // blas_manager_->print_stats();
@@ -405,20 +390,28 @@ private:
                 PROFILE_SECTION("Solid Surface Meshes");
                 if (show_meshes_) {
                     render_scene_meshes();
+                    // Also render cell meshes in solid mode
+                    cell_debug_renderer_->set_wireframe_mode(false);
+                    cell_debug_renderer_->set_show_meshes(true);
+                    cell_debug_renderer_->set_show_bounds(false);
+                    test_cluster_->accept(*cell_debug_renderer_);
                 }
-                test_cluster_->render_debug_bounds();
+                cell_debug_renderer_->render_cluster_debug_bounds(*test_cluster_);
             } else if (render_mode_ == 2) {
                 PROFILE_SECTION("Wireframe Meshes");
                 if (show_meshes_) {
-                    test_cluster_->render_cells(true);
+                    cell_debug_renderer_->set_wireframe_mode(true);
+                    cell_debug_renderer_->set_show_meshes(true);
+                    cell_debug_renderer_->set_show_bounds(false);
+                    test_cluster_->accept(*cell_debug_renderer_);
                 }
-                test_cluster_->render_debug_bounds();
+                cell_debug_renderer_->render_cluster_debug_bounds(*test_cluster_);
             } else if (render_mode_ == 3) {
                 PROFILE_SECTION("Debug BVH Mode");
                 if (show_meshes_) {
                     render_scene_meshes();
                 }
-                test_cluster_->render_debug_bounds();
+                cell_debug_renderer_->render_cluster_debug_bounds(*test_cluster_);
             }
             
             // Render BVH visualization if enabled or in debug mode
@@ -587,8 +580,13 @@ private:
                            render_mode_ == 2 ? "Wireframe Meshes" : "Debug BVH"), 
                  10, 30, 20, WHITE);
         
-        DrawText("Press SPACE to add random particles", 10, 60, 20, WHITE);
+        DrawText("Press SPACE to add random particles (all 8 materials)", 10, 60, 20, WHITE);
         DrawText("Press ESC to toggle cursor", 10, 90, 20, WHITE);
+        
+        // Material information
+        DrawText("Materials in use:", 10, 390, 14, YELLOW);
+        DrawText("0=Red metallic, 1=Blue diffuse, 2=Green ground, 3=Gold metallic", 10, 410, 12, LIGHTGRAY);
+        DrawText("4=Clear glass, 5=Emissive light, 6=Green glass, 7=Water", 10, 425, 12, LIGHTGRAY);
         
         DrawText(TextFormat("Particles: %u, Cells: %u, LOD: %d (%.1f unit cells)", 
                            test_cluster_->get_particle_count(),
@@ -690,22 +688,7 @@ private:
         printf("========================================\n");
     }
     
-    void rebuild_tlas_after_cell_changes() {
-        PROFILE_SECTION("TLAS Rebuild After Cell Changes");
-        
-        // Clear old TLAS data
-        tlas_manager_->clear();
-        
-        // Re-add all cluster meshes to TLAS
-        test_cluster_->add_to_tlas();
-        
-        // Build the new TLAS structure
-        tlas_manager_->build(*blas_manager_);
-        
-        printf("TLAS rebuilt: %d instances, %d nodes\n", 
-               tlas_manager_->get_instance_count(), 
-               tlas_manager_->get_node_count());
-    }
+
 
     void cleanup() {
         if (raytracing_shader_.id != 0) UnloadShader(raytracing_shader_);
@@ -720,6 +703,11 @@ private:
     std::unique_ptr<TLASManager> tlas_manager_;
     std::unique_ptr<BVHVisualizer> bvh_visualizer_;
     std::unique_ptr<Cluster> test_cluster_;
+    std::unique_ptr<CellDebugRenderer> cell_debug_renderer_;
+    
+    // Scene geometry BLAS handles
+    BLASHandle sphere_blas_;
+    BLASHandle ground_blas_;
     
     
     Camera camera_;
