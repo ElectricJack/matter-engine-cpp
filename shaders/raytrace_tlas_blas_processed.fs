@@ -205,6 +205,7 @@ uniform sampler2D instancesTexture;    // Instance transforms
 
 // Control uniforms
 uniform int intersectionMode;    // 0=brute force, 1=TLAS/BLAS traversal
+uniform int debugMode;          // 0=normal rendering, 1=show normals, 2=show face normals
 
 // Ray tracing structures
 struct Intersection
@@ -223,6 +224,7 @@ struct Ray
 struct Triangle
 {
     vec3 v0, v1, v2; // triangle vertices
+    vec3 n0, n1, n2; // per-vertex normals for interpolated shading
     vec3 center;     // for BVH construction (renamed from centroid - reserved keyword)
 };
 
@@ -341,24 +343,47 @@ float IntersectAABB(Ray ray, vec3 aabbMin, vec3 aabbMax)
         return 1e30;
 }
 
-// Decode triangle from texture (optimized layout)
+// Decode triangle from texture (6-row layout with per-vertex normals)
 Triangle decodeTriangle(int triangleIndex)
 {
     Triangle tri;
     
     float triTexCoord = (float(triangleIndex) + 0.5) / float(triangleCount);
     
-    vec4 data0 = texture(trianglesTexture, vec2(triTexCoord, 0.125));  // v0 + materialId
-    vec4 data1 = texture(trianglesTexture, vec2(triTexCoord, 0.375));  // v1
-    vec4 data2 = texture(trianglesTexture, vec2(triTexCoord, 0.625));  // v2
-    vec4 data3 = texture(trianglesTexture, vec2(triTexCoord, 0.875));  // centroid + normal
+    // 6 rows: v0, v1, v2, n0, n1, n2
+    vec4 data0 = texture(trianglesTexture, vec2(triTexCoord, 0.0833));  // v0 (row 0: 1/12)
+    vec4 data1 = texture(trianglesTexture, vec2(triTexCoord, 0.25));    // v1 (row 1: 3/12)
+    vec4 data2 = texture(trianglesTexture, vec2(triTexCoord, 0.4167));  // v2 (row 2: 5/12)
+    vec4 data3 = texture(trianglesTexture, vec2(triTexCoord, 0.5833));  // n0 (row 3: 7/12)
+    vec4 data4 = texture(trianglesTexture, vec2(triTexCoord, 0.75));    // n1 (row 4: 9/12)
+    vec4 data5 = texture(trianglesTexture, vec2(triTexCoord, 0.9167));  // n2 (row 5: 11/12)
     
     tri.v0 = data0.xyz;
     tri.v1 = data1.xyz;
     tri.v2 = data2.xyz;
-    tri.center = data3.xyz;
+    tri.n0 = data3.xyz;
+    tri.n1 = data4.xyz;
+    tri.n2 = data5.xyz;
+    
+    // Calculate centroid for BVH (not stored in texture anymore)
+    tri.center = (tri.v0 + tri.v1 + tri.v2) / 3.0;
     
     return tri;
+}
+
+// Interpolate triangle normal using barycentric coordinates
+vec3 interpolateNormal(Triangle tri, float u, float v)
+{
+    float w = 1.0 - u - v;
+    return normalize(w * tri.n0 + u * tri.n1 + v * tri.n2);
+}
+
+// Get face normal from triangle vertices
+vec3 getFaceNormal(Triangle tri)
+{
+    vec3 edge1 = tri.v1 - tri.v0;
+    vec3 edge2 = tri.v2 - tri.v0;
+    return normalize(cross(edge1, edge2));
 }
 
 // Decode BVH node from texture (matches BVHNode struct)
@@ -680,6 +705,56 @@ HitResult intersectScene(vec3 rayOrigin, vec3 rayDir)
     return result;
 }
 // === END INCLUDE: bvh_tlas_common.glsl ===
+
+// Hit result structure for ray intersections
+struct HitResult {
+    bool hit;           // Whether an intersection occurred
+    float t;            // Distance along ray
+    vec3 position;      // Hit position in world space
+    vec3 normal;        // Interpolated surface normal
+    int material;       // Material ID for shading
+    float u, v;         // Barycentric coordinates for interpolation
+};
+
+// Scene intersection function using TLAS/BLAS traversal
+HitResult intersectScene(vec3 rayOrigin, vec3 rayDirection) {
+    HitResult result;
+    result.hit = false;
+    result.t = 1e30;
+    
+    // Create ray for TLAS traversal
+    Ray ray;
+    ray.O = rayOrigin;
+    ray.D = rayDirection;
+    ray.rD = vec3(1.0) / rayDirection;
+    ray.hit.t = 1e30;
+    ray.hit.instPrim = 0u;
+    
+    // Perform TLAS intersection
+    TLASIntersect(ray);
+    
+    if (ray.hit.t < 1e30) {
+        result.hit = true;
+        result.t = ray.hit.t;
+        result.position = rayOrigin + rayDirection * ray.hit.t;
+        result.u = ray.hit.u;
+        result.v = ray.hit.v;
+        
+        // Extract triangle index from instPrim (lower 20 bits)
+        uint triangleIndex = ray.hit.instPrim & 0xFFFFFu;
+        
+        // Decode triangle data including per-vertex normals
+        Triangle tri = decodeTriangle(int(triangleIndex));
+        
+        // Calculate interpolated normal using barycentric coordinates
+        result.normal = interpolateNormal(tri, ray.hit.u, ray.hit.v);
+        
+        // For now, material ID is 0 (can be extended later)
+        result.material = 0;
+    }
+    
+    return result;
+}
 
 
 // Camera ray generation
@@ -1051,6 +1126,20 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, inout uint seed) {
         // Get intersection details
         vec3 hitPos = rayPos + rayDir * hit.t;
         vec3 normal = normalize(hit.normal);
+        
+        // Debug mode: Show normals as colors
+        if (debugMode == 1) {
+            // Show interpolated normals as RGB colors (map from [-1,1] to [0,1])
+            color += attenuation * (normal * 0.5 + 0.5);
+            break;
+        } else if (debugMode == 2) {
+            // Show face normals as RGB colors
+            uint triangleIndex = hit.instPrim & 0xFFFFFu;
+            Triangle tri = decodeTriangle(int(triangleIndex));
+            vec3 faceNormal = getFaceNormal(tri);
+            color += attenuation * (faceNormal * 0.5 + 0.5);
+            break;
+        }
         
         // Add fog based on distance
         float distance = hit.t;

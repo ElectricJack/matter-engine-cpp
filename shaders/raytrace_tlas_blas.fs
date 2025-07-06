@@ -460,6 +460,20 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, inout uint seed) {
         vec3 hitPos = rayPos + rayDir * hit.t;
         vec3 normal = normalize(hit.normal);
         
+        // Debug mode: Show normals as colors
+        if (debugMode == 1) {
+            // Show interpolated normals as RGB colors (map from [-1,1] to [0,1])
+            color += attenuation * (normal * 0.5 + 0.5);
+            break;
+        } else if (debugMode == 2) {
+            // Show face normals as RGB colors
+            uint triangleIndex = hit.instPrim & 0xFFFFFu;
+            Triangle tri = decodeTriangle(int(triangleIndex));
+            vec3 faceNormal = getFaceNormal(tri);
+            color += attenuation * (faceNormal * 0.5 + 0.5);
+            break;
+        }
+        
         // Add fog based on distance
         float distance = hit.t;
         float fogFactor = 1.0 - exp(-fogDensity * distance * distance);

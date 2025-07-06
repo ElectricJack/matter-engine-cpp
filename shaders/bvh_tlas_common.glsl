@@ -14,6 +14,7 @@ uniform sampler2D instancesTexture;    // Instance transforms
 
 // Control uniforms
 uniform int intersectionMode;    // 0=brute force, 1=TLAS/BLAS traversal
+uniform int debugMode;          // 0=normal rendering, 1=show normals, 2=show face normals
 
 // Ray tracing structures
 struct Intersection

@@ -623,6 +623,7 @@ private:
         camera_up_loc_     = GetShaderLocation(raytracing_shader_, "cameraUp");
         camera_fovy_loc_   = GetShaderLocation(raytracing_shader_, "cameraFovy");
         screen_size_loc_   = GetShaderLocation(raytracing_shader_, "screenSize");
+        debug_mode_loc_    = GetShaderLocation(raytracing_shader_, "debugMode");
         
         // BLAS/TLAS uniforms are now handled by their respective managers
     }
@@ -749,6 +750,13 @@ private:
                 printf("Max depth to show: %d\n", settings.max_depth_to_show);
             }
         }
+        
+        // Debug rendering mode toggle
+        if (IsKeyPressed(KEY_M)) {
+            render_debug_mode_ = (render_debug_mode_ + 1) % 3;
+            const char* mode_names[] = {"Normal rendering", "Show interpolated normals", "Show face normals"};
+            printf("Debug mode: %s\n", mode_names[render_debug_mode_]);
+        }
     }
     
     void render() {
@@ -803,6 +811,7 @@ private:
             SetShaderValue(raytracing_shader_, camera_up_loc_, &camera_.up, SHADER_UNIFORM_VEC3);
             SetShaderValue(raytracing_shader_, camera_fovy_loc_, &camera_.fovy, SHADER_UNIFORM_FLOAT);
             SetShaderValue(raytracing_shader_, screen_size_loc_, &screen_size, SHADER_UNIFORM_VEC2);
+            SetShaderValue(raytracing_shader_, debug_mode_loc_, &render_debug_mode_, SHADER_UNIFORM_INT);
             
             if (should_log) {
                 printf("  Binding BLAS to shader...\n");
@@ -986,8 +995,12 @@ private:
         }
         
         // Animation and performance controls
-        DrawText("Controls: N=Animation, P=Performance stats, X=Reset", 10, screen_height_ - 90, 14, LIGHTGRAY);
-        DrawText("BVH: B=Toggle visualization", 10, screen_height_ - 70, 14, LIGHTGRAY);
+        DrawText("Controls: N=Animation, P=Performance stats, X=Reset", 10, screen_height_ - 110, 14, LIGHTGRAY);
+        DrawText("BVH: B=Toggle visualization", 10, screen_height_ - 90, 14, LIGHTGRAY);
+        
+        // Debug rendering mode info
+        const char* mode_names[] = {"Normal", "Interpolated Normals", "Face Normals"};
+        DrawText(TextFormat("Debug: M=Cycle modes (%s)", mode_names[render_debug_mode_]), 10, screen_height_ - 70, 14, LIGHTGRAY);
         
         // Mouse control info
         if (cursor_disabled_) {
@@ -1037,6 +1050,7 @@ private:
     int current_test_scene_ = 1;
     bool show_bvh_visualization_ = false;
     bool cursor_disabled_ = true;
+    int render_debug_mode_ = 0;  // 0=normal, 1=show normals, 2=show face normals
     
     // GPU textures are now managed by the managers themselves
     
@@ -1046,6 +1060,7 @@ private:
     int camera_up_loc_;
     int camera_fovy_loc_;
     int screen_size_loc_;
+    int debug_mode_loc_;
     
 
 };
