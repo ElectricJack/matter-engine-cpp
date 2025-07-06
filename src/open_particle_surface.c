@@ -125,7 +125,8 @@ static int GetCellIndex(GridCoord coord);
 static GridCoord GetGridCoordFromPosition(Vector3 position);
 static Bounds GetSpatialHashBounds(GridCoord coord);
 static int UpdateDirtyCells(int maxUpdates);
-static void WeldVerticesInMesh(Mesh* mesh);
+static bool IsVertexOnCellBoundary(Vector3 vertex, Bounds cellBounds, float tolerance);
+static void WeldVerticesInMesh(Mesh* mesh, Bounds cellBounds);
 static void SimplifyMesh(Mesh* mesh);
 
 // HashGridCoord function removed - now using spatial hash for cell lookups
@@ -863,7 +864,7 @@ static int UpdateDirtyCells(int maxUpdates) {
         SimplifyMesh(&spatialHashCells[cellIndex].mesh);
         
         // Weld vertices and smooth normals within this mesh
-        WeldVerticesInMesh(&spatialHashCells[cellIndex].mesh);
+        WeldVerticesInMesh(&spatialHashCells[cellIndex].mesh, spatialHashCells[cellIndex].bounds);
 
         UploadMesh(&spatialHashCells[cellIndex].mesh, false);
         spatialHashCells[cellIndex].hasMesh = true;
@@ -886,13 +887,42 @@ static int UpdateDirtyCells(int maxUpdates) {
     return updatedCount;
 }
 
+// Check if a vertex lies on or very close to a cell boundary
+static bool IsVertexOnCellBoundary(Vector3 vertex, Bounds cellBounds, float tolerance) {
+    // Calculate the actual cell boundaries (without overlap)
+    // The original cell size is CELL_SIZE, but bounds.size includes overlap
+    float actualCellSize = CELL_SIZE;
+    Vector3 cellMin = {
+        cellBounds.center.x - actualCellSize * 0.5f,
+        cellBounds.center.y - actualCellSize * 0.5f,
+        cellBounds.center.z - actualCellSize * 0.5f
+    };
+    Vector3 cellMax = {
+        cellBounds.center.x + actualCellSize * 0.5f,
+        cellBounds.center.y + actualCellSize * 0.5f,
+        cellBounds.center.z + actualCellSize * 0.5f
+    };
+    
+    // Check if vertex is within tolerance of any face of the cell boundary
+    bool onXMin = fabsf(vertex.x - cellMin.x) <= tolerance;
+    bool onXMax = fabsf(vertex.x - cellMax.x) <= tolerance;
+    bool onYMin = fabsf(vertex.y - cellMin.y) <= tolerance;
+    bool onYMax = fabsf(vertex.y - cellMax.y) <= tolerance;
+    bool onZMin = fabsf(vertex.z - cellMin.z) <= tolerance;
+    bool onZMax = fabsf(vertex.z - cellMax.z) <= tolerance;
+    
+    // Vertex is on boundary if it's close to any face
+    return onXMin || onXMax || onYMin || onYMax || onZMin || onZMax;
+}
+
 // Weld nearby vertices within a single mesh using spatial binning
-static void WeldVerticesInMesh(Mesh* mesh) {
+static void WeldVerticesInMesh(Mesh* mesh, Bounds cellBounds) {
     if (!mesh || !mesh->vertices || !mesh->normals || mesh->vertexCount == 0) {
         return;
     }
     
     const float WELD_DISTANCE = 0.01f; // Slightly larger threshold for better welding
+    const float BOUNDARY_TOLERANCE = 0.05f; // Tolerance for detecting boundary vertices
     
     // Ensure we have enough capacity for vertices
     if (mesh->vertexCount > cellVertexCapacity) {
@@ -972,6 +1002,10 @@ static void WeldVerticesInMesh(Mesh* mesh) {
     for (int i = 0; i < mesh->vertexCount; i++) {
         if (cellVertices[i].originalIndex == -1) continue; // Already welded
         
+        // Check if this vertex is on a cell boundary
+        bool isOnBoundary = IsVertexOnCellBoundary(cellVertices[i].position, cellBounds, BOUNDARY_TOLERANCE);
+        
+        Vector3 avgPosition = cellVertices[i].position;
         Vector3 avgNormal = cellVertices[i].normal;
         int weldCount = 1;
         
@@ -999,10 +1033,22 @@ static void WeldVerticesInMesh(Mesh* mesh) {
                         
                         float dist = Vector3Distance(cellVertices[i].position, cellVertices[j].position);
                         if (dist < WELD_DISTANCE) {
-                            // Average the normals
+                            // Check if the neighbor vertex is also on a boundary
+                            bool neighborOnBoundary = IsVertexOnCellBoundary(cellVertices[j].position, cellBounds, BOUNDARY_TOLERANCE);
+                            
+                            // Always average the normals for smooth shading
                             avgNormal.x += cellVertices[j].normal.x;
                             avgNormal.y += cellVertices[j].normal.y;
                             avgNormal.z += cellVertices[j].normal.z;
+                            
+                            // Only average positions if neither vertex is on a boundary
+                            // This preserves boundary vertex positions to avoid gaps
+                            if (!isOnBoundary && !neighborOnBoundary) {
+                                avgPosition.x += cellVertices[j].position.x;
+                                avgPosition.y += cellVertices[j].position.y;
+                                avgPosition.z += cellVertices[j].position.z;
+                            }
+                            
                             weldCount++;
                             
                             // Mark as welded
@@ -1013,8 +1059,9 @@ static void WeldVerticesInMesh(Mesh* mesh) {
             }
         }
         
-        // Normalize the averaged normal and apply to mesh
+        // Normalize and apply the averaged values
         if (weldCount > 1) {
+            // Always normalize and apply the averaged normal
             avgNormal.x /= weldCount;
             avgNormal.y /= weldCount;
             avgNormal.z /= weldCount;
@@ -1025,9 +1072,21 @@ static void WeldVerticesInMesh(Mesh* mesh) {
                 avgNormal.y /= len;
                 avgNormal.z /= len;
             }
+            
+            // Only apply averaged position if the vertex is not on a boundary
+            if (!isOnBoundary) {
+                avgPosition.x /= weldCount;
+                avgPosition.y /= weldCount;
+                avgPosition.z /= weldCount;
+                
+                // Update vertex position in mesh
+                mesh->vertices[i * 3] = avgPosition.x;
+                mesh->vertices[i * 3 + 1] = avgPosition.y;
+                mesh->vertices[i * 3 + 2] = avgPosition.z;
+            }
         }
         
-        // Apply the smoothed normal
+        // Apply the smoothed normal (always applied for better shading)
         mesh->normals[i * 3] = avgNormal.x;
         mesh->normals[i * 3 + 1] = avgNormal.y;
         mesh->normals[i * 3 + 2] = avgNormal.z;
