@@ -57,10 +57,11 @@ Cell::~Cell() {
 
 void Cell::calculate_bounds(float smallest_cell_size) {
     // Calculate center and bounds based on coordinates and size
+    // Cell coordinates represent the center position, so no offset needed
     center = Vector3{
-        (coordinates.x + 0.5f) * actual_size,
-        (coordinates.y + 0.5f) * actual_size,
-        (coordinates.z + 0.5f) * actual_size
+        coordinates.x * actual_size,
+        coordinates.y * actual_size,
+        coordinates.z * actual_size
     };
     
     Vector3 half_size = Vector3{actual_size * 0.5f, actual_size * 0.5f, actual_size * 0.5f};

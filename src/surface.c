@@ -364,8 +364,12 @@ static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int 
     int vertexCount = 0;
     int triangleCount = 0;
     
-    // Value for isosurface threshold
-    const float isovalue = 0.0f; // Surface at zero level
+    // Adaptive isosurface threshold based on cell size relative to particle radius
+    // At higher LOD levels (larger cells), use a more negative isovalue to expand the surface
+    // This prevents meshes from becoming too thin when cell resolution decreases
+    float cellSizeRatio = fmaxf(data.cellSize.x, fmaxf(data.cellSize.y, data.cellSize.z)) / particleRadius;
+    float adaptiveOffset = fmaxf(0.0f, (cellSizeRatio - 1.0f) * particleRadius * 0.3f);
+    const float isovalue = -adaptiveOffset; // More negative = larger surface at low LOD
     
     TIMER_START(marching_cubes);
     

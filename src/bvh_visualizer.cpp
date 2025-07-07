@@ -2,6 +2,8 @@
 #include "../include/profiler.hpp"
 #include <cmath>
 #include <algorithm>
+#include <string>
+#include <cstdlib>
 
 BVHVisualizer::BVHVisualizer() {
     // Initialize default settings
@@ -49,6 +51,31 @@ void BVHVisualizer::render_blas_bvh(const BLASManager& blas_manager,
         const BVH* bvh = entry->bvh.get();
         if (!bvh->bvhNode || bvh->nodesUsed == 0) continue;
         
+        // Apply BVH name filtering if specified
+        if (!settings.selected_bvh_filter.empty()) {
+            // Check if this BLAS matches the selected filter by triangle count
+            if (entry->mesh && entry->mesh->triCount > 0) {
+                // Extract triangle count from filter name if it matches pattern
+                std::string filter = settings.selected_bvh_filter;
+                size_t tris_pos = filter.find("tris");
+                if (tris_pos != std::string::npos) {
+                    // Find the number before "tris"
+                    size_t num_start = filter.rfind('_', tris_pos);
+                    if (num_start != std::string::npos) {
+                        std::string tri_count_str = filter.substr(num_start + 1, tris_pos - num_start - 1);
+                        int expected_tri_count = std::atoi(tri_count_str.c_str());
+                        
+                        // Only render if triangle counts match
+                        if (entry->mesh->triCount != expected_tri_count) {
+                            continue;  // Skip this BLAS, it doesn't match
+                        }
+                    }
+                }
+            } else {
+                continue;  // Skip if no mesh or no triangles
+            }
+        }
+        
         // Render this BLAS BVH starting from root node (in local space)
         render_bvh_node_recursive(bvh->bvhNode, 0, 0, settings, settings.blas_color);
         
@@ -92,6 +119,34 @@ void BVHVisualizer::render_blas_bvh_transformed(const BLASManager& blas_manager,
         
         const BVH* bvh = entry->bvh.get();
         if (!bvh->bvhNode || bvh->nodesUsed == 0) continue;
+        
+        // Apply BVH name filtering if specified
+        if (!settings.selected_bvh_filter.empty()) {
+            // Check if this BLAS matches the selected filter
+            // The filter contains names like "Cell(1,-1,0)_Mat6_170tris"
+            // We need to match this against BLAS handles somehow
+            // For now, we'll check triangle count as a heuristic
+            if (entry->mesh && entry->mesh->triCount > 0) {
+                // Extract triangle count from filter name if it matches pattern
+                std::string filter = settings.selected_bvh_filter;
+                size_t tris_pos = filter.find("tris");
+                if (tris_pos != std::string::npos) {
+                    // Find the number before "tris"
+                    size_t num_start = filter.rfind('_', tris_pos);
+                    if (num_start != std::string::npos) {
+                        std::string tri_count_str = filter.substr(num_start + 1, tris_pos - num_start - 1);
+                        int expected_tri_count = std::atoi(tri_count_str.c_str());
+                        
+                        // Only render if triangle counts match
+                        if (entry->mesh->triCount != expected_tri_count) {
+                            continue;  // Skip this BLAS, it doesn't match
+                        }
+                    }
+                }
+            } else {
+                continue;  // Skip if no mesh or no triangles
+            }
+        }
         
         // Render this BLAS BVH with the transform applied
         render_bvh_node_recursive_transformed(bvh->bvhNode, 0, 0, settings, settings.blas_color, record);

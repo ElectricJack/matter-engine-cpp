@@ -7,6 +7,7 @@ extern "C" {
 #include <cstdio>
 #include <memory>
 #include <vector>
+#include <unordered_map>
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -23,7 +24,6 @@ extern "C" {
 #include "include/bvh_analyzer.h"
 #include "include/cluster.h"
 #include "include/cell.h"
-#include "include/cell_debug_renderer.h"
 #include "include/profiler.hpp"
 
 class MatterSurfaceLibDemo {
@@ -33,8 +33,7 @@ public:
           blas_manager_(std::make_unique<BLASManager>()),
           tlas_manager_(std::make_unique<TLASManager>(1000)),
           bvh_visualizer_(std::make_unique<BVHVisualizer>()),
-          test_cluster_(std::make_unique<Cluster>(0, *blas_manager_, *tlas_manager_, 5.0f)),
-          cell_debug_renderer_(std::make_unique<CellDebugRenderer>()) {
+          test_cluster_(std::make_unique<Cluster>(0, *blas_manager_, *tlas_manager_, 5.0f)) {
         
         InitWindow(screen_width_, screen_height_, "MatterSurfaceLib - Cluster and Cell System");
         SetTargetFPS(60);
@@ -57,7 +56,6 @@ public:
         ImGui_ImplOpenGL3_Init("#version 330");
         
         setup_rendering();
-        register_scene_geometry();
         setup_matter_system();
         
         // Initialize BVH analysis system
@@ -102,19 +100,6 @@ public:
     }
 
 private:
-    void register_scene_geometry() {
-        printf("=== Registering Scene Geometry ===\n");
-        
-        // Register sphere BLAS for reflective sphere
-        sphere_blas_ = BLASFactory::register_sphere(*blas_manager_, 1.0f, 32, 16);
-        printf("  Sphere BLAS registered: handle=%u\n", sphere_blas_);
-        
-        // Register plane BLAS for ground
-        ground_blas_ = BLASFactory::register_plane(*blas_manager_, 50.0f, 50.0f);
-        printf("  Ground plane BLAS registered: handle=%u\n", ground_blas_);
-        
-        printf("=== Scene Geometry Registration Complete ===\n");
-    }
 
 
     void setup_matter_system() {
@@ -122,36 +107,42 @@ private:
         printf("Setting up matter system with cluster and cells...\n");
         
         // Add particles in a roughly spherical distribution - First cluster
-        for (int i = 0; i < 150; ++i) {
-            float angle1 = (float)i * 0.05f;
-            float angle2 = (float)i * 0.025f;
+        // for (int i = 0; i < 150; ++i) {
+        //     float angle1 = (float)i * 0.05f;
+        //     float angle2 = (float)i * 0.025f;
             
-            Vector3 position = {
-                cosf(angle1) * sinf(angle2) * 10.0f,
-                sinf(angle1) * sinf(angle2) * 10.0f,
-                cosf(angle2) * 10.0f
-            };
+        //     Vector3 position = {
+        //         cosf(angle1) * sinf(angle2) * 10.0f,
+        //         20 + sinf(angle1) * sinf(angle2) * 10.0f,
+        //         cosf(angle2) * 10.0f
+        //     };
             
-            // Cycle through first 4 materials (0-3): Red metallic, Blue diffuse, Green ground, Gold metallic
-            uint32_t material = (i / 20) % 4;
-            test_cluster_->add_particle(position, 1.0f, material);
-        }
+        //     // Cycle through first 4 materials (0-3): Red metallic, Blue diffuse, Green ground, Gold metallic
+        //     uint32_t material = (i / 20) % 4;
+        //     test_cluster_->add_particle(position, 1.0f, material);
+        // }
 
-        // Add particles in a roughly spherical distribution - Second cluster
-        for (int i = 0; i < 150; ++i) {
-            float angle1 = (float)i * 0.15f;
-            float angle2 = (float)i * 0.035f;
+        // // Add particles in a roughly spherical distribution - Second cluster
+        // for (int i = 0; i < 150; ++i) {
+        //     float angle1 = (float)i * 0.15f;
+        //     float angle2 = (float)i * 0.035f;
             
-            Vector3 position = {
-                5 + cosf(angle1) * sinf(angle2) * 10.0f,
-                -sinf(angle1) * sinf(angle2) * 10.0f,
-                cosf(angle2) * 10.0f
-            };
+        //     Vector3 position = {
+        //         5 + cosf(angle1) * sinf(angle2) * 10.0f,
+        //         -sinf(angle1) * sinf(angle2) * 10.0f,
+        //         cosf(angle2) * 10.0f
+        //     };
              
-            // Cycle through materials 4-7: Glass, Emissive light, Green glass, Water
-            uint32_t material = 4 + ((i / 20) % 4);
-            test_cluster_->add_particle(position, 1.0f, material);
-        }
+        //     // Cycle through materials 4-7: Glass, Emissive light, Green glass, Water
+        //     uint32_t material = 4 + ((i / 20) % 4);
+        //     test_cluster_->add_particle(position, 1.0f, material);
+        // }
+
+
+        test_cluster_->add_particle({0,0,0},  6, 0);
+        test_cluster_->add_particle({12,0,0},  6, 0);
+        //test_cluster_->add_particle({9,0,0},  2, 0);
+        //test_cluster_->add_particle({11,0,0}, 1, 0);
         
         // Add some additional particles in a line
         // for (int i = 0; i < 10; ++i) {
@@ -473,38 +464,39 @@ private:
                 BeginMode3D(camera_);
             }
             
-            if (render_mode_ == 1) {
-                PROFILE_SECTION("Solid Surface Meshes");
-                if (show_meshes_) {
-                    render_scene_meshes();
-                    // Also render cell meshes in solid mode
-                    cell_debug_renderer_->set_wireframe_mode(false);
-                    cell_debug_renderer_->set_show_meshes(true);
-                    cell_debug_renderer_->set_show_bounds(false);
-                    test_cluster_->accept(*cell_debug_renderer_);
-                }
-                cell_debug_renderer_->render_cluster_debug_bounds(*test_cluster_);
-            } else if (render_mode_ == 2) {
-                PROFILE_SECTION("Wireframe Meshes");
-                if (show_meshes_) {
-                    cell_debug_renderer_->set_wireframe_mode(true);
-                    cell_debug_renderer_->set_show_meshes(true);
-                    cell_debug_renderer_->set_show_bounds(false);
-                    test_cluster_->accept(*cell_debug_renderer_);
-                }
-                cell_debug_renderer_->render_cluster_debug_bounds(*test_cluster_);
-            } else if (render_mode_ == 3) {
-                PROFILE_SECTION("Debug BVH Mode");
-                if (show_meshes_) {
-                    render_scene_meshes();
-                }
-                cell_debug_renderer_->render_cluster_debug_bounds(*test_cluster_);
+            if (show_meshes_) {
+                render_scene_meshes();
             }
             
             // Render BVH visualization if enabled or in debug mode
             if (show_bvh_visualization_ || render_mode_ == 3) {
                 PROFILE_SECTION("BVH Visualization");
-                bvh_visualizer_->render(*blas_manager_, *tlas_manager_);
+                
+                // Configure visualization settings for selective rendering
+                auto& settings = bvh_visualizer_->get_settings();
+                
+                // If a BVH is selected in the analysis window, only show that one
+                if (!selected_bvh_for_analysis_.empty() && 
+                    selected_bvh_for_analysis_ != "Main TLAS") {
+                    // Strip " (BVH)" suffix if present to get clean name
+                    std::string clean_name = selected_bvh_for_analysis_;
+                    size_t suffix_pos = clean_name.find(" (BVH)");
+                    if (suffix_pos != std::string::npos) {
+                        clean_name = clean_name.substr(0, suffix_pos);
+                    }
+                    settings.selected_bvh_filter = clean_name;
+                    settings.show_tlas_bvh = false;  // Hide TLAS when showing specific BLAS
+                } else if (selected_bvh_for_analysis_ == "Main TLAS") {
+                    settings.selected_bvh_filter = "";  // Show all BLAS
+                    settings.show_blas_bvh = false;     // Hide BLAS when showing TLAS
+                    settings.show_tlas_bvh = true;
+                } else {
+                    settings.selected_bvh_filter = "";  // Show all when nothing selected
+                    settings.show_blas_bvh = true;
+                    settings.show_tlas_bvh = true;
+                }
+                
+                bvh_visualizer_->render(*blas_manager_, *tlas_manager_, settings);
             }
             
             {
@@ -1104,17 +1096,18 @@ private:
     std::unique_ptr<TLASManager> tlas_manager_;
     std::unique_ptr<BVHVisualizer> bvh_visualizer_;
     std::unique_ptr<Cluster> test_cluster_;
-    std::unique_ptr<CellDebugRenderer> cell_debug_renderer_;
     
     // Scene geometry BLAS handles
     BLASHandle sphere_blas_;
     BLASHandle ground_blas_;
     
+    // Mapping between BVH analysis names and BLAS handles for selective rendering
+    std::unordered_map<std::string, BLASHandle> bvh_name_to_handle_;
     
     Camera camera_;
     Shader raytracing_shader_{};
     bool cursor_disabled_ = false;
-    int render_mode_ = 0; // 0=raytracing, 1=solid_meshes, 2=wireframe_meshes, 3=debug_bvh
+    int render_mode_ = 3; // 0=raytracing, 1=solid_meshes, 2=wireframe_meshes, 3=debug_bvh (start in debug mode)
     bool show_bvh_visualization_ = false;
     bool show_meshes_ = true;
     

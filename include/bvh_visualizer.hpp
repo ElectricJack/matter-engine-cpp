@@ -8,6 +8,7 @@ extern "C" {
 #include "blas_manager.hpp"
 #include "tlas_manager.hpp"
 #include <vector>
+#include <string>
 
 // BVH Visualization system for debugging and understanding acceleration structures
 class BVHVisualizer {
@@ -25,6 +26,7 @@ public:
         Color tlas_color = BLUE;             // Color for TLAS nodes
         Color leaf_color = RED;              // Color for leaf nodes
         Color triangle_color = WHITE;        // Color for triangles
+        std::string selected_bvh_filter = "";  // Filter to show only specific BVH (empty = show all)
     };
 
     BVHVisualizer();
