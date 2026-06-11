@@ -1,0 +1,21 @@
+# Object files
+*.o
+*.obj
+
+# Executables
+cube_app
+*.exe
+*.out
+
+# Mac specific
+.DS_Store
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# IDE files
+.vscode/
+.idea/

@@ -1,0 +1,36 @@
+# Build artifacts
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+obj/
+build/
+
+# Per-project compiled binaries (named after the project)
+BasicWindowApp/cube_app
+SurfaceLib/surface_app
+ObjectAllocatorLib/objectallocator
+OpenParticleSurfaceLib/open_particle_surface
+SpatialQueryLib/spatialquerylib
+GPURayTraceExample/gpu_raytrace
+GPURayTraceExample/shader_preprocessor
+ParticleDynamicsExample/particle_dynamics
+MatterSurfaceLib/matter_surface_lib
+MatterSurfaceLib/shader_preprocessor
+
+# Misc
+SurfaceLib/test_config
+*.ini
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Allow raylib's vendored static lib through the *.a exclusion (committed builds)
+!Libraries/raylib/build/**/libraylib.a
+!Libraries/raylib/src/libraylib.a
