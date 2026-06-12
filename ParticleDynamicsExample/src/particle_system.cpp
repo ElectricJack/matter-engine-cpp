@@ -89,7 +89,16 @@ void ParticleSystem::cleanup() {
     phase_state_.clear();
     active_.clear();
     free_indices_.clear();
-    
+
+    // Clear gamified physics data (must stay in sync with the main SoA arrays)
+    heat_energy_.clear();
+    electric_energy_.clear();
+    chemical_energy_.clear();
+    kinetic_energy_.clear();
+    device_states_.clear();
+    electrical_connections_.clear();
+    active_arcs_.clear();
+
     particle_types_.clear();
     particle_refs_.clear();
     
