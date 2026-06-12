@@ -263,8 +263,10 @@ static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int 
     
     if (!spatialHash) {
         printf("Failed to create spatial hash\n");
-        free(data.scalarField);
-        free(data.materialField);
+        if (!config.enableMemoryReuse) {
+            free(data.scalarField);
+            free(data.materialField);
+        }
         return mesh;
     }
     
