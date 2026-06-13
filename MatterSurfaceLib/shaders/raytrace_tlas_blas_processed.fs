@@ -347,23 +347,36 @@ float IntersectAABB(Ray ray, vec3 aabbMin, vec3 aabbMax)
         return 1e30;
 }
 
+// Tiled texture addressing. Data wider than the texture's tile width wraps into
+// additional vertical tile rows so the texture width never exceeds
+// GL_MAX_TEXTURE_SIZE. rowsPerElem is 6 for triangles, 3 for BVH nodes; the
+// uploader (blas_manager.cpp) lays out texels with the matching convention.
+vec2 tiledTexel(sampler2D tex, int index, int row, int rowsPerElem)
+{
+    ivec2 ts = textureSize(tex, 0);
+    int tileW = ts.x;
+    int tx = index % tileW;
+    int ty = index / tileW;
+    float fx = (float(tx) + 0.5) / float(ts.x);
+    float fy = (float(ty * rowsPerElem + row) + 0.5) / float(ts.y);
+    return vec2(fx, fy);
+}
+
 // Decode triangle from texture (optimized layout)
 Triangle decodeTriangle(int triangleIndex)
 {
     Triangle tri;
-    
-    float triTexCoord = (float(triangleIndex) + 0.5) / float(triangleCount);
-    
-    vec4 data0 = texture(trianglesTexture, vec2(triTexCoord, 0.0833));  // v0 (row 0)
-    vec4 data1 = texture(trianglesTexture, vec2(triTexCoord, 0.25));    // v1 (row 1)
-    vec4 data2 = texture(trianglesTexture, vec2(triTexCoord, 0.4167));  // v2 (row 2)
+
+    vec4 data0 = texture(trianglesTexture, tiledTexel(trianglesTexture, triangleIndex, 0, 6));  // v0 (row 0)
+    vec4 data1 = texture(trianglesTexture, tiledTexel(trianglesTexture, triangleIndex, 1, 6));  // v1 (row 1)
+    vec4 data2 = texture(trianglesTexture, tiledTexel(trianglesTexture, triangleIndex, 2, 6));  // v2 (row 2)
     // Rows 3-5 (per-vertex normals) are sampled lazily at shade time, not during traversal
-    
+
     tri.v0 = data0.xyz;
     tri.v1 = data1.xyz;
     tri.v2 = data2.xyz;
     tri.n0 = tri.n1 = tri.n2 = vec3(0.0);
-    
+
     return tri;
 }
 
@@ -371,17 +384,15 @@ Triangle decodeTriangle(int triangleIndex)
 BVHNode decodeBVHNode(int nodeIndex)
 {
     BVHNode node;
-    
-    float nodeTexCoord = (float(nodeIndex) + 0.5) / float(blasNodeCount);
-    
-    vec4 data0 = texture(blasNodesTexture, vec2(nodeTexCoord, 0.125));  // aabbMin + leftFirst
-    vec4 data1 = texture(blasNodesTexture, vec2(nodeTexCoord, 0.375));  // aabbMax + triCount
-    
+
+    vec4 data0 = texture(blasNodesTexture, tiledTexel(blasNodesTexture, nodeIndex, 0, 3));  // aabbMin + leftFirst
+    vec4 data1 = texture(blasNodesTexture, tiledTexel(blasNodesTexture, nodeIndex, 1, 3));  // aabbMax + triCount
+
     node.aabbMin = data0.xyz;
     node.leftFirst = uint(data0.w);
     node.aabbMax = data1.xyz;
     node.triCount = uint(data1.w);
-    
+
     return node;
 }
 
@@ -637,15 +648,15 @@ HitResult intersectScene(vec3 rayOrigin, vec3 rayDir)
     ray.hit.v = 0.0;
     ray.hit.instPrim = 0u;
     ray.triangleTests = 0; // Initialize triangle test counter
-    
+
     // Perform TLAS traversal
     TLASIntersect(ray);
-    
+
     HitResult result;
     result.hit = (ray.hit.t < 1e30);
     result.t = ray.hit.t;
     result.triangleTests = ray.triangleTests; // Copy debug counter
-    
+
     if (result.hit)
     {
         result.position = rayOrigin + rayDir * ray.hit.t;
@@ -669,7 +680,7 @@ HitResult intersectScene(vec3 rayOrigin, vec3 rayDir)
             // Transform world hit position to local space
             vec3 localHitPos = transformPosition(result.position, inst.invTransform);
             // Smooth normal: lazily sample the per-vertex normals (rows 3-5) and interpolate by barycentrics at the hit
-            { float tc = (float(triIdx) + 0.5) / float(triangleCount); vec3 N0 = texture(trianglesTexture, vec2(tc, 0.5833)).xyz; vec3 N1 = texture(trianglesTexture, vec2(tc, 0.75)).xyz; vec3 N2 = texture(trianglesTexture, vec2(tc, 0.9167)).xyz; vec3 e1 = tri.v1 - tri.v0; vec3 e2 = tri.v2 - tri.v0; vec3 ep = localHitPos - tri.v0; float d00 = dot(e1, e1); float d01 = dot(e1, e2); float d11 = dot(e2, e2); float d20 = dot(ep, e1); float d21 = dot(ep, e2); float den = d00 * d11 - d01 * d01; if (abs(den) < 1e-12) { normal = normalize(cross(e1, e2)); } else { float bv = (d11 * d20 - d01 * d21) / den; float bw = (d00 * d21 - d01 * d20) / den; float bu = 1.0 - bv - bw; normal = normalize(bu * N0 + bv * N1 + bw * N2); } }
+            { vec3 N0 = texture(trianglesTexture, tiledTexel(trianglesTexture, int(triIdx), 3, 6)).xyz; vec3 N1 = texture(trianglesTexture, tiledTexel(trianglesTexture, int(triIdx), 4, 6)).xyz; vec3 N2 = texture(trianglesTexture, tiledTexel(trianglesTexture, int(triIdx), 5, 6)).xyz; vec3 e1 = tri.v1 - tri.v0; vec3 e2 = tri.v2 - tri.v0; vec3 ep = localHitPos - tri.v0; float d00 = dot(e1, e1); float d01 = dot(e1, e2); float d11 = dot(e2, e2); float d20 = dot(ep, e1); float d21 = dot(ep, e2); float den = d00 * d11 - d01 * d01; if (abs(den) < 1e-12) { normal = normalize(cross(e1, e2)); } else { float bv = (d11 * d20 - d01 * d21) / den; float bw = (d00 * d21 - d01 * d20) / den; float bu = 1.0 - bv - bw; normal = normalize(bu * N0 + bv * N1 + bw * N2); } }
         }
         
         // Transform normal to world space

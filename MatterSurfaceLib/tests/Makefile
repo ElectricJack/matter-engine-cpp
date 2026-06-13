@@ -56,10 +56,10 @@ TARGET = minimal_cell_test
 $(TARGET): $(MAIN_SOURCE) $(MATTER_SOURCES)
 	$(CC) $(MAIN_SOURCE) $(MATTER_SOURCES) -o $(TARGET) $(CFLAGS) $(INCLUDE_PATHS) $(LDFLAGS) $(LDLIBS)
 
-.PHONY: clean run run-simp
+.PHONY: clean run run-simp run-blas
 
 clean:
-	rm -f $(TARGET) $(SIMP_TARGET)
+	rm -f $(TARGET) $(SIMP_TARGET) $(BLAS_TARGET)
 
 run: $(TARGET)
 	./$(TARGET)
@@ -77,3 +77,13 @@ $(SIMP_TARGET): $(SIMP_SOURCES)
 
 run-simp: $(SIMP_TARGET)
 	./$(SIMP_TARGET)
+
+# BLAS reference-counting / re-mesh leak regression tests (headless, no GL window)
+BLAS_TARGET = blas_refcount_tests
+BLAS_SOURCES = blas_refcount_tests.cpp ../src/blas_manager.cpp ../src/bvh.cpp
+
+$(BLAS_TARGET): $(BLAS_SOURCES)
+	$(CC) $(BLAS_SOURCES) -o $(BLAS_TARGET) $(CFLAGS) $(INCLUDE_PATHS) $(LDFLAGS) $(LDLIBS)
+
+run-blas: $(BLAS_TARGET)
+	./$(BLAS_TARGET)

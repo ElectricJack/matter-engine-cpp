@@ -255,7 +255,7 @@ void Cluster::update_cell_meshes(Cell* cell) {
     if (!cell->material_particle_indices.empty()) {
         cell->rebuild_meshes(particles_, blas_manager_, simplification_ratio_);
     } else {
-        cell->clear_meshes();
+        cell->clear_meshes(&blas_manager_);
     }
     
     cell->mesh_version++;
@@ -412,10 +412,16 @@ void Cluster::set_lod_level(int lod_level, bool clear_blas) {
 
 void Cluster::force_rebuild_all_cells() {
     printf("Cluster %u: Force rebuilding all cells at LOD level %d\n", cluster_id_, current_lod_level_);
-    
+
     // Clear all existing cells
     clear_all_cells();
-    
+
+    // Every cell mesh is regenerated below, so wipe the BLAS manager to reclaim
+    // entries from the previous build (they otherwise leak: cell destructors run
+    // without a manager handle, and re-meshing yields fresh content hashes that
+    // dedup can't match).
+    blas_manager_.clear();
+
     // Mark all particles as needing new cell assignment
     for (const auto& particle : particles_) {
         mark_cells_dirty_around_particle(particle.position, particle.radius);

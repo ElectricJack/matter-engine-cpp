@@ -57,10 +57,15 @@ public:
         std::unique_ptr<BVH> bvh;
         std::vector<Tri> triangles;
         uint32_t hash;
-        
-        BLASEntry(BLASHandle h, std::unique_ptr<BvhMesh> m, std::unique_ptr<BVH> b, std::vector<Tri>&& tris, uint32_t hash_val) 
-            : handle(h), mesh(std::move(m)), bvh(std::move(b)), triangles(std::move(tris)), hash(hash_val) {}
+        uint32_t ref_count; // number of live owners (cells) referencing this BLAS
+
+        BLASEntry(BLASHandle h, std::unique_ptr<BvhMesh> m, std::unique_ptr<BVH> b, std::vector<Tri>&& tris, uint32_t hash_val)
+            : handle(h), mesh(std::move(m)), bvh(std::move(b)), triangles(std::move(tris)), hash(hash_val), ref_count(1) {}
     };
+
+    // Texel columns are capped to this so the texture width never exceeds
+    // GL_MAX_TEXTURE_SIZE; data beyond the cap wraps into additional tile rows.
+    static constexpr int TEXTURE_TILE_WIDTH = 8192;
 
     BLASManager();
     ~BLASManager();
@@ -84,6 +89,10 @@ public:
     //BLASHandle register_triangles_legacy(const std::vector<LegacyTriangle>& triangles);
     //BLASHandle register_triangles_legacy(LegacyTriangle* triangles, int triangle_count);
     
+    // Release one reference to a BLAS. When the last owner releases it, the
+    // entry is removed and its GPU footprint reclaimed. No-op for invalid/0.
+    void release_blas(BLASHandle handle);
+
     // Check if a BLAS exists
     bool has_blas(BLASHandle handle) const;
     

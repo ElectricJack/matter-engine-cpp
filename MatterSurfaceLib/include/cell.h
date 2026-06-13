@@ -38,7 +38,9 @@ struct Cell {
     
     // Mesh management
     void rebuild_meshes(const std::vector<StaticParticle>& cluster_particles, BLASManager& blas_manager, float simplification_ratio = 1.0f);
-    void clear_meshes();
+    // Drops this cell's meshes. When blas_manager is provided, the cell's BLAS
+    // references are released so stale entries don't accumulate on the GPU.
+    void clear_meshes(BLASManager* blas_manager = nullptr);
     bool contains_point(const Vector3& local_point) const;
     bool intersects_sphere(const Vector3& center, float radius) const;
     

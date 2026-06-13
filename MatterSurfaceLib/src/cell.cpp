@@ -123,7 +123,7 @@ void Cell::clear_particle_indices() {
 }
 
 void Cell::rebuild_meshes(const std::vector<StaticParticle>& cluster_particles, BLASManager& blas_manager, float simplification_ratio) {
-    clear_meshes();
+    clear_meshes(&blas_manager);
 
     if (material_particle_indices.empty()) {
         return;
@@ -353,19 +353,27 @@ void Cell::generate_mesh_for_material(uint32_t material_id, const std::vector<St
     }
 }
 
-void Cell::clear_meshes() {
+void Cell::clear_meshes(BLASManager* blas_manager) {
+    // Release this cell's BLAS references so the manager can reclaim entries
+    // that no live cell still points at (prevents unbounded GPU accumulation).
+    if (blas_manager) {
+        for (const auto& blas_entry : material_blas) {
+            blas_manager->release_blas(blas_entry.second);
+        }
+    }
+
     // Properly free both GPU and CPU mesh resources
     for (auto& mesh_entry : material_meshes) {
         Mesh& mesh = mesh_entry.second;
-        
+
         // First, unload GPU resources (VAO, VBOs, etc.)
         // This is critical - without this, old mesh data stays on GPU!
         UnloadMesh(mesh);
-        
+
         // Note: UnloadMesh() already frees the CPU memory (vertices, normals, etc.)
         // so we don't need to manually call RL_FREE() anymore
     }
-    
+
     material_meshes.clear();
     material_blas.clear();
     has_meshes = false;

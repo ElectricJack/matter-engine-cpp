@@ -385,7 +385,7 @@ void TLASManager::generate_instance_texture_data(const BLASManager& blas_manager
                                    draw_records_[i].blas_handle : INVALID_BLAS_HANDLE;
             BLASOffsets offsets = blas_manager.get_offsets(blas_handle);
             output_data[metadataIdx + 0] = static_cast<float>(offsets.node_offset);
-            
+
             // Instance metadata set
             
             // Get material ID from the corresponding draw record
@@ -552,7 +552,6 @@ void TLASManager::bind_to_shader(Shader shader, const BLASManager& blas_manager)
         // Set counts
         int node_count = get_node_count();
         int inst_count = get_instance_count();
-        
         if (tlas_node_count_loc_ != -1) {
             SetShaderValue(shader, tlas_node_count_loc_, &node_count, SHADER_UNIFORM_INT);
         }

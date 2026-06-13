@@ -38,7 +38,7 @@ public:
         
         InitWindow(screen_width_, screen_height_, "MatterSurfaceLib - Cluster and Cell System");
         SetTargetFPS(60);
-        
+
         // Start in UI interaction mode (cursor enabled) for immediate ImGui access
         cursor_disabled_ = false;
         EnableCursor();
@@ -122,6 +122,7 @@ public:
         int   mode   = getenv("MSL_RENDER_MODE")  ? atoi(getenv("MSL_RENDER_MODE"))  : 1;
         int   frames = getenv("MSL_FRAMES")       ? atoi(getenv("MSL_FRAMES"))       : 24;
         render_mode_ = mode;
+        if (getenv("MSL_DEBUG_TRI")) debug_triangle_tests_ = true;
 
         // Default view frames the two-sphere blob (world centers ~(0,2,0) and (12,2,0), r=6).
         camera_.position = {6.0f, 16.0f, 34.0f};
