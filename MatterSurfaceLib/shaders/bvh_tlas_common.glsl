@@ -307,10 +307,12 @@ vec3 transformNormal(vec3 normal, float transform[16])
 // BVH traversal (ported from BVH::Intersect in bvh.cpp)
 void BVHIntersect(inout Ray ray, uint instanceIdx, uint blasOffset)
 {
-    // Stack for iterative BVH traversal
-    int stack[32];
+    // Stack for iterative BVH traversal. Size must exceed the builder's
+    // MAX_DEPTH (40 in bvh.cpp) or deep trees overflow and corrupt traversal;
+    // 64 matches the CPU reference BVH::Intersect stack.
+    int stack[64];
     int stackPtr = 0;
-    
+
     // Start with root node
     int nodeIdx = int(blasOffset); int bvhSteps = 0;
     
@@ -360,7 +362,7 @@ void BVHIntersect(inout Ray ray, uint instanceIdx, uint blasOffset)
         else
         {
             nodeIdx = leftChild;
-            if (dist2 != 1e30 && stackPtr < 31)
+            if (dist2 != 1e30 && stackPtr < 63)
                 stack[stackPtr++] = rightChild;
         }
     }
@@ -389,10 +391,10 @@ void TLASIntersect(inout Ray ray)
     // Initialize reciprocals for TLAS traversal
     ray.rD = vec3(1.0) / ray.D;
     
-    // Stack for iterative TLAS traversal
-    int stack[32];
+    // Stack for iterative TLAS traversal (sized to match the CPU reference, 64).
+    int stack[64];
     int stackPtr = 0;
-    
+
     // Start with TLAS root node
     int nodeIdx = 0; int tlasSteps = 0;
     
@@ -439,7 +441,7 @@ void TLASIntersect(inout Ray ray)
         {
             // Visit near node; push the far node if the ray intersects it
             nodeIdx = int(leftChild);
-            if (dist2 != 1e30 && stackPtr < 31)
+            if (dist2 != 1e30 && stackPtr < 63)
                 stack[stackPtr++] = int(rightChild);
         }
     }

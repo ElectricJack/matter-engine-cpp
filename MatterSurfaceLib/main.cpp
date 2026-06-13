@@ -137,6 +137,33 @@ public:
         test_cluster_->set_simplification_ratio(ratio);
         test_cluster_->force_rebuild_all_cells();
 
+        // Reproduce the interactive "add particles" path headlessly: add N random
+        // particles in MSL_ADD_BATCHES batches, rebuilding dirty cells after each
+        // batch (matching the UI button), so a capture exercises incremental
+        // re-meshing. Used to verify the deep-BVH / shader-stack-depth fix.
+        if (const char* addp = getenv("MSL_ADD_PARTICLES")) {
+            int total   = atoi(addp);
+            int batches = getenv("MSL_ADD_BATCHES") ? atoi(getenv("MSL_ADD_BATCHES")) : 1;
+            if (batches < 1) batches = 1;
+            int per_batch = total / batches;
+            SetRandomSeed(1234); // deterministic scene for pixel-comparable captures
+            for (int b = 0; b < batches; ++b) {
+                for (int i = 0; i < per_batch; ++i) {
+                    Vector3 new_pos = {
+                        GetRandomValue(-50, 50) / 10.0f,
+                        GetRandomValue(-50, 50) / 10.0f,
+                        GetRandomValue(-50, 50) / 10.0f};
+                    uint32_t material = GetRandomValue(0, 7);
+                    test_cluster_->add_particle(new_pos, 0.5f, material);
+                }
+                test_cluster_->rebuild_dirty_cells();
+            }
+            printf("[capture] added %d particles in %d batches; BLAS=%d tris=%d\n",
+                   per_batch * batches, batches,
+                   blas_manager_->get_unique_blas_count(),
+                   blas_manager_->get_total_triangle_count());
+        }
+
         printf("[capture] ratio=%.3f mode=%d frames=%d -> %s\n", ratio, mode, frames, out_path);
 
         for (int i = 0; i < frames; ++i) {
