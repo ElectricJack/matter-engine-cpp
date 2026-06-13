@@ -515,6 +515,12 @@ private:
             render_ui();
         }
         
+        // Flush raylib's batched geometry (e.g. the raytrace blit) to the framebuffer
+        // before ImGui draws. ImGui's GL backend renders immediately, but raylib defers
+        // its batch to EndDrawing — without this flush the full-screen raytrace quad is
+        // drawn on top of the UI, hiding it in raytrace mode.
+        rlDrawRenderBatchActive();
+
         // Render ImGui
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -525,42 +531,93 @@ private:
         }
     }
     
+    // Adapt the raytrace render scale based on the previous frame time. Under vsync the
+    // frame time floors at ~16.7ms, so "sitting at the cap" actually means GPU headroom:
+    // scale up after sustained headroom (debounced to avoid flicker), drop immediately
+    // when the frame goes GPU-bound (>20ms).
+    void update_render_scale() {
+        float ft = GetFrameTime(); // seconds for the previous frame
+        if (ft > 0.020f) {
+            if (render_scale_ > 0.25f) render_scale_ -= 0.25f;
+            rt_up_count_ = 0;
+        } else if (ft <= 0.017f) {
+            if (++rt_up_count_ >= 30) {
+                if (render_scale_ < 1.0f) render_scale_ += 0.25f;
+                rt_up_count_ = 0;
+            }
+        } else {
+            rt_up_count_ = 0;
+        }
+        if (render_scale_ < 0.25f) render_scale_ = 0.25f;
+        if (render_scale_ > 1.0f) render_scale_ = 1.0f;
+    }
+
+    // (Re)create the offscreen target only when the required size changes.
+    void ensure_rt_target(int w, int h) {
+        if (rt_target_.id != 0 && rt_w_ == w && rt_h_ == h) return;
+        if (rt_target_.id != 0) UnloadRenderTexture(rt_target_);
+        rt_target_ = LoadRenderTexture(w, h);
+        SetTextureFilter(rt_target_.texture, TEXTURE_FILTER_BILINEAR);
+        rt_w_ = w;
+        rt_h_ = h;
+    }
+
     void render_raytraced() {
+        // Adapt render scale and size the offscreen target accordingly.
+        update_render_scale();
+        int full_w = GetScreenWidth();
+        int full_h = GetScreenHeight();
+        int rw = static_cast<int>(full_w * render_scale_); if (rw < 1) rw = 1;
+        int rh = static_cast<int>(full_h * render_scale_); if (rh < 1) rh = 1;
+        ensure_rt_target(rw, rh);
+
+        BeginTextureMode(rt_target_);
+        ClearBackground(BLACK);
+
         {
             PROFILE_SECTION("Shader Setup");
             BeginShaderMode(raytracing_shader_);
-            
-            Vector2 screen_size = {static_cast<float>(GetScreenWidth()), static_cast<float>(GetScreenHeight())};
-            
+
+            // screenSize must match the offscreen target so ray generation is correct.
+            Vector2 screen_size = {static_cast<float>(rw), static_cast<float>(rh)};
+
             SetShaderValue(raytracing_shader_, camera_pos_loc_, &camera_.position, SHADER_UNIFORM_VEC3);
             SetShaderValue(raytracing_shader_, camera_target_loc_, &camera_.target, SHADER_UNIFORM_VEC3);
             SetShaderValue(raytracing_shader_, camera_up_loc_, &camera_.up, SHADER_UNIFORM_VEC3);
             SetShaderValue(raytracing_shader_, camera_fovy_loc_, &camera_.fovy, SHADER_UNIFORM_FLOAT);
             SetShaderValue(raytracing_shader_, screen_size_loc_, &screen_size, SHADER_UNIFORM_VEC2);
-            
+
             int debug_mode = debug_triangle_tests_ ? 1 : 0;
             SetShaderValue(raytracing_shader_, debug_triangle_tests_loc_, &debug_mode, SHADER_UNIFORM_INT);
         }
-        
+
         {
             PROFILE_SECTION("BLAS Binding");
             blas_manager_->bind_to_shader(raytracing_shader_);
         }
-        
+
         {
             PROFILE_SECTION("TLAS Binding");
             tlas_manager_->bind_to_shader(raytracing_shader_, *blas_manager_);
         }
-        
+
         {
             PROFILE_SECTION("Fullscreen Quad");
-            DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), WHITE);
+            DrawRectangle(0, 0, rw, rh, WHITE);
         }
-        
+
         {
             PROFILE_SECTION("End Shader");
             EndShaderMode();
         }
+
+        EndTextureMode();
+
+        // Blit the offscreen result upscaled to the screen (negative source height flips Y).
+        DrawTexturePro(rt_target_.texture,
+                       (Rectangle){0.0f, 0.0f, static_cast<float>(rw), -static_cast<float>(rh)},
+                       (Rectangle){0.0f, 0.0f, static_cast<float>(full_w), static_cast<float>(full_h)},
+                       (Vector2){0.0f, 0.0f}, 0.0f, WHITE);
     }
     
     void render_scene_meshes() {
@@ -677,7 +734,60 @@ private:
         }
         
         ImGui::Separator();
-        
+
+        // Camera controls — clickable orbit/zoom so the view is fully navigable without
+        // locking the cursor or using WASD (important over remote desktop). Buttons use
+        // auto-repeat so holding them down moves the camera continuously.
+        ImGui::Text("Camera");
+        {
+            float dx = camera_.position.x - camera_.target.x;
+            float dy = camera_.position.y - camera_.target.y;
+            float dz = camera_.position.z - camera_.target.z;
+            float dist = sqrtf(dx * dx + dy * dy + dz * dz);
+            if (dist < 0.0001f) dist = 0.0001f;
+            float yaw = atan2f(dz, dx);
+            float pitch = asinf(dy / dist);
+            bool changed = false;
+            const float orbit_step = 0.04f; // radians per repeat tick
+
+            ImGui::PushButtonRepeat(true);
+            ImGui::Text("Orbit:");
+            if (ImGui::Button("Left"))  { yaw -= orbit_step; changed = true; }
+            ImGui::SameLine();
+            if (ImGui::Button("Right")) { yaw += orbit_step; changed = true; }
+            ImGui::SameLine();
+            if (ImGui::Button("Up"))    { pitch += orbit_step; changed = true; }
+            ImGui::SameLine();
+            if (ImGui::Button("Down"))  { pitch -= orbit_step; changed = true; }
+
+            if (ImGui::Button("Zoom In"))  { dist *= 0.96f; changed = true; }
+            ImGui::SameLine();
+            if (ImGui::Button("Zoom Out")) { dist *= 1.04f; changed = true; }
+            ImGui::PopButtonRepeat();
+
+            if (ImGui::SliderFloat("Distance", &dist, 1.0f, 150.0f)) changed = true;
+
+            // Clamp pitch just shy of the poles so the orbit never flips/gimbal-locks.
+            const float pitch_limit = 1.5533f; // ~89 degrees
+            if (pitch > pitch_limit) pitch = pitch_limit;
+            if (pitch < -pitch_limit) pitch = -pitch_limit;
+            if (dist < 1.0f) dist = 1.0f;
+
+            if (changed) {
+                camera_.position.x = camera_.target.x + dist * cosf(pitch) * cosf(yaw);
+                camera_.position.y = camera_.target.y + dist * sinf(pitch);
+                camera_.position.z = camera_.target.z + dist * cosf(pitch) * sinf(yaw);
+            }
+
+            if (ImGui::Button("Reset View")) {
+                camera_.position = {3.0f, 2.0f, 5.0f};
+                camera_.target = {0.0f, 0.0f, 0.0f};
+                camera_.up = {0.0f, 1.0f, 0.0f};
+            }
+        }
+
+        ImGui::Separator();
+
         // Particle system controls
         ImGui::Text("Particle System");
         if (ImGui::Button("Add Random Particles")) {
@@ -1085,6 +1195,7 @@ private:
 
     void cleanup() {
         if (raytracing_shader_.id != 0) UnloadShader(raytracing_shader_);
+        if (rt_target_.id != 0) UnloadRenderTexture(rt_target_);
         // Managers clean up their own textures in destructors
     }
     
@@ -1106,8 +1217,15 @@ private:
     
     Camera camera_;
     Shader raytracing_shader_{};
+
+    // Dynamic resolution scaling for the raytrace pass (bounds frame time to avoid GPU TDR)
+    RenderTexture2D rt_target_{};
+    int rt_w_ = 0, rt_h_ = 0;
+    float render_scale_ = 1.0f;
+    int rt_up_count_ = 0; // consecutive headroom frames before scaling resolution back up
+
     bool cursor_disabled_ = false;
-    int render_mode_ = 3; // 0=raytracing, 1=solid_meshes, 2=wireframe_meshes, 3=debug_bvh (start in debug mode)
+    int render_mode_ = 3; // 0=raytracing, 1=solid_meshes, 2=wireframe_meshes, 3=debug_bvh
     bool show_bvh_visualization_ = false;
     bool show_meshes_ = true;
     

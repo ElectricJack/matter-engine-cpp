@@ -321,9 +321,12 @@ void BVHIntersect(inout Ray ray, uint instanceIdx, uint blasOffset)
     
     // Start with root node
     int nodeIdx = int(blasOffset);
-    
+    int bvhSteps = 0;
+
     while (true)
     {
+        // Safety cap: bound worst-case traversal so a pathological ray can't hang the GPU (TDR)
+        if (++bvhSteps > 4096) break;
         BVHNode node = decodeBVHNode(nodeIdx);
         
         if (node.triCount > 0u) // Leaf node
@@ -403,9 +406,12 @@ void TLASIntersect(inout Ray ray)
     
     // Start with TLAS root node
     int nodeIdx = 0;
-    
+    int tlasSteps = 0;
+
     while (true)
     {
+        // Safety cap: bound worst-case traversal so a pathological ray can't hang the GPU (TDR)
+        if (++tlasSteps > 512) break;
         TLASNode node = decodeTLASNode(nodeIdx);
         
         if (node.leftRight == 0u) // Leaf node
@@ -492,10 +498,9 @@ HitResult intersectScene(vec3 rayOrigin, vec3 rayDir)
             // Use face normal for flat shading
             normal = normalize(cross(tri.v1 - tri.v0, tri.v2 - tri.v0));
         } else {
-            // Transform world hit position to local space
-            vec3 localHitPos = transformPosition(result.position, inst.invTransform);
-            // Smooth normal is the normalized position from sphere center (origin in local space)
-            normal = normalize(localHitPos);
+            // Smooth shading: interpolate the per-vertex normals by the hit's
+            // barycentric coordinates (works for any mesh, not just spheres).
+            normal = interpolateNormal(tri, ray.hit.u, ray.hit.v);
         }
         
         // Transform normal to world space

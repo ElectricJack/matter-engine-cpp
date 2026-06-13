@@ -83,7 +83,14 @@ BLASHandle BLASManager::register_triangles(const std::vector<Tri>& triangles) {
 }
 
 
-BLASHandle BLASManager::register_triangles(Tri* triangles, int triangle_count) {
+BLASHandle BLASManager::register_triangles(const std::vector<Tri>& triangles, const std::vector<TriEx>& triex) {
+    const TriEx* triex_ptr = (triex.size() == triangles.size() && !triex.empty()) ? triex.data() : nullptr;
+    return register_triangles(const_cast<Tri*>(triangles.data()),
+                              static_cast<int>(triangles.size()), triex_ptr);
+}
+
+
+BLASHandle BLASManager::register_triangles(Tri* triangles, int triangle_count, const TriEx* triex) {
     PROFILE_SECTION("BLAS Registration");
     
     if (!triangles || triangle_count <= 0) {
@@ -115,7 +122,15 @@ BLASHandle BLASManager::register_triangles(Tri* triangles, int triangle_count) {
         for (int i = 0; i < triangle_count; i++) {
             mesh->tri[i] = triangles[i];
         }
-        
+
+        // Copy per-vertex shading normals when provided (indexed the same as mesh->tri).
+        if (triex) {
+            mesh->triEx = static_cast<TriEx*>(MALLOC64(triangle_count * sizeof(TriEx)));
+            for (int i = 0; i < triangle_count; i++) {
+                mesh->triEx[i] = triex[i];
+            }
+        }
+
         // Create BVH using the proper constructor
         auto bvh = std::make_unique<BVH>(mesh.get());
         
@@ -323,47 +338,70 @@ void BLASManager::ensure_gpu_textures_ready() {
         
         if (!all_triangles.empty()) {
             int texture_width = static_cast<int>(all_triangles.size());
-            int texture_height = 4;
-            
+            int texture_height = 6; // 3 rows for vertices + 3 rows for per-vertex normals
+
             std::vector<float> texture_data(texture_width * texture_height * 4);
-            
-            for (size_t i = 0; i < all_triangles.size(); i++) {
-                const Tri& tri = all_triangles[i];
-                int base_idx = static_cast<int>(i) * 4;
-                
-                // Triangle data processed
-                
-                // Row 0: v0 + materialId
-                texture_data[base_idx + 0] = tri.vertex0.x;
-                texture_data[base_idx + 1] = tri.vertex0.y;
-                texture_data[base_idx + 2] = tri.vertex0.z;
-                texture_data[base_idx + 3] = 0.0f; // No material_id in new format
-                
-                // Row 1: v1
-                int row1_idx = texture_width * 4 + base_idx;
-                texture_data[row1_idx + 0] = tri.vertex1.x;
-                texture_data[row1_idx + 1] = tri.vertex1.y;
-                texture_data[row1_idx + 2] = tri.vertex1.z;
-                texture_data[row1_idx + 3] = 0.0f;
-                
-                // Row 2: v2
-                int row2_idx = texture_width * 8 + base_idx;
-                texture_data[row2_idx + 0] = tri.vertex2.x;
-                texture_data[row2_idx + 1] = tri.vertex2.y;
-                texture_data[row2_idx + 2] = tri.vertex2.z;
-                texture_data[row2_idx + 3] = 0.0f;
-                
-                // Row 3: normal (calculated from cross product)
-                int row3_idx = texture_width * 12 + base_idx;
-                float3 edge1 = tri.vertex1 - tri.vertex0;
-                float3 edge2 = tri.vertex2 - tri.vertex0;
-                float3 normal = normalize(cross(edge1, edge2));
-                texture_data[row3_idx + 0] = normal.x;
-                texture_data[row3_idx + 1] = normal.y;
-                texture_data[row3_idx + 2] = normal.z;
-                texture_data[row3_idx + 3] = 0.0f;
+
+            // Walk entries in the same order as generate_triangle_data so the flat
+            // all_triangles index lines up with each entry's per-triangle triEx normals.
+            size_t triangle_index = 0;
+            for (const auto& entry : entries_) {
+                if (!entry->mesh || !entry->bvh) continue;
+                const bool has_normals = (entry->mesh->triEx != nullptr);
+
+                for (int i = 0; i < entry->mesh->triCount; i++) {
+                    uint original_idx = entry->bvh->triIdx[i];
+                    if (original_idx >= entry->triangles.size() || triangle_index >= all_triangles.size()) {
+                        continue;
+                    }
+
+                    const Tri& tri = all_triangles[triangle_index];
+                    int base_idx = static_cast<int>(triangle_index) * 4;
+
+                    // Row 0: v0
+                    texture_data[base_idx + 0] = tri.vertex0.x;
+                    texture_data[base_idx + 1] = tri.vertex0.y;
+                    texture_data[base_idx + 2] = tri.vertex0.z;
+                    texture_data[base_idx + 3] = 0.0f;
+
+                    // Row 1: v1
+                    int row1_idx = texture_width * 4 + base_idx;
+                    texture_data[row1_idx + 0] = tri.vertex1.x;
+                    texture_data[row1_idx + 1] = tri.vertex1.y;
+                    texture_data[row1_idx + 2] = tri.vertex1.z;
+                    texture_data[row1_idx + 3] = 0.0f;
+
+                    // Row 2: v2
+                    int row2_idx = texture_width * 8 + base_idx;
+                    texture_data[row2_idx + 0] = tri.vertex2.x;
+                    texture_data[row2_idx + 1] = tri.vertex2.y;
+                    texture_data[row2_idx + 2] = tri.vertex2.z;
+                    texture_data[row2_idx + 3] = 0.0f;
+
+                    // Per-vertex normals (rows 3-5). Fall back to the face normal when
+                    // the mesh carries no shading normals so all three rows match.
+                    float3 n0, n1, n2;
+                    if (has_normals) {
+                        const TriEx& ex = entry->mesh->triEx[original_idx];
+                        n0 = ex.N0; n1 = ex.N1; n2 = ex.N2;
+                    } else {
+                        float3 fn = normalize(cross(tri.vertex1 - tri.vertex0, tri.vertex2 - tri.vertex0));
+                        n0 = n1 = n2 = fn;
+                    }
+
+                    const float3 normals[3] = { n0, n1, n2 };
+                    for (int row = 0; row < 3; row++) {
+                        int row_idx = texture_width * ((row + 3) * 4) + base_idx;
+                        texture_data[row_idx + 0] = normals[row].x;
+                        texture_data[row_idx + 1] = normals[row].y;
+                        texture_data[row_idx + 2] = normals[row].z;
+                        texture_data[row_idx + 3] = 0.0f;
+                    }
+
+                    triangle_index++;
+                }
             }
-            
+
             Image tri_image = {
                 .data = texture_data.data(),
                 .width = texture_width,

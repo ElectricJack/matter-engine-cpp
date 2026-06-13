@@ -779,32 +779,71 @@ private:
         }
     }
     
+    // Adapt the raytrace render scale based on the previous frame time. Under vsync the
+    // frame time floors at ~16.7ms, so "sitting at the cap" actually means GPU headroom:
+    // scale up after sustained headroom (debounced to avoid flicker), drop immediately
+    // when the frame goes GPU-bound (>20ms).
+    void update_render_scale() {
+        float ft = GetFrameTime(); // seconds for the previous frame
+        if (ft > 0.020f) {
+            if (render_scale_ > 0.25f) render_scale_ -= 0.25f;
+            rt_up_count_ = 0;
+        } else if (ft <= 0.017f) {
+            if (++rt_up_count_ >= 30) {
+                if (render_scale_ < 1.0f) render_scale_ += 0.25f;
+                rt_up_count_ = 0;
+            }
+        } else {
+            rt_up_count_ = 0;
+        }
+        if (render_scale_ < 0.25f) render_scale_ = 0.25f;
+        if (render_scale_ > 1.0f) render_scale_ = 1.0f;
+    }
+
+    // (Re)create the offscreen target only when the required size changes.
+    void ensure_rt_target(int w, int h) {
+        if (rt_target_.id != 0 && rt_w_ == w && rt_h_ == h) return;
+        if (rt_target_.id != 0) UnloadRenderTexture(rt_target_);
+        rt_target_ = LoadRenderTexture(w, h);
+        SetTextureFilter(rt_target_.texture, TEXTURE_FILTER_BILINEAR);
+        rt_w_ = w;
+        rt_h_ = h;
+    }
+
     void render_raytraced() {
         PROFILE_SECTION("Raytraced Rendering");
-        
+
         // Debug logging every 30 frames or always in debug mode
         bool should_log = (debug_frame_count_ % 30 == 1) || debug_mode_;
-        
+
         if (should_log) {
             printf("=== Raytraced Render Frame %d ===\n", debug_frame_count_);
             printf("  Camera pos: (%.2f, %.2f, %.2f)\n", camera_.position.x, camera_.position.y, camera_.position.z);
             printf("  BLAS triangles: %d\n", blas_manager_->get_total_triangle_count());
-            printf("  TLAS instances: %d, nodes: %d\n", 
+            printf("  TLAS instances: %d, nodes: %d\n",
                    tlas_manager_->get_instance_count(), tlas_manager_->get_node_count());
         }
-        
+
+        // Adapt render scale and size the offscreen target accordingly.
+        update_render_scale();
+        int full_w = GetScreenWidth();
+        int full_h = GetScreenHeight();
+        int rw = std::max(1, static_cast<int>(full_w * render_scale_));
+        int rh = std::max(1, static_cast<int>(full_h * render_scale_));
+        ensure_rt_target(rw, rh);
+
+        // Render the raytracer into the (possibly downscaled) offscreen target.
+        BeginTextureMode(rt_target_);
+        ClearBackground(BLACK);
         BeginShaderMode(raytracing_shader_);
-        
+
         // Set shader uniforms
         {
             PROFILE_SECTION("Shader Uniforms");
-            
-            Vector2 screen_size = {static_cast<float>(GetScreenWidth()), static_cast<float>(GetScreenHeight())};
-            
-            if (should_log) {
-                printf("  Setting camera uniforms...\n");
-            }
-            
+
+            // screenSize must match the offscreen target so ray generation is correct.
+            Vector2 screen_size = {static_cast<float>(rw), static_cast<float>(rh)};
+
             // Set camera uniforms
             SetShaderValue(raytracing_shader_, camera_pos_loc_, &camera_.position, SHADER_UNIFORM_VEC3);
             SetShaderValue(raytracing_shader_, camera_target_loc_, &camera_.target, SHADER_UNIFORM_VEC3);
@@ -812,29 +851,23 @@ private:
             SetShaderValue(raytracing_shader_, camera_fovy_loc_, &camera_.fovy, SHADER_UNIFORM_FLOAT);
             SetShaderValue(raytracing_shader_, screen_size_loc_, &screen_size, SHADER_UNIFORM_VEC2);
             SetShaderValue(raytracing_shader_, debug_mode_loc_, &render_debug_mode_, SHADER_UNIFORM_INT);
-            
-            if (should_log) {
-                printf("  Binding BLAS to shader...\n");
-            }
-            
+
             // Let managers handle their own shader binding and texture management
             blas_manager_->bind_to_shader(raytracing_shader_);
-            
-            if (should_log) {
-                printf("  Binding TLAS to shader...\n");
-            }
-            
             tlas_manager_->bind_to_shader(raytracing_shader_, *blas_manager_);
-            
-            if (should_log) {
-                printf("  All uniforms and textures bound.\n");
-            }
         }
-        
-        // Draw fullscreen rectangle
-        DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), WHITE);
-        
+
+        // Draw fullscreen rectangle covering the offscreen target
+        DrawRectangle(0, 0, rw, rh, WHITE);
+
         EndShaderMode();
+        EndTextureMode();
+
+        // Blit the offscreen result upscaled to the screen (negative source height flips Y).
+        DrawTexturePro(rt_target_.texture,
+                       (Rectangle){0.0f, 0.0f, static_cast<float>(rw), -static_cast<float>(rh)},
+                       (Rectangle){0.0f, 0.0f, static_cast<float>(full_w), static_cast<float>(full_h)},
+                       (Vector2){0.0f, 0.0f}, 0.0f, WHITE);
     }
     
     void render_rasterized() {
@@ -1017,6 +1050,7 @@ private:
     
     void cleanup() {
         if (raytracing_shader_.id != 0) UnloadShader(raytracing_shader_);
+        if (rt_target_.id != 0) UnloadRenderTexture(rt_target_);
         // Managers clean up their own textures in destructors
     }
     
@@ -1047,6 +1081,12 @@ private:
     Camera camera_;
     Shader raytracing_shader_{};
     bool use_raytracing_ = false;
+
+    // Dynamic resolution scaling for the raytrace pass (bounds frame time to avoid GPU TDR)
+    RenderTexture2D rt_target_{};
+    int rt_w_ = 0, rt_h_ = 0;
+    float render_scale_ = 1.0f;
+    int rt_up_count_ = 0; // consecutive headroom frames before scaling resolution back up
     int current_test_scene_ = 1;
     bool show_bvh_visualization_ = false;
     bool cursor_disabled_ = true;

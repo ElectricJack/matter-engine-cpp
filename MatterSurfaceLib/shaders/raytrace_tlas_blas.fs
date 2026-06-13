@@ -197,7 +197,7 @@ vec3 calculateIndirectLighting(vec3 hitPos, vec3 normal, vec3 albedo, inout uint
     
     // Use screen-space hash to reduce samples for similar positions
     uint positionHash = getGridHash(hitPos);
-    int sampleCount = (positionHash % 3u == 0u) ? 2 : 1; // Variable sampling
+    int sampleCount = 1; // Trimmed: single indirect sample to bound secondary-ray cost
     
     for (int i = 0; i < sampleCount; i++) {
         // Sample hemisphere around normal with importance sampling toward sky
@@ -260,7 +260,7 @@ float calculateAmbientOcclusion(vec3 hitPos, vec3 normal, inout uint seed) {
     }
     
     float occlusion = 0.0;
-    const int AO_SAMPLES = 3; // Reduced samples for performance
+    const int AO_SAMPLES = 2; // Trimmed: fewer AO rays to bound secondary-ray cost
     const float AO_RADIUS = 0.4; // Slightly smaller radius
     
     for (int i = 0; i < AO_SAMPLES; i++) {

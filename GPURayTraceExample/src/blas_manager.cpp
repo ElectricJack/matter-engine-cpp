@@ -115,8 +115,13 @@ BLASHandle BLASManager::find_existing_blas(const Tri* triangles, int count, uint
 // }
 
 BLASHandle BLASManager::register_triangles(const std::vector<Tri>& triangles) {
-    return register_triangles(const_cast<Tri*>(triangles.data()), 
+    return register_triangles(const_cast<Tri*>(triangles.data()),
                              static_cast<int>(triangles.size()));
+}
+
+BLASHandle BLASManager::register_triangles(const std::vector<Tri>& triangles, const std::vector<TriEx>& triex) {
+    const TriEx* triex_ptr = (triex.size() == triangles.size() && !triex.empty()) ? triex.data() : nullptr;
+    return register_triangles(const_cast<Tri*>(triangles.data()), static_cast<int>(triangles.size()), triex_ptr);
 }
 
 // BLASHandle BLASManager::register_triangles_legacy(const std::vector<LegacyTriangle>& triangles) {
@@ -124,7 +129,7 @@ BLASHandle BLASManager::register_triangles(const std::vector<Tri>& triangles) {
 //                                     static_cast<int>(triangles.size()));
 // }
 
-BLASHandle BLASManager::register_triangles(Tri* triangles, int triangle_count) {
+BLASHandle BLASManager::register_triangles(Tri* triangles, int triangle_count, const TriEx* triex) {
     PROFILE_SECTION("BLAS Registration");
     
     if (!triangles || triangle_count <= 0) {
@@ -156,7 +161,15 @@ BLASHandle BLASManager::register_triangles(Tri* triangles, int triangle_count) {
         for (int i = 0; i < triangle_count; i++) {
             mesh->tri[i] = triangles[i];
         }
-        
+
+        // Copy per-vertex shading normals if provided
+        if (triex) {
+            mesh->triEx = static_cast<TriEx*>(MALLOC64(triangle_count * sizeof(TriEx)));
+            for (int i = 0; i < triangle_count; i++) {
+                mesh->triEx[i] = triex[i];
+            }
+        }
+
         // Create BVH using the proper constructor
         auto bvh = std::make_unique<BVH>(mesh.get());
         
@@ -798,19 +811,43 @@ LegacyTriangle create_triangle_from_positions(const float3& v0, const float3& v1
 //     return triangles;
 // }
 
+// Build flat per-vertex normals (face normal repeated for all three vertices).
+static std::vector<TriEx> make_face_normals(const std::vector<Tri>& triangles) {
+    std::vector<TriEx> triex;
+    triex.reserve(triangles.size());
+    for (const auto& t : triangles) {
+        TriEx ex{};
+        float3 fn = normalize(cross(t.vertex1 - t.vertex0, t.vertex2 - t.vertex0));
+        ex.N0 = ex.N1 = ex.N2 = fn;
+        triex.push_back(ex);
+    }
+    return triex;
+}
+
 BLASHandle register_cube(BLASManager& manager, float size) {
     auto triangles = create_cube_triangles(size);
-    return manager.register_triangles(triangles);
+    return manager.register_triangles(triangles, make_face_normals(triangles));
 }
 
 BLASHandle register_sphere(BLASManager& manager, float radius, int segments, int rings) {
     auto triangles = create_sphere_triangles(radius, segments, rings);
-    return manager.register_triangles(triangles);
+    // Sphere is centered at the local origin, so the outward normal at each
+    // vertex is simply its normalized position. This yields smooth shading.
+    std::vector<TriEx> triex;
+    triex.reserve(triangles.size());
+    for (const auto& t : triangles) {
+        TriEx ex{};
+        ex.N0 = normalize(t.vertex0);
+        ex.N1 = normalize(t.vertex1);
+        ex.N2 = normalize(t.vertex2);
+        triex.push_back(ex);
+    }
+    return manager.register_triangles(triangles, triex);
 }
 
 BLASHandle register_plane(BLASManager& manager, float width, float height) {
     auto triangles = create_plane_triangles(width, height);
-    return manager.register_triangles(triangles);
+    return manager.register_triangles(triangles, make_face_normals(triangles));
 }
 
 // New factory functions that create Tri objects

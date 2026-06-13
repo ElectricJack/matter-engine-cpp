@@ -73,8 +73,12 @@ public:
     
     // Register mesh data and get BLAS handle
     BLASHandle register_triangles(const std::vector<Tri>& triangles);
-    
-    BLASHandle register_triangles(Tri* triangles, int triangle_count);
+
+    // Register mesh data together with per-vertex shading normals (one TriEx per
+    // triangle, same order as triangles). triex may be empty to fall back to face normals.
+    BLASHandle register_triangles(const std::vector<Tri>& triangles, const std::vector<TriEx>& triex);
+
+    BLASHandle register_triangles(Tri* triangles, int triangle_count, const TriEx* triex = nullptr);
     
     // Legacy interface for old Triangle format
     //BLASHandle register_triangles_legacy(const std::vector<LegacyTriangle>& triangles);

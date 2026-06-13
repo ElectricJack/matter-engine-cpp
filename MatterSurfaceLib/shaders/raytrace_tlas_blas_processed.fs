@@ -224,7 +224,7 @@ struct Ray
 
 struct Triangle
 {
-    vec3 v0, v1, v2; // triangle vertices
+    vec3 v0, v1, v2; vec3 n0, n1, n2; // triangle vertices + per-vertex shading normals
     vec3 center;     // for BVH construction (renamed from centroid - reserved keyword)
 };
 
@@ -354,15 +354,15 @@ Triangle decodeTriangle(int triangleIndex)
     
     float triTexCoord = (float(triangleIndex) + 0.5) / float(triangleCount);
     
-    vec4 data0 = texture(trianglesTexture, vec2(triTexCoord, 0.125));  // v0 + materialId
-    vec4 data1 = texture(trianglesTexture, vec2(triTexCoord, 0.375));  // v1
-    vec4 data2 = texture(trianglesTexture, vec2(triTexCoord, 0.625));  // v2
-    vec4 data3 = texture(trianglesTexture, vec2(triTexCoord, 0.875));  // centroid + normal
+    vec4 data0 = texture(trianglesTexture, vec2(triTexCoord, 0.0833));  // v0 (row 0)
+    vec4 data1 = texture(trianglesTexture, vec2(triTexCoord, 0.25));    // v1 (row 1)
+    vec4 data2 = texture(trianglesTexture, vec2(triTexCoord, 0.4167));  // v2 (row 2)
+    // Rows 3-5 (per-vertex normals) are sampled lazily at shade time, not during traversal
     
     tri.v0 = data0.xyz;
     tri.v1 = data1.xyz;
     tri.v2 = data2.xyz;
-    tri.center = data3.xyz;
+    tri.n0 = tri.n1 = tri.n2 = vec3(0.0);
     
     return tri;
 }
@@ -492,11 +492,11 @@ void BVHIntersect(inout Ray ray, uint instanceIdx, uint blasOffset)
     int stackPtr = 0;
     
     // Start with root node
-    int nodeIdx = int(blasOffset);
+    int nodeIdx = int(blasOffset); int bvhSteps = 0;
     
     while (true)
     {
-        BVHNode node = decodeBVHNode(nodeIdx);
+        if (++bvhSteps > 4096) break; BVHNode node = decodeBVHNode(nodeIdx);
         
         if (node.triCount > 0u) // Leaf node
         {
@@ -574,11 +574,11 @@ void TLASIntersect(inout Ray ray)
     int stackPtr = 0;
     
     // Start with TLAS root node
-    int nodeIdx = 0;
+    int nodeIdx = 0; int tlasSteps = 0;
     
     while (true)
     {
-        TLASNode node = decodeTLASNode(nodeIdx);
+        if (++tlasSteps > 512) break; TLASNode node = decodeTLASNode(nodeIdx);
         
         if (node.leftRight == 0u) // Leaf node
         {
@@ -668,8 +668,8 @@ HitResult intersectScene(vec3 rayOrigin, vec3 rayDir)
         } else {
             // Transform world hit position to local space
             vec3 localHitPos = transformPosition(result.position, inst.invTransform);
-            // Smooth normal is the normalized position from sphere center (origin in local space)
-            normal = normalize(localHitPos);
+            // Smooth normal: lazily sample the per-vertex normals (rows 3-5) and interpolate by barycentrics at the hit
+            { float tc = (float(triIdx) + 0.5) / float(triangleCount); vec3 N0 = texture(trianglesTexture, vec2(tc, 0.5833)).xyz; vec3 N1 = texture(trianglesTexture, vec2(tc, 0.75)).xyz; vec3 N2 = texture(trianglesTexture, vec2(tc, 0.9167)).xyz; vec3 e1 = tri.v1 - tri.v0; vec3 e2 = tri.v2 - tri.v0; vec3 ep = localHitPos - tri.v0; float d00 = dot(e1, e1); float d01 = dot(e1, e2); float d11 = dot(e2, e2); float d20 = dot(ep, e1); float d21 = dot(ep, e2); float den = d00 * d11 - d01 * d01; if (abs(den) < 1e-12) { normal = normalize(cross(e1, e2)); } else { float bv = (d11 * d20 - d01 * d21) / den; float bw = (d00 * d21 - d01 * d20) / den; float bu = 1.0 - bv - bw; normal = normalize(bu * N0 + bv * N1 + bw * N2); } }
         }
         
         // Transform normal to world space
@@ -869,7 +869,7 @@ vec3 calculateIndirectLighting(vec3 hitPos, vec3 normal, vec3 albedo, inout uint
     
     // Use screen-space hash to reduce samples for similar positions
     uint positionHash = getGridHash(hitPos);
-    int sampleCount = (positionHash % 3u == 0u) ? 2 : 1; // Variable sampling
+    int sampleCount = 1; // Trimmed: single indirect sample to bound secondary-ray cost
     
     for (int i = 0; i < sampleCount; i++) {
         // Sample hemisphere around normal with importance sampling toward sky
@@ -932,7 +932,7 @@ float calculateAmbientOcclusion(vec3 hitPos, vec3 normal, inout uint seed) {
     }
     
     float occlusion = 0.0;
-    const int AO_SAMPLES = 3; // Reduced samples for performance
+    const int AO_SAMPLES = 2; // Trimmed: fewer AO rays to bound secondary-ray cost
     const float AO_RADIUS = 0.4; // Slightly smaller radius
     
     for (int i = 0; i < AO_SAMPLES; i++) {

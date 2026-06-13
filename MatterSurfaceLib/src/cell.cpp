@@ -138,15 +138,21 @@ void Cell::rebuild_meshes(const std::vector<StaticParticle>& cluster_particles, 
 }
 
 // Helper function to convert Raylib Mesh to triangles for BLAS registration
-std::vector<Tri> convert_mesh_to_triangles(const Mesh& mesh) {
+std::vector<Tri> convert_mesh_to_triangles(const Mesh& mesh, std::vector<TriEx>* out_triex) {
     std::vector<Tri> triangles;
-    
+
     if (mesh.vertexCount == 0 || mesh.triangleCount == 0 || !mesh.vertices) {
         return triangles;
     }
-    
+
     triangles.reserve(mesh.triangleCount);
-    
+    if (out_triex) {
+        out_triex->clear();
+        out_triex->reserve(mesh.triangleCount);
+    }
+    // Per-vertex smooth normals are only available when the mesh carries them.
+    const bool have_normals = (out_triex != nullptr) && (mesh.normals != nullptr);
+
     for (int i = 0; i < mesh.triangleCount; i++) {
         Tri tri;
         
@@ -204,10 +210,24 @@ std::vector<Tri> convert_mesh_to_triangles(const Mesh& mesh) {
         }
         
         tri.centroid = make_float3(cx, cy, cz);
-        
+
         triangles.push_back(tri);
+
+        if (out_triex) {
+            TriEx ex{};
+            if (have_normals) {
+                ex.N0 = make_float3(mesh.normals[idx0 * 3 + 0], mesh.normals[idx0 * 3 + 1], mesh.normals[idx0 * 3 + 2]);
+                ex.N1 = make_float3(mesh.normals[idx1 * 3 + 0], mesh.normals[idx1 * 3 + 1], mesh.normals[idx1 * 3 + 2]);
+                ex.N2 = make_float3(mesh.normals[idx2 * 3 + 0], mesh.normals[idx2 * 3 + 1], mesh.normals[idx2 * 3 + 2]);
+            } else {
+                // Fall back to the face normal so all three vertices share it (flat shading).
+                float3 fn = normalize(cross(tri.vertex1 - tri.vertex0, tri.vertex2 - tri.vertex0));
+                ex.N0 = ex.N1 = ex.N2 = fn;
+            }
+            out_triex->push_back(ex);
+        }
     }
-    
+
     return triangles;
 }
 
@@ -270,12 +290,13 @@ void Cell::generate_mesh_for_material(uint32_t material_id, const std::vector<St
         
         // Register mesh with BLAS manager for ray tracing
         try {
-            std::vector<Tri> triangles = convert_mesh_to_triangles(mesh);
+            std::vector<TriEx> triangle_normals;
+            std::vector<Tri> triangles = convert_mesh_to_triangles(mesh, &triangle_normals);
             printf("Converting mesh to %zu triangles for BLAS registration\\n", triangles.size());
-            
+
             if (!triangles.empty() && triangles.size() > 0) {
                 printf("Registering %zu triangles with BLAS manager...\\n", triangles.size());
-                material_blas[material_id] = blas_manager.register_triangles(triangles);
+                material_blas[material_id] = blas_manager.register_triangles(triangles, triangle_normals);
                 printf("Successfully registered mesh with BLAS manager, handle %u\\n", material_blas[material_id]);
                 
                 // Also register with BVH analyzer for analysis
