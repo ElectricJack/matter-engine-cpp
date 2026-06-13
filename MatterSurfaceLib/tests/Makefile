@@ -56,10 +56,10 @@ TARGET = minimal_cell_test
 $(TARGET): $(MAIN_SOURCE) $(MATTER_SOURCES)
 	$(CC) $(MAIN_SOURCE) $(MATTER_SOURCES) -o $(TARGET) $(CFLAGS) $(INCLUDE_PATHS) $(LDFLAGS) $(LDLIBS)
 
-.PHONY: clean run
+.PHONY: clean run run-simp
 
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGET) $(SIMP_TARGET)
 
 run: $(TARGET)
 	./$(TARGET)
@@ -67,3 +67,13 @@ run: $(TARGET)
 # Debug build
 debug: CFLAGS += -g -DDEBUG
 debug: $(TARGET)
+
+# Mesh simplifier unit tests (headless, no GL window required)
+SIMP_TARGET = mesh_simplifier_tests
+SIMP_SOURCES = mesh_simplifier_tests.cpp ../src/mesh_simplifier.cpp
+
+$(SIMP_TARGET): $(SIMP_SOURCES)
+	$(CC) $(SIMP_SOURCES) -o $(SIMP_TARGET) $(CFLAGS) $(INCLUDE_PATHS) $(LDFLAGS) $(LDLIBS)
+
+run-simp: $(SIMP_TARGET)
+	./$(SIMP_TARGET)
