@@ -38,10 +38,15 @@ typedef struct {
 // particleRadius is a reference radius (max effective radius in the set) used to
 // size the spatial-hash search; each particle's own .radius drives the SDF.
 // blendWidth k sets the metaball smooth-min fillet size (0 = hard union, no blend).
-Mesh GenerateMesh(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth);
+// clipParticles/clipCount are FOREIGN particles (from other merge groups) used to
+// clip this group's field: where a foreign surface is nearer than this group's own
+// field, the group is forced outside so its isosurface terminates on the equidistant
+// shared wall (material-aware surfacing). Pass NULL,0 for no clipping (byte-identical
+// to the unclipped path).
+Mesh GenerateMesh(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth, Particle* clipParticles, int clipCount);
 
 // Enhanced API function with configuration options
-Mesh GenerateMeshWithConfig(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth, MeshGenerationConfig config);
+Mesh GenerateMeshWithConfig(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth, MeshGenerationConfig config, Particle* clipParticles, int clipCount);
 
 // Recompute per-vertex shading normals in place as the analytic SDF gradient of
 // the (smooth-min) union-of-spheres field. With blendWidth 0 each normal is the
@@ -53,7 +58,9 @@ Mesh GenerateMeshWithConfig(Particle* particles, float particleRadius, int parti
 // geometry (e.g. simplify_mesh, which reverts to per-cell face-normal averaging).
 // Operates on mesh->vertices/mesh->normals; any existing normal is used as the
 // fallback for degenerate vertices with no particle in range.
-void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius, int particleCount, float blendWidth);
+// clipParticles/clipCount mirror GenerateMesh's clip field so the recomputed
+// normals match the carved surface; pass NULL,0 for no clipping.
+void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius, int particleCount, float blendWidth, Particle* clipParticles, int clipCount);
 
 // Create default configuration
 MeshGenerationConfig GetDefaultMeshConfig(void);

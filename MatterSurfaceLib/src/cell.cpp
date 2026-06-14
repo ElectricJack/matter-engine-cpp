@@ -24,8 +24,8 @@ extern "C" {
         int materialId;
     } Particle;
     
-    Mesh GenerateMesh(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth);
-    void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius, int particleCount, float blendWidth);
+    Mesh GenerateMesh(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth, Particle* clipParticles, int clipCount);
+    void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius, int particleCount, float blendWidth, Particle* clipParticles, int clipCount);
     
     // Raymath and raylib functions we need
     Vector3 Vector3Add(Vector3 v1, Vector3 v2);
@@ -312,7 +312,7 @@ void Cell::generate_mesh_for_group(uint32_t group_id, const std::vector<StaticPa
 
     // max_radius is the reference radius for the SDF's spatial-hash search reach.
     Mesh mesh = GenerateMesh(particles.data(), max_radius, static_cast<int>(particles.size()),
-                             bounds, blend_width);
+                             bounds, blend_width, NULL, 0);
 
     // Decimate to a low-poly proxy when requested. Boundary vertices on this
     // cell's face planes are locked so seams with same-level neighbors stay
@@ -330,7 +330,7 @@ void Cell::generate_mesh_for_group(uint32_t group_id, const std::vector<StaticPa
             // per-cell shading seams; reapply the cross-cell-continuous SDF
             // gradient (same blend width) so the proxy shades like the dense mesh.
             ComputeSurfaceNormals(&simplified, particles.data(), max_radius,
-                                  static_cast<int>(particles.size()), blend_width);
+                                  static_cast<int>(particles.size()), blend_width, NULL, 0);
             UnloadMesh(mesh);
             mesh = simplified;
         } else {

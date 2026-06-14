@@ -52,8 +52,8 @@ extern "C" {
         int     materialId;
     } Particle;
 
-    Mesh GenerateMesh(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth);
-    void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius, int particleCount, float blendWidth);
+    Mesh GenerateMesh(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth, Particle* clipParticles, int clipCount);
+    void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius, int particleCount, float blendWidth, Particle* clipParticles, int clipCount);
 }
 
 // ----------------------------------------------------------------------------
@@ -569,7 +569,7 @@ static Soup build_scene(const std::vector<PIn>& particles, float s, float ratio)
                 Particle q; q.position = particles[idx].pos; q.radius = particles[idx].r; q.materialId = (int)particles[idx].mat;
                 sp.push_back(q);
             }
-            Mesh m = GenerateMesh(sp.data(), pr, (int)sp.size(), bounds, 0.0f);
+            Mesh m = GenerateMesh(sp.data(), pr, (int)sp.size(), bounds, 0.0f, NULL, 0);
             if (ratio < 1.0f && m.vertexCount > 0 && m.triangleCount > 0) {
                 CellBounds cb; cb.min_bound = minB; cb.max_bound = maxB;
                 SimplifyOptions so; so.target_ratio = ratio; so.lock_boundary = true;
@@ -580,7 +580,7 @@ static Soup build_scene(const std::vector<PIn>& particles, float s, float ratio)
                     // the SDF-gradient normals (radial snap keeps normal direction,
                     // but re-run is cheap and robust).
                     project_to_surface(simp, sp, pr, minB, maxB, s);
-                    ComputeSurfaceNormals(&simp, sp.data(), pr, (int)sp.size(), 0.0f);
+                    ComputeSurfaceNormals(&simp, sp.data(), pr, (int)sp.size(), 0.0f, NULL, 0);
                     append_mesh(soup, simp);
                     // free both CPU meshes (no GL involved)
                     if (simp.vertices) RL_FREE(simp.vertices);
@@ -652,7 +652,7 @@ static int test_per_vertex_material() {
     ps[0].position = (Vector3){-1.0f, 0, 0}; ps[0].radius = 0.8f; ps[0].materialId = 8;
     ps[1].position = (Vector3){ 1.0f, 0, 0}; ps[1].radius = 0.8f; ps[1].materialId = 9;
     Bounds b; b.center=(Vector3){0,0,0}; b.size=(Vector3){4,4,4}; b.divisionPow=4;
-    Mesh m = GenerateMesh(ps, 0.8f, 2, b, 0.0f);
+    Mesh m = GenerateMesh(ps, 0.8f, 2, b, 0.0f, NULL, 0);
     int distinctColors = 0;
     // Compares the R channel only; materialIds 8/9 map to Red/Green via
     // GetMaterialColor, so R alone (255 vs 0) is a sufficient distinctness signal.
@@ -661,6 +661,22 @@ static int test_per_vertex_material() {
         if (m.colors && m.colors[i*4] != c0r) { distinctColors = 1; break; }
     }
     if (!distinctColors) { printf("FAIL: expected >1 distinct vertex material color\n"); return 1; }
+    return 0;
+}
+
+// Clip field: passing a foreign clip particle on the +x side must carve the
+// group's isosurface so it terminates on the equidistant locus, pulling the
+// mesh's max-x extent inward relative to the unclipped (open) mesh.
+static int test_clip_carves_surface() {
+    Particle g[1]; g[0].position=(Vector3){0,0,0}; g[0].radius=1.0f; g[0].materialId=8;
+    Particle clip[1]; clip[0].position=(Vector3){1.2f,0,0}; clip[0].radius=1.0f; clip[0].materialId=4;
+    Bounds b; b.center=(Vector3){0,0,0}; b.size=(Vector3){5,5,5}; b.divisionPow=4;
+    Mesh open = GenerateMesh(g, 1.0f, 1, b, 0.0f, NULL, 0);          // no clip
+    Mesh carved = GenerateMesh(g, 1.0f, 1, b, 0.0f, clip, 1);        // clipped on +x
+    float maxOpen=-1e9f, maxCarved=-1e9f;
+    for (int i=0;i<open.vertexCount;i++)   maxOpen   = fmaxf(maxOpen,   open.vertices[i*3]);
+    for (int i=0;i<carved.vertexCount;i++) maxCarved = fmaxf(maxCarved, carved.vertices[i*3]);
+    if (!(maxCarved < maxOpen - 0.05f)) { printf("FAIL: clip did not carve +x side (open=%.3f carved=%.3f)\n", maxOpen, maxCarved); return 1; }
     return 0;
 }
 
@@ -674,6 +690,14 @@ int main() {
     int mat_fail = test_per_vertex_material();
     g_unexpected += mat_fail;
     printf("%s\n", mat_fail == 0 ? "PASS" : "FAIL");
+    printf("\n");
+
+    // Clip field carve regression: a foreign clip particle must pull the
+    // group's isosurface inward on the side facing it.
+    printf("clip_carves_surface: ");
+    int clip_fail = test_clip_carves_surface();
+    g_unexpected += clip_fail;
+    printf("%s\n", clip_fail == 0 ? "PASS" : "FAIL");
     printf("\n");
 
     const float s = 4.0f;  // smallest cell size (size_power 0)

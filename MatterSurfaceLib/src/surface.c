@@ -176,10 +176,10 @@ typedef struct {
 } IsosurfaceVertex;
 
 // Local function declarations
-static ScalarMaterialPair CalculateScalarAndMaterial(Vector3 position, SpatialHash* spatialHash, float refRadius, float blendWidth);
+static ScalarMaterialPair CalculateScalarAndMaterial(Vector3 position, SpatialHash* spatialHash, float refRadius, float blendWidth, Particle* clipParticles, int clipCount);
 static int     CalculateCubeIndex(GridCell cell, float isovalue);
 static Vector3 VertexInterpolation(Vector3 v1, float val1, Vector3 v2, float val2, float isovalue);
-static Mesh    GenerateMeshInternal(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth, MeshGenerationConfig config);
+static Mesh    GenerateMeshInternal(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth, MeshGenerationConfig config, Particle* clipParticles, int clipCount);
 
 
 // Utility function to convert grid cell coordinates to index in the scalar field array
@@ -196,14 +196,14 @@ MeshGenerationConfig GetDefaultMeshConfig(void) {
 }
 
 // Public API wrapper function using default configuration
-Mesh GenerateMesh(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth) {
+Mesh GenerateMesh(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth, Particle* clipParticles, int clipCount) {
     MeshGenerationConfig config = GetDefaultMeshConfig();
-    return GenerateMeshInternal(particles, particleRadius, particleCount, volume, blendWidth, config);
+    return GenerateMeshInternal(particles, particleRadius, particleCount, volume, blendWidth, config, clipParticles, clipCount);
 }
 
 // Public API function with custom configuration
-Mesh GenerateMeshWithConfig(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth, MeshGenerationConfig config) {
-    return GenerateMeshInternal(particles, particleRadius, particleCount, volume, blendWidth, config);
+Mesh GenerateMeshWithConfig(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth, MeshGenerationConfig config, Particle* clipParticles, int clipCount) {
+    return GenerateMeshInternal(particles, particleRadius, particleCount, volume, blendWidth, config, clipParticles, clipCount);
 }
 
 // Cleanup function to release memory pool resources
@@ -211,7 +211,7 @@ void SurfaceLibCleanup(void) {
     CleanupMemoryPool();
 }
 
-void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius, int particleCount, float blendWidth) {
+void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius, int particleCount, float blendWidth, Particle* clipParticles, int clipCount) {
     if (!mesh || !mesh->vertices || !mesh->normals || mesh->vertexCount <= 0 ||
         !particles || particleCount <= 0) {
         return;
@@ -286,6 +286,35 @@ void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius
             }
         }
 
+        // Clip field (material-aware surfacing): where a foreign surface is nearer
+        // than this group's own field f_G == fmin, the clipped field becomes -fO,
+        // whose gradient is -unit(v - c_clip). Override the group gradient there so
+        // the recomputed normals match the carved (clipped) surface. Identical to
+        // the clip applied in CalculateScalarAndMaterial; skipped entirely when
+        // clipCount == 0 so the unclipped path is byte-identical to before.
+        if (clipParticles && clipCount > 0 && fminIdx >= 0) {
+            float fO = INFINITY;
+            int   clipIdx = -1;
+            for (int c = 0; c < clipCount; ++c) {
+                float dx = vx - clipParticles[c].position.x;
+                float dy = vy - clipParticles[c].position.y;
+                float dz = vz - clipParticles[c].position.z;
+                float f = sqrtf(dx*dx + dy*dy + dz*dz) - clipParticles[c].radius;
+                if (f < fO) { fO = f; clipIdx = c; }
+            }
+            if (clipIdx >= 0 && -fO > fmin) {
+                float dx = vx - clipParticles[clipIdx].position.x;
+                float dy = vy - clipParticles[clipIdx].position.y;
+                float dz = vz - clipParticles[clipIdx].position.z;
+                float d2 = dx*dx + dy*dy + dz*dz;
+                if (d2 > 1e-12f) {
+                    float inv = 1.0f / sqrtf(d2);
+                    // grad(-fO) = -unit(v - c_clip)
+                    gx = -dx*inv; gy = -dy*inv; gz = -dz*inv; haveGrad = true;
+                }
+            }
+        }
+
         if (haveGrad) {
             mesh->normals[i*3+0] = gx;
             mesh->normals[i*3+1] = gy;
@@ -311,7 +340,7 @@ void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius
 }
 
 // Internal mesh generation function with configuration
-static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth, MeshGenerationConfig config) {
+static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth, MeshGenerationConfig config, Particle* clipParticles, int clipCount) {
     TIMER_START(total);
     
     // Initialize mesh
@@ -391,7 +420,7 @@ static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int 
                 int index = GetScalarFieldIndex(x, y, z, gridSize);
                 
                 // Use combined calculation to eliminate duplicate distance calculations
-                ScalarMaterialPair result = CalculateScalarAndMaterial(position, spatialHash, particleRadius, blendWidth);
+                ScalarMaterialPair result = CalculateScalarAndMaterial(position, spatialHash, particleRadius, blendWidth, clipParticles, clipCount);
                 data.scalarField[index] = result.scalarValue;
                 data.materialField[index] = result.materialId;
             }
@@ -762,7 +791,7 @@ static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int 
 
     // Overwrite the per-cell face normals with the cross-cell-continuous SDF
     // gradient (face normals remain only as the degenerate-vertex fallback).
-    ComputeSurfaceNormals(&mesh, particles, particleRadius, particleCount, blendWidth);
+    ComputeSurfaceNormals(&mesh, particles, particleRadius, particleCount, blendWidth, clipParticles, clipCount);
 
     // Set material IDs as vertex colors
     mesh.colors = (unsigned char*)RL_MALLOC(vertexCount * 4 * sizeof(unsigned char));
@@ -796,8 +825,31 @@ static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int 
     return mesh;
 }
 
+// Apply the clip field (material-aware surfacing): where a foreign clip surface
+// is nearer than this group's own field, force the group OUTSIDE so its
+// isosurface terminates on the equidistant locus f_G == fO. Sign convention:
+// scalarValue = signed distance, NEGATIVE = inside, POSITIVE = outside (marching
+// cubes contours at isovalue <= 0 with corners < isovalue treated as inside), so
+// raising scalarValue toward/above 0 pushes the surface back. No-op when
+// clipCount == 0, keeping the unclipped path byte-identical.
+static inline void ApplyClipField(ScalarMaterialPair* result, Vector3 position,
+                                  Particle* clipParticles, int clipCount) {
+    if (!clipParticles || clipCount <= 0) return;
+    float fO = INFINITY;
+    for (int i = 0; i < clipCount; ++i) {
+        float dx = position.x - clipParticles[i].position.x;
+        float dy = position.y - clipParticles[i].position.y;
+        float dz = position.z - clipParticles[i].position.z;
+        float f = sqrtf(dx*dx + dy*dy + dz*dz) - clipParticles[i].radius;
+        if (f < fO) fO = f;
+    }
+    // Where a foreign surface is nearer (fO < f_G), force this group outside so
+    // its isosurface terminates on the equidistant locus f_G == fO.
+    if (-fO > result->scalarValue) result->scalarValue = -fO;
+}
+
 // Combined calculation to eliminate duplicate distance calculations
-static ScalarMaterialPair CalculateScalarAndMaterial(Vector3 position, SpatialHash* spatialHash, float refRadius, float blendWidth) {
+static ScalarMaterialPair CalculateScalarAndMaterial(Vector3 position, SpatialHash* spatialHash, float refRadius, float blendWidth, Particle* clipParticles, int clipCount) {
     ScalarMaterialPair result;
     result.scalarValue = INFINITY;
     result.materialId = 0;
@@ -835,6 +887,7 @@ static ScalarMaterialPair CalculateScalarAndMaterial(Vector3 position, SpatialHa
         // Hard union: exact min. With a single uniform radius this is identical
         // to the original sqrt(minDistSq) - particleRadius behavior.
         result.scalarValue = fmin;
+        ApplyClipField(&result, position, clipParticles, clipCount);
         return result;
     }
 
@@ -849,6 +902,7 @@ static ScalarMaterialPair CalculateScalarAndMaterial(Vector3 position, SpatialHa
     }
     result.scalarValue = fmin - k * logf(sum);
 
+    ApplyClipField(&result, position, clipParticles, clipCount);
     return result;
 }
 
