@@ -418,7 +418,7 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, inout uint seed) {
         
         // Get material properties from the material system
         MaterialProperties matProps = getMaterialProperties(hit.material);
-        vec3 albedo = matProps.albedo;
+        vec3 albedo = mix(matProps.albedo, hit.tint, hit.tintAlpha);
         float roughness = matProps.roughness;
         float metallic = matProps.metallic;
         bool isMirror = (metallic > 0.5 && roughness < 0.3);

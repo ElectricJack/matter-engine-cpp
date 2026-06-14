@@ -72,6 +72,8 @@ struct HitResult
     int material;
     int instanceId;
     int triangleTests; // Debug: number of triangle tests performed
+    vec3 tint;       // per-triangle tint rgb (from spare .w of rows 1-3)
+    float tintAlpha; // blend strength (from spare .w of row 4); 0 = no tint
 };
 
 // Random number generation (ported from tools.cl)
@@ -495,6 +497,13 @@ HitResult intersectScene(vec3 rayOrigin, vec3 rayDir)
         int triMat = int(triMatF);
         int effectiveMat = (triMat >= 0) ? triMat : int(inst.materialId);
 
+        // Per-triangle tint packed in the spare .w of rows 1-4 (see blas_manager.cpp).
+        result.tint = vec3(
+            texture(trianglesTexture, tiledTexel(trianglesTexture, int(triIdx), 1, 6)).w,
+            texture(trianglesTexture, tiledTexel(trianglesTexture, int(triIdx), 2, 6)).w,
+            texture(trianglesTexture, tiledTexel(trianglesTexture, int(triIdx), 3, 6)).w);
+        result.tintAlpha = texture(trianglesTexture, tiledTexel(trianglesTexture, int(triIdx), 4, 6)).w;
+
         // Material properties (incl. flatShading) sourced from the per-triangle material.
         MaterialProperties matProps = getMaterialProperties(effectiveMat);
 
@@ -520,6 +529,8 @@ HitResult intersectScene(vec3 rayOrigin, vec3 rayDir)
         result.normal = vec3(0.0);
         result.material = -1;
         result.instanceId = -1;
+        result.tint = vec3(0.0);
+        result.tintAlpha = 0.0;
     }
     
     return result;
