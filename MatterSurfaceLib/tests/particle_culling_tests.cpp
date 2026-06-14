@@ -27,15 +27,22 @@ static void test_occupancy() {
     CHECK(!occ.occupied(SlotCoord{0,0,0}), "unset slot not occupied");
 
     occ.set(SlotCoord{2, -3, 5}, SlotData{7});
-    occ.set(SlotCoord{2, -3, 5}, SlotData{7});  // idempotent
+    occ.set(SlotCoord{2, -3, 5}, SlotData{42});  // overwrite with different materialId
     CHECK(occ.count() == 1, "re-setting same slot does not grow count");
     CHECK(occ.occupied(SlotCoord{2, -3, 5}), "set slot is occupied");
     CHECK(!occ.occupied(SlotCoord{2, -3, 6}), "neighbor slot not occupied");
 
+    // Verify overwrite actually stored the new materialId (42, not the old 7).
+    int overwritten_id = -1;
+    occ.for_each([&](SlotCoord c, const SlotData& d) {
+        if (c.x == 2 && c.y == -3 && c.z == 5) overwritten_id = d.materialId;
+    });
+    CHECK(overwritten_id == 42, "overwrite stores new materialId, not old one");
+
     // pack/unpack round-trips negatives via for_each.
     bool seen = false;
     occ.for_each([&](SlotCoord c, const SlotData& d) {
-        if (c.x == 2 && c.y == -3 && c.z == 5 && d.materialId == 7) seen = true;
+        if (c.x == 2 && c.y == -3 && c.z == 5 && d.materialId == 42) seen = true;
     });
     CHECK(seen, "for_each round-trips coords (incl. negatives) and data");
 }
