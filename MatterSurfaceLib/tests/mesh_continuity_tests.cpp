@@ -749,5 +749,5 @@ int main() {
     printf("\n%s (%d case-runs flagged)\n",
            g_unexpected == 0 ? "ALL EXPECTATIONS MET" : "FAILURES DETECTED",
            g_unexpected);
-    return 0; // always 0: this is a diagnostic catalog, not a gate (yet)
+    return g_unexpected > 0 ? 1 : 0;
 }
