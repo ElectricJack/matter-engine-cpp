@@ -680,6 +680,118 @@ static int test_clip_carves_surface() {
     return 0;
 }
 
+// Clip-normal agreement with NON-ZERO blendWidth. The scalar clip in
+// CalculateScalarAndMaterial carves the surface wherever -fO > <field value>,
+// and in the smooth-min case that field value is the BLENDED value
+// (fmin - k*ln(sum)) which is <= fmin. The per-vertex normal override in
+// ComputeSurfaceNormals must fire on the SAME locus. The old code triggered on
+// -fO > fmin (the hard min), so with blendWidth>0 there was a band where the
+// scalar surface is carved but the normal override never fired -- those
+// carved-wall vertices kept the (wrong) group gradient.
+//
+// Scene: two group particles offset in y so the smooth-min blend makes the
+// field value strictly below the hard min near the +x carve, plus one clip
+// particle off to +x (and +y) so the carve gradient -unit(v - c_clip) points in
+// a clearly DIFFERENT direction than the group gradient unit(v - c_group). We
+// mesh WITH a small non-zero blendWidth and the clip set (GenerateMesh runs
+// ComputeSurfaceNormals internally with the same args), then check the carved
+// (+x) vertices: their normals must match the foreign clip gradient, NOT the
+// group gradient. Designed to FAIL under the old -fO > fmin trigger (carved-band
+// verts keep the group normal) and PASS under the corrected -fO > fieldValue.
+static int test_clip_normals_blended() {
+    const float blendWidth = 0.20f;          // non-zero: exercises the blended path
+    Particle g[2];
+    g[0].position=(Vector3){0,-0.5f,0}; g[0].radius=1.0f; g[0].materialId=8;
+    g[1].position=(Vector3){0, 0.5f,0}; g[1].radius=1.0f; g[1].materialId=8;
+    Particle clip[1];
+    clip[0].position=(Vector3){1.6f,0.9f,0}; clip[0].radius=1.0f; clip[0].materialId=4;
+    Bounds b; b.center=(Vector3){0,0,0}; b.size=(Vector3){5,5,5}; b.divisionPow=4;
+
+    Mesh carved = GenerateMesh(g, 1.0f, 2, b, blendWidth, clip, 1);
+    if (carved.vertexCount == 0 || !carved.normals) {
+        printf("FAIL: clip_normals_blended produced no mesh\n");
+        return 1;
+    }
+
+    auto unit = [](Vector3 v)->Vector3{
+        float l = sqrtf(v.x*v.x+v.y*v.y+v.z*v.z);
+        if (l < 1e-9f) return Vector3{0,0,0};
+        return Vector3{v.x/l, v.y/l, v.z/l};
+    };
+
+    // Reproduce surface.c's field math per vertex to find the discriminating
+    // BAND: vertices where the clip carves the SMOOTH-MIN field value but NOT the
+    // hard min, i.e. fmin >= -fO > fieldValue, with fieldValue = fmin - k*ln(sum),
+    // sum = sum_j exp(-(f_j - fmin)/k). At those vertices the corrected trigger
+    // (-fO > fieldValue) fires and shades them with the clip gradient
+    // -unit(v - c_clip); the OLD trigger (-fO > fmin) does NOT fire and leaves the
+    // group gradient unit(v - nearest group center). The two gradients are made to
+    // point in clearly different directions (clip is off-axis), so the per-vertex
+    // dot test cleanly separates fixed from broken.
+    const float k = blendWidth;
+    auto sdf = [](Vector3 v, Particle p)->float{
+        float dx=v.x-p.position.x, dy=v.y-p.position.y, dz=v.z-p.position.z;
+        return sqrtf(dx*dx+dy*dy+dz*dz) - p.radius;
+    };
+
+    int bandSamples = 0;   // vertices in the discriminating band
+    int matchClip   = 0;   // ...whose normal follows the clip gradient (FIXED)
+    int matchGroup  = 0;   // ...whose normal follows the group gradient (BROKEN)
+    float worstClipDot = 1.0f;
+    for (int i = 0; i < carved.vertexCount; ++i) {
+        Vector3 v{ carved.vertices[i*3+0], carved.vertices[i*3+1], carved.vertices[i*3+2] };
+
+        float f0 = sdf(v, g[0]), f1 = sdf(v, g[1]);
+        float fmin = fminf(f0, f1);
+        Vector3 cg = (f0 <= f1) ? g[0].position : g[1].position;
+        float sum = expf(-(f0 - fmin)/k) + expf(-(f1 - fmin)/k);
+        float fieldValue = fmin - k * logf(sum);   // <= fmin
+        float fO = sdf(v, clip[0]);
+
+        Vector3 gGroup = unit(Vector3{ v.x-cg.x, v.y-cg.y, v.z-cg.z });
+        Vector3 gClip  = unit(Vector3{ clip[0].position.x-v.x, clip[0].position.y-v.y, clip[0].position.z-v.z });
+        float sep = 1.0f - (gGroup.x*gClip.x + gGroup.y*gClip.y + gGroup.z*gClip.z);
+
+        // Band: scalar surface carved (-fO > fieldValue) but the hard-min trigger
+        // would NOT fire (-fO <= fmin), and the candidate gradients are separated
+        // enough to make the dot test conclusive.
+        bool inBand = (-fO > fieldValue) && (-fO <= fmin) && (sep > 0.25f);
+        if (getenv("CLIPDBG"))
+            printf("   v=(%.2f,%.2f,%.2f) fmin=%.3f field=%.3f -fO=%.3f sep=%.2f band=%d\n",
+                   v.x,v.y,v.z, fmin, fieldValue, -fO, sep, inBand?1:0);
+        if (!inBand) continue;
+
+        Vector3 n = unit(Vector3{ carved.normals[i*3+0], carved.normals[i*3+1], carved.normals[i*3+2] });
+        float dClip  = n.x*gClip.x  + n.y*gClip.y  + n.z*gClip.z;
+        float dGroup = n.x*gGroup.x + n.y*gGroup.y + n.z*gGroup.z;
+        bandSamples++;
+        if (dClip > dGroup) { matchClip++;  worstClipDot = fminf(worstClipDot, dClip); }
+        else                { matchGroup++; }
+    }
+
+    if (carved.vertices) RL_FREE(carved.vertices);
+    if (carved.indices)  RL_FREE(carved.indices);
+    if (carved.normals)  RL_FREE(carved.normals);
+    if (carved.colors)   RL_FREE(carved.colors);
+
+    if (bandSamples == 0) {
+        printf("FAIL: clip_normals_blended found no band vertices to discriminate "
+               "(scene tuning issue, not the code under test)\n");
+        return 1;
+    }
+    // FIXED: every band vertex shades with the clip gradient (matchGroup == 0).
+    // BROKEN (old -fO > fmin trigger): band vertices keep the group gradient, so
+    // matchGroup > 0 and the test fails.
+    if (matchGroup > 0) {
+        printf("FAIL: %d/%d band vertices shaded with the group gradient instead of "
+               "the clip gradient (worstClipDot=%.3f) -- normal clip triggers on the "
+               "hard fmin, not the blended field value\n",
+               matchGroup, bandSamples, worstClipDot);
+        return 1;
+    }
+    return 0;
+}
+
 int main() {
     printf("=== Mesh continuity / edge-case matrix (headless, GL-free) ===\n");
     printf("Replicates cluster create(2r)/assign(r)/field(2.5r) + GenerateMesh + simplify.\n\n");
@@ -698,6 +810,15 @@ int main() {
     int clip_fail = test_clip_carves_surface();
     g_unexpected += clip_fail;
     printf("%s\n", clip_fail == 0 ? "PASS" : "FAIL");
+    printf("\n");
+
+    // Clip-normal agreement with non-zero blendWidth: the normal override must
+    // fire on the SAME blended field value the scalar clip carves, not the hard
+    // min. Fails under the old -fO > fmin trigger when blendWidth>0.
+    printf("clip_normals_blended: ");
+    int clipn_fail = test_clip_normals_blended();
+    g_unexpected += clipn_fail;
+    printf("%s\n", clipn_fail == 0 ? "PASS" : "FAIL");
     printf("\n");
 
     const float s = 4.0f;  // smallest cell size (size_power 0)

@@ -287,12 +287,33 @@ void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius
         }
 
         // Clip field (material-aware surfacing): where a foreign surface is nearer
-        // than this group's own field f_G == fmin, the clipped field becomes -fO,
-        // whose gradient is -unit(v - c_clip). Override the group gradient there so
-        // the recomputed normals match the carved (clipped) surface. Identical to
-        // the clip applied in CalculateScalarAndMaterial; skipped entirely when
+        // than this group's own field value, the clipped field becomes -fO, whose
+        // gradient is -unit(v - c_clip). Override the group gradient there so the
+        // recomputed normals match the carved (clipped) surface. This MUST trigger
+        // on exactly the locus the scalar clip carves, so we mirror
+        // CalculateScalarAndMaterial's final field value (the BLENDED value in the
+        // smooth-min case, not the hard min). The scalar clip compares against:
+        //   hard union (blendWidth<=1e-5 || found==1): scalarValue = fmin
+        //   smooth-min:                                scalarValue = fmin - k*ln(sum)
+        // where sum = sum_j exp(-(f_j - fmin)/k), k = blendWidth. Triggering on the
+        // hard fmin instead would leave a band where the scalar surface is carved
+        // (blendedValue <= fmin) but the normal override never fires, shading the
+        // carved wall with the stale group gradient. Skipped entirely when
         // clipCount == 0 so the unclipped path is byte-identical to before.
         if (clipParticles && clipCount > 0 && fminIdx >= 0) {
+            // Mirror the scalar path's field value (pre-clip). With blendWidth==0
+            // (or a single neighbor) sum's single exp(0)=1 term gives ln(1)=0, so
+            // fieldValue == fmin and behavior matches the old -fO > fmin trigger.
+            float fieldValue = fmin;
+            if (blendWidth > 1e-5f && found > 1) {
+                float k = blendWidth;
+                float sum = 0.0f;
+                for (int j = 0; j < found; j++) {
+                    sum += expf(-(fj[j] - fmin) / k);
+                }
+                fieldValue = fmin - k * logf(sum);
+            }
+
             float fO = INFINITY;
             int   clipIdx = -1;
             for (int c = 0; c < clipCount; ++c) {
@@ -302,7 +323,7 @@ void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius
                 float f = sqrtf(dx*dx + dy*dy + dz*dz) - clipParticles[c].radius;
                 if (f < fO) { fO = f; clipIdx = c; }
             }
-            if (clipIdx >= 0 && -fO > fmin) {
+            if (clipIdx >= 0 && -fO > fieldValue) {
                 float dx = vx - clipParticles[clipIdx].position.x;
                 float dy = vy - clipParticles[clipIdx].position.y;
                 float dz = vz - clipParticles[clipIdx].position.z;
