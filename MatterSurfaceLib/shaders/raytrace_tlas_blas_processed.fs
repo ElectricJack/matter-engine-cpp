@@ -62,7 +62,8 @@ struct MaterialProperties
 //   [0..2] albedo, [3] roughness, [4] metallic, [5] emission, [6] pad,
 //   [7] translucency, [8] ior, [9] flatShading, [10] mergeGroup, [11] pad
 #define MAX_MATERIALS 64
-uniform float materialTable[MAX_MATERIALS * 12];
+#define MATERIAL_FLOATS_PER_DEF 12
+uniform float materialTable[MAX_MATERIALS * MATERIAL_FLOATS_PER_DEF];
 uniform int materialCount;
 
 // Material lookup table - data-driven via uniform array uploaded from CPU registry
@@ -81,14 +82,14 @@ MaterialProperties getMaterialProperties(int materialId)
         mat.emission = 0.0; mat.translucency = 0.0; mat.ior = 1.0; mat.flatShading = true;
         return mat;
     }
-    int b = id * 12;
+    int b = id * MATERIAL_FLOATS_PER_DEF;
     mat.albedo = vec3(materialTable[b+0], materialTable[b+1], materialTable[b+2]);
     mat.roughness = materialTable[b+3];
     mat.metallic  = materialTable[b+4];
     mat.emission  = materialTable[b+5];
     mat.translucency = materialTable[b+7];
     mat.ior = materialTable[b+8];
-    mat.flatShading = (materialTable[b+9] > 0.5) && !forceSmooth;
+    mat.flatShading = forceSmooth ? false : (materialTable[b+9] > 0.5);
     return mat;
 }
 
