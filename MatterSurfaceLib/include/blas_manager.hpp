@@ -76,10 +76,12 @@ public:
     }
 
     // Per-triangle tint channel packed into a spare row .w of the GPU triangle
-    // texture. channel: 0=r,1=g,2=b,3=a. A null triEx packs 0.0f; alpha 0 means
-    // "no tint" in the shader, so untinted meshes stay neutral.
+    // texture. channel: 0=r,1=g,2=b,3=a. A null triEx reconstructs the neutral
+    // default (1,1,1,0): alpha 0 means "no tint" in the shader, and rgb 1 keeps
+    // untinted meshes neutral even if a future shader reads rgb without gating
+    // on alpha.
     static float pack_tint_w(const TriEx* triex, int index, int channel) {
-        if (!triex) return 0.0f;
+        if (!triex) return channel == 3 ? 0.0f : 1.0f;
         const float4& t = triex[index].tint;
         switch (channel) {
             case 0: return t.x;

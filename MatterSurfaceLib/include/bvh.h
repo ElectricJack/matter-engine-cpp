@@ -23,7 +23,7 @@ struct ALIGN(64) Tri
 
 // additional triangle data, for texturing and shading
 // tint is per-triangle RGBA copied from the nearest particle; a (alpha) is the
-// blend strength against the material albedo. (0,0,0,0) = no tint (neutral).
+// blend strength against the material albedo. (1,1,1,0) = no tint (neutral).
 struct TriEx { float2 uv0, uv1, uv2; float3 N0, N1, N2; int materialId; float4 tint; };
 
 // minimalist AABB struct with grow functionality

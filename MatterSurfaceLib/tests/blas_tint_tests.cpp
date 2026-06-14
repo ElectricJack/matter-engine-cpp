@@ -15,7 +15,7 @@ static Tri make_tri(float ox) {
 }
 
 int main() {
-    // --- pack_tint_w: reads each channel; null triex packs 0 (neutral alpha). ---
+    // --- pack_tint_w: reads each channel; null triex reconstructs (1,1,1,0). ---
     TriEx ex{};
     ex.materialId = 8;
     ex.tint = make_float4(0.2f, 0.4f, 0.6f, 0.8f);
@@ -23,7 +23,10 @@ int main() {
     CHECK(fabsf(BLASManager::pack_tint_w(&ex, 0, 1) - 0.4f) < 1e-6f, "tint.g pack");
     CHECK(fabsf(BLASManager::pack_tint_w(&ex, 0, 2) - 0.6f) < 1e-6f, "tint.b pack");
     CHECK(fabsf(BLASManager::pack_tint_w(&ex, 0, 3) - 0.8f) < 1e-6f, "tint.a pack");
-    CHECK(BLASManager::pack_tint_w(nullptr, 0, 3) == 0.0f, "null triex tint packs 0");
+    CHECK(BLASManager::pack_tint_w(nullptr, 0, 0) == 1.0f, "null triex tint.r is 1");
+    CHECK(BLASManager::pack_tint_w(nullptr, 0, 1) == 1.0f, "null triex tint.g is 1");
+    CHECK(BLASManager::pack_tint_w(nullptr, 0, 2) == 1.0f, "null triex tint.b is 1");
+    CHECK(BLASManager::pack_tint_w(nullptr, 0, 3) == 0.0f, "null triex tint.a is 0");
 
     // --- Tint participates in dedup: identical geometry + materialId but
     //     different tint must NOT share a BLAS. ---
