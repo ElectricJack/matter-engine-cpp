@@ -1,4 +1,5 @@
 #include "../include/lattice.h"
+#include "../include/occupancy.h"
 #include <cstdio>
 #include <cmath>
 
@@ -20,8 +21,28 @@ static void test_grid_lattice() {
     CHECK(fabsf(lat.spacing() - 2.0f) < 1e-6f, "grid reports its spacing");
 }
 
+static void test_occupancy() {
+    Occupancy occ;
+    CHECK(occ.count() == 0, "empty occupancy has count 0");
+    CHECK(!occ.occupied(SlotCoord{0,0,0}), "unset slot not occupied");
+
+    occ.set(SlotCoord{2, -3, 5}, SlotData{7});
+    occ.set(SlotCoord{2, -3, 5}, SlotData{7});  // idempotent
+    CHECK(occ.count() == 1, "re-setting same slot does not grow count");
+    CHECK(occ.occupied(SlotCoord{2, -3, 5}), "set slot is occupied");
+    CHECK(!occ.occupied(SlotCoord{2, -3, 6}), "neighbor slot not occupied");
+
+    // pack/unpack round-trips negatives via for_each.
+    bool seen = false;
+    occ.for_each([&](SlotCoord c, const SlotData& d) {
+        if (c.x == 2 && c.y == -3 && c.z == 5 && d.materialId == 7) seen = true;
+    });
+    CHECK(seen, "for_each round-trips coords (incl. negatives) and data");
+}
+
 int main() {
     test_grid_lattice();
+    test_occupancy();
     if (failures == 0) printf("All particle_culling tests passed\n");
     return failures == 0 ? 0 : 1;
 }
