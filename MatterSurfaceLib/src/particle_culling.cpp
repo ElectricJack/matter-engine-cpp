@@ -221,3 +221,24 @@ std::vector<EmittedParticle> emit_all(const Lattice& lattice,
     });
     return out;
 }
+
+std::vector<Particle> generate_carve_particles(const std::vector<Particle>& seeds,
+                                               const CarveParams& cp) {
+    std::vector<Particle> out;
+    if (cp.amt <= 0.0f) return out;
+    float threshold = 1.0f - cp.amt;
+    float s = (float)cp.seed;
+    for (const Particle& seed : seeds) {
+        float x = seed.position.x, y = seed.position.y, z = seed.position.z;
+        float blob  = fbm3(x*cp.freq + s, y*cp.freq, z*cp.freq);
+        float ridge = 1.0f - fabsf(2.0f*fbm3(x*cp.freq + 97.0f + s, y*cp.freq, z*cp.freq) - 1.0f);
+        float n = blob + (ridge - blob) * cp.ridge;
+        if (n <= threshold) continue;
+        float over = (threshold < 1.0f) ? (n - threshold) / (1.0f - threshold) : 1.0f;
+        float r = cp.base_radius * (0.5f + over);
+        if (cp.r_max > 0.0f && r > cp.r_max) r = cp.r_max;
+        Particle c; c.position = seed.position; c.radius = r; c.materialId = 0;
+        out.push_back(c);
+    }
+    return out;
+}

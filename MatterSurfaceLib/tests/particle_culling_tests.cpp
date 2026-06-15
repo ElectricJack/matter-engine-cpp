@@ -318,6 +318,30 @@ static void test_core_dropped_with_tiers() {
     CHECK(!any_in_core, "core cell emits zero particles even with tiers on");
 }
 
+static int test_generate_carve_particles() {
+    printf("--- generate_carve_particles: determinism + threshold ---\n");
+    std::vector<Particle> seeds;
+    for (int i = 0; i < 1000; ++i) {
+        Particle p; p.position = (Vector3){ i*0.31f, (i%7)*0.4f, (i%13)*0.5f };
+        p.radius = 0.31f; p.materialId = 8; seeds.push_back(p);
+    }
+    CarveParams off{}; off.amt = 0.0f;
+    if (!generate_carve_particles(seeds, off).empty()) { printf("  FAIL: amt=0 must emit nothing\n"); return 0; }
+
+    CarveParams cp{}; cp.amt = 0.4f; cp.freq = 0.5f; cp.base_radius = 0.2f;
+    cp.ridge = 0.0f; cp.r_max = 0.25f; cp.seed = 1337;
+    auto a = generate_carve_particles(seeds, cp);
+    auto b = generate_carve_particles(seeds, cp);
+    int ok = (!a.empty()) && (a.size() == b.size());
+    for (size_t i = 0; ok && i < a.size(); ++i)
+        if (a[i].position.x != b[i].position.x || a[i].radius != b[i].radius) ok = 0;
+    for (const auto& c : a) if (c.radius > cp.r_max + 1e-6f) { ok = 0; printf("  FAIL: r > r_max\n"); break; }
+    CarveParams more = cp; more.amt = 0.8f;
+    if (generate_carve_particles(seeds, more).size() < a.size()) { ok = 0; printf("  FAIL: higher amt should not reduce count\n"); }
+    if (!ok) printf("  FAIL: determinism/threshold check\n"); else printf("  OK (%zu carves)\n", a.size());
+    return ok;
+}
+
 int main() {
     test_grid_lattice();
     test_occupancy();
@@ -332,6 +356,7 @@ int main() {
     test_tier0_regression_and_detail();
     test_tiered_emission();
     test_core_dropped_with_tiers();
+    CHECK(test_generate_carve_particles(), "generate_carve_particles determinism/threshold");
     if (failures == 0) printf("All particle_culling tests passed\n");
     return failures == 0 ? 0 : 1;
 }

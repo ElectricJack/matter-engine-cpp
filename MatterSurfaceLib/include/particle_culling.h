@@ -2,6 +2,7 @@
 
 #include "lattice.h"
 #include "occupancy.h"
+#include "particle.h"
 #include <vector>
 #include <cstdint>
 
@@ -20,6 +21,8 @@ struct CullParams {
     float radius_variation = 0.0f; // particle radius scales by 1 +/- this (0 = uniform)
     float radius_cluster_freq = 0.0f; // value-noise frequency driving radius
                                       // clusters; low = big clumps of one scale
+    float lump_amt = 0.0f;  // low-freq additive radius modulation (0 = off)
+    float lump_freq = 0.0f; // lumpiness noise frequency (low = coarse bulges)
     float jitter_amount; // per-axis position jitter magnitude (0 = none)
     float tint_alpha;    // tint blend strength written to EmittedParticle.tint.w
     float vein_freq = 0.0f; // marble vein band frequency (0 = legacy random tint)
@@ -39,6 +42,21 @@ struct CullStats {
     size_t cells_skipped = 0;  // interior cells (Skin + Core) -> skip-meshed
     size_t cells_core = 0;     // core cells -> particles dropped
 };
+
+// Subtractive carve-particle generation. Seeded from surface particles; where a
+// blended blob/ridge noise field exceeds (1 - amt), emit a negative particle
+// whose radius scales with the overshoot (capped at r_max for watertightness).
+struct CarveParams {
+    float amt = 0.0f;          // 0 = off; threshold = 1 - amt
+    float freq = 0.0f;         // carve noise frequency (feature spacing)
+    float base_radius = 0.0f;  // base divot radius
+    float ridge = 0.0f;        // 0 = round divots, 1 = linear crevices
+    float r_max = 0.0f;        // watertight cap on carve radius (<=0 = uncapped)
+    uint32_t seed = 0;
+};
+
+std::vector<Particle> generate_carve_particles(const std::vector<Particle>& seeds,
+                                               const CarveParams& cp);
 
 // Deterministic value-noise primitives (moved from main.cpp). [0,1] output.
 float lattice_vhash(int x, int y, int z);
