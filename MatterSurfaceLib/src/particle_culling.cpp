@@ -68,45 +68,60 @@ int slot_tier(int depth, int max_tier) {
     return max_tier - d;
 }
 
-// Build one emitted particle for a slot. Jitter and tint are pure functions of
-// (SlotCoord, seed) so the same design always bakes identically.
-static EmittedParticle make_particle(const Lattice& lat, SlotCoord c,
-                                     const SlotData& d, const CullParams& p) {
-    Vector3 base = lat.slot_position(c);
+// Build one emitted sub-particle for tier `tier` at sub-offset (ox,oy,oz) within
+// slot `c`. Tier 0 with offset (0,0,0) reproduces the legacy one-particle-per-
+// slot output exactly. Continuous fields (radius clusters, marble veins) sample
+// the centered fractional lattice coord; per-particle uniqueness hashes the fine
+// integer coord. All deterministic in (SlotCoord, sub-offset, seed).
+static EmittedParticle make_sub_particle(const Lattice& lat, SlotCoord c, int tier,
+                                         int ox, int oy, int oz,
+                                         const SlotData& d, const CullParams& p) {
+    int   scale = 1 << tier;                 // 2^tier
+    float inv   = 1.0f / (float)scale;
     int s = (int)p.seed;
-    float jx = (lattice_vhash(c.x * 2 + 1 + s, c.y, c.z) - 0.5f) * p.jitter_amount;
-    float jy = (lattice_vhash(c.x, c.y * 2 + 1 + s, c.z) - 0.5f) * p.jitter_amount;
-    float jz = (lattice_vhash(c.x, c.y, c.z * 2 + 1 + s) - 0.5f) * p.jitter_amount;
+
+    // Fine integer coord (per-particle hashing) and centered fractional coord
+    // (continuous noise). Centered: fr == 0 at tier 0, so legacy output is exact.
+    int   fx = c.x * scale + ox, fy = c.y * scale + oy, fz = c.z * scale + oz;
+    float frx = (ox + 0.5f) * inv - 0.5f;
+    float fry = (oy + 0.5f) * inv - 0.5f;
+    float frz = (oz + 0.5f) * inv - 0.5f;
+    float cfx = c.x + frx, cfy = c.y + fry, cfz = c.z + frz;
+
+    Vector3 base = lat.slot_position(c);
+    float spacing = p.spacing;
+    float jamt = p.jitter_amount * inv;       // jitter proportional to sub-spacing
+    float jx = (lattice_vhash(fx * 2 + 1 + s, fy, fz) - 0.5f) * jamt;
+    float jy = (lattice_vhash(fx, fy * 2 + 1 + s, fz) - 0.5f) * jamt;
+    float jz = (lattice_vhash(fx, fy, fz * 2 + 1 + s) - 0.5f) * jamt;
 
     EmittedParticle ep;
-    ep.position   = Vector3{ base.x + jx, base.y + jy, base.z + jz };
-    // Radius variation has two parts: a low-frequency value-noise term shared by
-    // neighboring slots (so big and small particles form clumps) plus a small
-    // per-particle term that breaks up the clumps. Cluster term dominates.
+    ep.position = Vector3{ base.x + frx * spacing + jx,
+                          base.y + fry * spacing + jy,
+                          base.z + frz * spacing + jz };
+
     float f = p.radius_cluster_freq;
-    float cluster = (lattice_vnoise(c.x * f, c.y * f, c.z * f) - 0.5f) * 2.0f; // [-1,1]
-    float fine    = (lattice_vhash(c.x + 211 + s, c.y + 211, c.z + 211) - 0.5f) * 2.0f;
+    float cluster = (lattice_vnoise(cfx * f, cfy * f, cfz * f) - 0.5f) * 2.0f; // [-1,1]
+    float fine    = (lattice_vhash(fx + 211 + s, fy + 211, fz + 211) - 0.5f) * 2.0f;
     float rv = cluster * 0.75f + fine * 0.25f;
-    ep.radius     = p.base_radius * (1.0f + rv * p.radius_variation);
+    ep.radius     = (p.base_radius * inv) * (1.0f + rv * p.radius_variation);
     ep.materialId = d.materialId;
+    ep.detail_size = spacing * inv;           // S / 2^tier
 
     if (p.vein_freq > 0.0f) {
-        // Marble veining: warp a sinusoidal band field with fractal turbulence so
-        // the veins meander, then sharpen the peaks into thin dark streaks over a
-        // warm-white body with subtle mottling. Grayscale keeps it stone-like.
-        float turb  = fbm3(c.x * 0.08f + s, c.y * 0.08f, c.z * 0.08f);
-        float band  = sinf((c.x + c.y * 0.6f + c.z) * p.vein_freq
+        float turb  = fbm3(cfx * 0.08f + s, cfy * 0.08f, cfz * 0.08f);
+        float band  = sinf((cfx + cfy * 0.6f + cfz) * p.vein_freq
                            + p.vein_warp * turb * 6.2831853f);
-        float vein  = powf(0.5f + 0.5f * band, 6.0f);          // [0,1] sharp ridges
-        float mottle = (fbm3(c.x * 0.2f + 50.0f, c.y * 0.2f, c.z * 0.2f) - 0.5f) * 0.10f;
+        float vein  = powf(0.5f + 0.5f * band, 6.0f);
+        float mottle = (fbm3(cfx * 0.2f + 50.0f, cfy * 0.2f, cfz * 0.2f) - 0.5f) * 0.10f;
         float L = (0.92f - 0.55f * vein) + mottle;
         if (L < 0.05f) L = 0.05f;
         if (L > 1.0f)  L = 1.0f;
-        ep.tint = Vector4{ L, L * 0.97f, L * 0.92f, p.tint_alpha }; // warm white marble
+        ep.tint = Vector4{ L, L * 0.97f, L * 0.92f, p.tint_alpha };
     } else {
-        float tr = lattice_vhash(c.x + 101 + s, c.y, c.z);
-        float tg = lattice_vhash(c.x, c.y + 101 + s, c.z);
-        float tb = lattice_vhash(c.x, c.y, c.z + 101 + s);
+        float tr = lattice_vhash(fx + 101 + s, fy, fz);
+        float tg = lattice_vhash(fx, fy + 101 + s, fz);
+        float tb = lattice_vhash(fx, fy, fz + 101 + s);
         ep.tint = Vector4{ tr, tg, tb, p.tint_alpha };
     }
     return ep;
@@ -167,7 +182,7 @@ std::vector<EmittedParticle> cull_interior(const Lattice& lattice,
     occ.for_each([&](SlotCoord c, const SlotData& d) {
         uint64_t k = pack_slot(cell_coord_of(lattice, c, p));
         if (core.find(k) == core.end())
-            out.push_back(make_particle(lattice, c, d, p));
+            out.push_back(make_sub_particle(lattice, c, 0, 0, 0, 0, d, p));
     });
 
     if (no_mesh_cells) {
@@ -192,7 +207,7 @@ std::vector<EmittedParticle> emit_all(const Lattice& lattice,
                                       const CullParams& p) {
     std::vector<EmittedParticle> out;
     occ.for_each([&](SlotCoord c, const SlotData& d) {
-        out.push_back(make_particle(lattice, c, d, p));
+        out.push_back(make_sub_particle(lattice, c, 0, 0, 0, 0, d, p));
     });
     return out;
 }

@@ -11,6 +11,7 @@ struct EmittedParticle {
     float radius;
     uint32_t materialId;
     Vector4 tint;       // RGBA; w = blend strength
+    float detail_size;  // nominal lattice spacing at this particle's tier (S / 2^tier)
 };
 
 struct CullParams {
@@ -23,6 +24,8 @@ struct CullParams {
     float tint_alpha;    // tint blend strength written to EmittedParticle.tint.w
     float vein_freq = 0.0f; // marble vein band frequency (0 = legacy random tint)
     float vein_warp = 0.0f; // how much turbulence meanders the veins
+    int   max_tier = 0;   // 0 = one particle per slot (pre-feature behavior)
+    float spacing  = 0.0f;// lattice tier-0 spacing S (GridLattice::spacing())
     uint32_t seed;       // determinism seed for jitter/tint
     float cell_size;     // meshing cell size used to bucket slots into cells
     Vector3 cell_origin_offset; // added to slot_position before bucketing so the

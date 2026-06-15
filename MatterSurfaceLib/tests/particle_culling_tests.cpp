@@ -66,6 +66,8 @@ static CullParams default_params(int margin) {
     p.margin = margin; p.base_radius = 0.4f;
     p.jitter_amount = 0.1f; p.tint_alpha = 0.2f; p.seed = 1337;
     p.cell_size = 1.6f; p.cell_origin_offset = Vector3{0,0,0};
+    p.spacing = 0.8f;   // matches the GridLattice(0.8f) used throughout
+    p.max_tier = 0;     // refinement off unless a test opts in
     return p;
 }
 
@@ -246,6 +248,19 @@ static void test_determinism() {
     CHECK(any_moved, "different seed changes jittered positions");
 }
 
+static void test_tier0_regression_and_detail() {
+    GridLattice lat(0.8f);
+    Occupancy occ = solid_block(5);
+
+    // max_tier 0: every emitted particle carries detail_size == spacing (tier 0).
+    auto base = cull_interior(lat, occ, default_params(1));
+    bool all_tier0_detail = true;
+    for (const auto& ep : base)
+        if (fabsf(ep.detail_size - 0.8f) > 1e-6f) all_tier0_detail = false;
+    CHECK(all_tier0_detail, "tier-0 emit sets detail_size == spacing");
+    CHECK(!base.empty(), "tier-0 emit is non-empty");
+}
+
 int main() {
     test_grid_lattice();
     test_occupancy();
@@ -257,6 +272,7 @@ int main() {
     test_skip_set_is_interior();
     test_thin_shape_keeps_all();
     test_determinism();
+    test_tier0_regression_and_detail();
     if (failures == 0) printf("All particle_culling tests passed\n");
     return failures == 0 ? 0 : 1;
 }
