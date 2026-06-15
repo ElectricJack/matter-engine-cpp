@@ -71,7 +71,7 @@ public:
     // TLAS integration
     void add_to_tlas() const;
     
-    // LOD configuration
+    // Cell sizing
     void set_smallest_cell_size(float size) { smallest_cell_size_ = size; }
     float get_smallest_cell_size() const { return smallest_cell_size_; }
     

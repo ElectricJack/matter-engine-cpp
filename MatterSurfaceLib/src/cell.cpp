@@ -244,11 +244,11 @@ std::vector<Tri> convert_mesh_to_triangles(const Mesh& mesh, std::vector<TriEx>*
     return triangles;
 }
 
-// --- LOD feature-degradation tunables, expressed in voxels of the current cell ---
+// --- Feature-degradation tunables, expressed in voxels of the current cell ---
 // Marching cubes only emits a surface where a grid sample lands inside an SDF
-// well, so a feature must span ~1 voxel to be sampled at all. As LOD rises the
-// voxel grows and a fixed-size particle's size-in-voxels (rv = radius/voxel)
-// shrinks, walking it through three regimes:
+// well, so a feature must span ~1 voxel to be sampled at all. A coarser cell
+// (smaller divisionPow) has a larger voxel, so a fixed-size particle's
+// size-in-voxels (rv = radius/voxel) shrinks, walking it through three regimes:
 //   rv >= kFeatureVisVoxels    : kept at its true radius (fully resolvable).
 //   rv in [kCull, kVis)        : lifted to kFeatureVisVoxels voxels so it stays
 //                                samplable -- a slight enlargement -- and the
@@ -256,12 +256,13 @@ std::vector<Tri> convert_mesh_to_triangles(const Mesh& mesh, std::vector<TriEx>*
 //   rv <  kFeatureCullVoxels   : dropped entirely. If it sat next to a bigger
 //                                particle the blend already absorbed it, so no
 //                                hole appears; isolated tiny features just vanish.
-// Net effect across ascending LODs: slightly larger -> metaball blend -> gone.
+// Net effect as the voxel grows: slightly larger -> metaball blend -> gone.
 static constexpr float kFeatureVisVoxels  = 1.0f;
 static constexpr float kFeatureCullVoxels = 0.6f;
 
-// Smooth-min fillet width as a fraction of voxel size. Voxel grows with LOD, so
-// the metaball blend strengthens at coarser LODs and is near-sharp at LOD 0.
+// Smooth-min fillet width as a fraction of voxel size. A coarser cell has a
+// larger voxel, so the metaball blend strengthens; at the finest resolution it
+// is near-sharp.
 static constexpr float kBlendVoxels = 0.5f;
 
 std::vector<Particle> build_clip_particles(
