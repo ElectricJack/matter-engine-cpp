@@ -554,6 +554,15 @@ private:
         if (csEnv) { float v = (float)atof(csEnv); if (v > 0.0f) cell_size = v; }
         test_cluster_->set_smallest_cell_size(cell_size);
 
+        int max_tier = 1;
+        if (const char* mtEnv = getenv("MSL_MAX_TIER")) max_tier = atoi(mtEnv);
+        if (max_tier < 0) max_tier = 0;
+        int max_pow = 6;
+        if (const char* mpEnv = getenv("MSL_MAX_POW")) max_pow = atoi(mpEnv);
+        if (max_pow < 4) max_pow = 4;
+        test_cluster_->set_base_detail_size(SPACING);
+        test_cluster_->set_max_division_pow(max_pow);
+
         // Build a solid block of occupancy, centered on the origin, with a
         // checkerboard of the two opaque stones so the surface shows variation.
         GridLattice lattice(SPACING);
@@ -595,6 +604,8 @@ private:
         p.vein_freq = VEIN_FREQ; p.vein_warp = VEIN_WARP;
         p.cell_size = test_cluster_->get_smallest_cell_size();   // single cell size
         p.cell_origin_offset = Vector3{ -halfx, -halfy, -halfz };
+        p.max_tier = max_tier;
+        p.spacing  = SPACING;
 
         CullStats stats;
         std::vector<SlotCoord> no_mesh;
@@ -604,7 +615,7 @@ private:
 
         for (auto& ep : emitted) {
             Vector3 pos = { ep.position.x - halfx, ep.position.y - halfy, ep.position.z - halfz };
-            test_cluster_->add_particle(pos, ep.radius, ep.materialId, ep.tint);
+            test_cluster_->add_particle(pos, ep.radius, ep.materialId, ep.tint, ep.detail_size);
         }
 
         if (bypass) {
@@ -618,9 +629,9 @@ private:
                 nm.push_back(Vector3{(float)c.x, (float)c.y, (float)c.z});
             test_cluster_->set_no_mesh_cells(nm);
             printf("[cull] occupied=%zu emitted=%zu cells_meshed=%zu "
-                   "cells_skipped=%zu cells_core=%zu (margin=%d)\n",
+                   "cells_skipped=%zu cells_core=%zu (margin=%d max_tier=%d max_pow=%d)\n",
                    occ.count(), emitted.size(), stats.cells_meshed,
-                   stats.cells_skipped, stats.cells_core, margin);
+                   stats.cells_skipped, stats.cells_core, margin, max_tier, max_pow);
         }
 
         test_cluster_->set_position({0.0f, 2.0f, 0.0f});
