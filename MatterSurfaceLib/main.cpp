@@ -549,6 +549,8 @@ private:
         CullParams p;
         p.margin = margin; p.base_radius = BASE_RADIUS;
         p.jitter_amount = POS_JITTER; p.tint_alpha = TINT_ALPHA; p.seed = 1337;
+        p.cell_size = test_cluster_->get_current_cell_size();
+        p.cell_origin_offset = Vector3{0, 0, 0};
 
         std::vector<EmittedParticle> emitted =
             bypass ? emit_all(lattice, occ, p) : cull_interior(lattice, occ, p);

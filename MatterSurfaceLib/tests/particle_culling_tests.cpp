@@ -3,6 +3,7 @@
 #include "../include/particle_culling.h"
 #include <cstdio>
 #include <cmath>
+#include <map>
 
 static int failures = 0;
 #define CHECK(cond, msg) do { if (!(cond)) { printf("FAIL: %s\n", msg); ++failures; } } while (0)
@@ -62,6 +63,7 @@ static CullParams default_params(int margin) {
     CullParams p;
     p.margin = margin; p.base_radius = 0.4f;
     p.jitter_amount = 0.1f; p.tint_alpha = 0.2f; p.seed = 1337;
+    p.cell_size = 1.6f; p.cell_origin_offset = Vector3{0,0,0};
     return p;
 }
 
@@ -76,17 +78,58 @@ static void test_cull_counts() {
     GridLattice lat(0.8f);
     Occupancy occ = solid_block(5);
 
+    // cell_size 1.6 -> 2 slots/cell. margin 1 buries {1,2,3}^3; the only fully
+    // buried cell is (1,1,1) = slots {2,3}^3 -> drops 8, keeps 117.
     auto m1 = cull_interior(lat, occ, default_params(1));
-    CHECK(m1.size() == 98, "margin 1 keeps 98 of 125 (drops inner 3^3)");
+    CHECK(m1.size() == 117, "margin 1 drops the one fully-buried cell (8 slots)");
 
+    // margin 2 buries only the center slot -> no cell fully buried -> keep all.
     auto m2 = cull_interior(lat, occ, default_params(2));
-    CHECK(m2.size() == 124, "margin 2 keeps 124 of 125 (drops inner 1^3)");
+    CHECK(m2.size() == 125, "margin 2 leaves no fully-buried cell");
 
     auto all = emit_all(lat, occ, default_params(1));
     CHECK(all.size() == 125, "emit_all keeps all 125");
 
     auto m0 = cull_interior(lat, occ, default_params(0));
-    CHECK(m0.size() == 98, "margin 0 clamped to 1");
+    CHECK(m0.size() == 117, "margin 0 clamped to 1");
+}
+
+// A cell-key helper mirroring cull_interior's bucketing (offset 0 in tests).
+static long long test_cell_key(const Vector3& pos, float cs) {
+    long long cx = (long long)floorf(pos.x / cs);
+    long long cy = (long long)floorf(pos.y / cs);
+    long long cz = (long long)floorf(pos.z / cs);
+    return (cx + 1000) * 4000000LL + (cy + 1000) * 2000LL + (cz + 1000);
+}
+
+static void test_cell_atomic_no_partial() {
+    GridLattice lat(0.8f);
+    Occupancy occ = solid_block(5);
+    CullParams p = default_params(1);
+    p.jitter_amount = 0.0f;   // emitted position == slot_position, exact bucketing
+
+    // Expected occupied-slot count per cell, straight from the occupancy.
+    std::map<long long, int> expected;
+    occ.for_each([&](SlotCoord c, const SlotData&) {
+        Vector3 sp = lat.slot_position(c);
+        expected[test_cell_key(sp, p.cell_size)]++;
+    });
+
+    // Actual emitted-particle count per cell after culling.
+    auto kept = cull_interior(lat, occ, p);
+    std::map<long long, int> got;
+    for (const auto& ep : kept) got[test_cell_key(ep.position, p.cell_size)]++;
+
+    // Every cell that contributes at least one particle must contribute ALL of
+    // its occupied slots (no partially-emitted cell -> no cavity).
+    bool all_full = true;
+    for (const auto& kv : got)
+        if (kv.second != expected[kv.first]) all_full = false;
+    CHECK(all_full, "every kept cell emits all of its slots (no partial cell)");
+
+    // Exactly one cell (the fully-buried center) is dropped.
+    CHECK(got.size() == expected.size() - 1, "exactly one cell dropped at margin 1");
+    CHECK(kept.size() == 117, "117 particles survive cell-atomic margin-1 cull");
 }
 
 static void test_thin_shape_keeps_all() {
@@ -129,6 +172,7 @@ int main() {
     test_occupancy();
     test_burial();
     test_cull_counts();
+    test_cell_atomic_no_partial();
     test_thin_shape_keeps_all();
     test_determinism();
     if (failures == 0) printf("All particle_culling tests passed\n");

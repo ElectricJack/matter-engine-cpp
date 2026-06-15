@@ -1,5 +1,7 @@
 #include "particle_culling.h"
 #include <cmath>
+#include <unordered_map>
+#include <cassert>
 
 float lattice_vhash(int x, int y, int z) {
     uint32_t h = ((uint32_t)x * 374761393u) ^ ((uint32_t)y * 668265263u) ^ ((uint32_t)z * 2147483647u);
@@ -53,14 +55,48 @@ static EmittedParticle make_particle(const Lattice& lat, SlotCoord c,
     return ep;
 }
 
+// Pack a slot's owning meshing-cell coordinate into one key. Mirrors
+// Cluster::get_cell_coordinates: floor((slot_pos + offset) / cell_size).
+static uint64_t cell_key(const Lattice& lat, SlotCoord c, const CullParams& p) {
+    Vector3 base = lat.slot_position(c);
+    int cx = (int)floorf((base.x + p.cell_origin_offset.x) / p.cell_size);
+    int cy = (int)floorf((base.y + p.cell_origin_offset.y) / p.cell_size);
+    int cz = (int)floorf((base.z + p.cell_origin_offset.z) / p.cell_size);
+    return pack_slot(SlotCoord{cx, cy, cz});
+}
+
 std::vector<EmittedParticle> cull_interior(const Lattice& lattice,
                                            const Occupancy& occ,
-                                           const CullParams& p) {
+                                           const CullParams& p,
+                                           CullStats* stats) {
+    assert(p.cell_size > 0.0f && "CullParams.cell_size must be positive");
     int margin = p.margin < 1 ? 1 : p.margin;
+
+    // Pass 1: decide keep/drop per cell. A cell is kept iff any of its slots is
+    // non-buried; this is independent of iteration order.
+    std::unordered_map<uint64_t, bool> keep;
+    occ.for_each([&](SlotCoord c, const SlotData&) {
+        uint64_t k = cell_key(lattice, c, p);
+        bool not_buried = !slot_is_buried(occ, c, margin);
+        auto it = keep.find(k);
+        if (it == keep.end()) keep.emplace(k, not_buried);
+        else if (not_buried) it->second = true;
+    });
+
+    // Pass 2: emit every slot of every kept cell.
     std::vector<EmittedParticle> out;
     occ.for_each([&](SlotCoord c, const SlotData& d) {
-        if (!slot_is_buried(occ, c, margin)) out.push_back(make_particle(lattice, c, d, p));
+        auto it = keep.find(cell_key(lattice, c, p));
+        if (it != keep.end() && it->second)
+            out.push_back(make_particle(lattice, c, d, p));
     });
+
+    if (stats) {
+        stats->cells_total = keep.size();
+        stats->cells_kept = 0;
+        for (const auto& kv : keep) if (kv.second) ++stats->cells_kept;
+        stats->cells_dropped = stats->cells_total - stats->cells_kept;
+    }
     return out;
 }
 
