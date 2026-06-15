@@ -1,6 +1,7 @@
 #include "particle_culling.h"
 #include <cmath>
 #include <unordered_map>
+#include <unordered_set>
 #include <cassert>
 
 float lattice_vhash(int x, int y, int z) {
@@ -55,47 +56,77 @@ static EmittedParticle make_particle(const Lattice& lat, SlotCoord c,
     return ep;
 }
 
-// Pack a slot's owning meshing-cell coordinate into one key. Mirrors
-// Cluster::get_cell_coordinates: floor((slot_pos + offset) / cell_size).
-static uint64_t cell_key(const Lattice& lat, SlotCoord c, const CullParams& p) {
+// Integer cell coordinate of a slot, on the same grid the Cluster keys cells on.
+static SlotCoord cell_coord_of(const Lattice& lat, SlotCoord c, const CullParams& p) {
     Vector3 base = lat.slot_position(c);
     int cx = (int)floorf((base.x + p.cell_origin_offset.x) / p.cell_size);
     int cy = (int)floorf((base.y + p.cell_origin_offset.y) / p.cell_size);
     int cz = (int)floorf((base.z + p.cell_origin_offset.z) / p.cell_size);
-    return pack_slot(SlotCoord{cx, cy, cz});
+    return SlotCoord{cx, cy, cz};
 }
 
 std::vector<EmittedParticle> cull_interior(const Lattice& lattice,
                                            const Occupancy& occ,
                                            const CullParams& p,
-                                           CullStats* stats) {
+                                           CullStats* stats,
+                                           std::vector<SlotCoord>* no_mesh_cells) {
     assert(p.cell_size > 0.0f && "CullParams.cell_size must be positive");
     int margin = p.margin < 1 ? 1 : p.margin;
 
-    // Pass 1: decide keep/drop per cell. A cell is kept iff any of its slots is
-    // non-buried; this is independent of iteration order.
-    std::unordered_map<uint64_t, bool> keep;
+    // Pass 1: classify each cell. interior[k] == true iff no slot in cell k is
+    // non-buried. coord_of[k] remembers the cell's integer coordinate.
+    std::unordered_map<uint64_t, bool> interior;
+    std::unordered_map<uint64_t, SlotCoord> coord_of;
     occ.for_each([&](SlotCoord c, const SlotData&) {
-        uint64_t k = cell_key(lattice, c, p);
-        bool not_buried = !slot_is_buried(occ, c, margin);
-        auto it = keep.find(k);
-        if (it == keep.end()) keep.emplace(k, not_buried);
-        else if (not_buried) it->second = true;
+        SlotCoord cc = cell_coord_of(lattice, c, p);
+        uint64_t k = pack_slot(cc);
+        bool buried = slot_is_buried(occ, c, margin);
+        auto it = interior.find(k);
+        if (it == interior.end()) {
+            interior.emplace(k, buried);
+            coord_of.emplace(k, cc);
+        } else if (!buried) {
+            it->second = false;
+        }
     });
 
-    // Pass 2: emit every slot of every kept cell.
+    // Pass 2: core = interior cell whose 26 neighbors are all present + interior.
+    static const int OFF[3] = {-1, 0, 1};
+    std::unordered_set<uint64_t> core;
+    for (const auto& kv : interior) {
+        if (!kv.second) continue;
+        SlotCoord cc = coord_of[kv.first];
+        bool all_in = true;
+        for (int dz : OFF) { for (int dy : OFF) { for (int dx : OFF) {
+            if (dx == 0 && dy == 0 && dz == 0) continue;
+            uint64_t nk = pack_slot(SlotCoord{cc.x + dx, cc.y + dy, cc.z + dz});
+            auto it = interior.find(nk);
+            if (it == interior.end() || !it->second) { all_in = false; }
+        }}}
+        if (all_in) core.insert(kv.first);
+    }
+
+    // Pass 3: emit every slot whose cell is not core.
     std::vector<EmittedParticle> out;
     occ.for_each([&](SlotCoord c, const SlotData& d) {
-        auto it = keep.find(cell_key(lattice, c, p));
-        if (it != keep.end() && it->second)
+        uint64_t k = pack_slot(cell_coord_of(lattice, c, p));
+        if (core.find(k) == core.end())
             out.push_back(make_particle(lattice, c, d, p));
     });
 
+    if (no_mesh_cells) {
+        no_mesh_cells->clear();
+        for (const auto& kv : interior)
+            if (kv.second) no_mesh_cells->push_back(coord_of[kv.first]);
+    }
+
     if (stats) {
-        stats->cells_total = keep.size();
-        stats->cells_kept = 0;
-        for (const auto& kv : keep) if (kv.second) ++stats->cells_kept;
-        stats->cells_dropped = stats->cells_total - stats->cells_kept;
+        stats->cells_total = interior.size();
+        size_t skipped = 0;
+        for (const auto& kv : interior) if (kv.second) ++skipped;
+        stats->cells_skipped = skipped;
+        stats->cells_core = core.size();
+        stats->cells_meshed = stats->cells_total - skipped;
     }
     return out;
 }

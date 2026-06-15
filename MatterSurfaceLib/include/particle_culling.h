@@ -24,11 +24,12 @@ struct CullParams {
                                 // cull grid matches the Cluster's recentered grid
 };
 
-// Per-call statistics about the cell-granular decision (optional output).
+// Per-call statistics about the cell classification (optional output).
 struct CullStats {
-    size_t cells_total = 0;
-    size_t cells_kept = 0;
-    size_t cells_dropped = 0;
+    size_t cells_total = 0;    // occupied cells
+    size_t cells_meshed = 0;   // Surface cells (not interior) -> meshed
+    size_t cells_skipped = 0;  // interior cells (Skin + Core) -> skip-meshed
+    size_t cells_core = 0;     // core cells -> particles dropped
 };
 
 // Deterministic value-noise primitives (moved from main.cpp). [0,1] output.
@@ -41,16 +42,24 @@ float lattice_vnoise(float x, float y, float z);
 // would instead expand neighbor_offsets via BFS to `margin` steps.
 bool slot_is_buried(const Occupancy& occ, SlotCoord c, int margin);
 
-// Cell-granular interior culling. Slots are bucketed into meshing cells via
-// floor((slot_position + cell_origin_offset) / cell_size). A cell is KEPT if any
-// of its slots is non-buried (slot_is_buried with margin>=1); a cell is DROPPED
-// only when EVERY slot in it is buried. Kept cells emit ALL their slots, so no
-// holes (and thus no inner SDF cavity) ever form inside a meshed cell. When
-// `stats` is non-null it is filled with the per-call cell counts.
+// Cell-granular interior skip-meshing. Slots are bucketed into cells via
+// floor((slot_position + cell_origin_offset) / cell_size). A cell is INTERIOR
+// iff every slot in it is buried (slot_is_buried, margin>=1); a cell is CORE iff
+// it is interior AND all 26 neighbor cells are present and interior.
+//
+// Emits a particle for every occupied slot EXCEPT those in core cells (core
+// particles are never within sphere-reach of a meshed cell, so dropping them
+// cannot perturb the outer surface). When `no_mesh_cells` is non-null it is
+// filled with every interior cell's integer coordinate (the cells the cluster
+// should create-but-not-mesh). When `stats` is non-null it gets the per-call
+// cell counts. Interior cells keep their particles unless they are core, so
+// every meshed (non-interior) cell is backed by particle-bearing neighbors and
+// no inner surface forms.
 std::vector<EmittedParticle> cull_interior(const Lattice& lattice,
                                            const Occupancy& occ,
                                            const CullParams& p,
-                                           CullStats* stats = nullptr);
+                                           CullStats* stats = nullptr,
+                                           std::vector<SlotCoord>* no_mesh_cells = nullptr);
 
 // Baseline: emit a particle for every occupied slot (no culling). Used by the
 // A/B acceptance comparison.

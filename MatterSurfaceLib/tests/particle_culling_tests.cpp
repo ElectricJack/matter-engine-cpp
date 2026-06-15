@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cmath>
 #include <map>
+#include <set>
+#include <tuple>
 
 static int failures = 0;
 #define CHECK(cond, msg) do { if (!(cond)) { printf("FAIL: %s\n", msg); ++failures; } } while (0)
@@ -76,22 +78,35 @@ static void test_burial() {
 
 static void test_cull_counts() {
     GridLattice lat(0.8f);
-    Occupancy occ = solid_block(5);
+    Occupancy occ = solid_block(10);
 
-    // cell_size 1.6 -> 2 slots/cell. margin 1 buries {1,2,3}^3; the only fully
-    // buried cell is (1,1,1) = slots {2,3}^3 -> drops 8, keeps 117.
-    auto m1 = cull_interior(lat, occ, default_params(1));
-    CHECK(m1.size() == 117, "margin 1 drops the one fully-buried cell (8 slots)");
-
-    // margin 2 buries only the center slot -> no cell fully buried -> keep all.
-    auto m2 = cull_interior(lat, occ, default_params(2));
-    CHECK(m2.size() == 125, "margin 2 leaves no fully-buried cell");
+    // spacing 0.8, cell_size 1.6 -> 2 slots/cell; cell k covers slots {2k,2k+1}.
+    // margin 1 buries slots with every coord in [1,8]. A cell is interior iff all
+    // its slots are buried -> interior cells = k in {1,2,3}^3 = 27. Only (2,2,2)
+    // has all 26 neighbors interior -> 1 core cell, dropping its 8 slots.
+    CullStats stats;
+    std::vector<SlotCoord> no_mesh;
+    auto m1 = cull_interior(lat, occ, default_params(1), &stats, &no_mesh);
+    CHECK(m1.size() == 992, "margin 1 drops only the single core cell's 8 slots");
+    CHECK(no_mesh.size() == 27, "27 interior cells reported as no-mesh");
+    CHECK(stats.cells_total == 125, "125 occupied cells total");
+    CHECK(stats.cells_skipped == 27, "27 cells skip-meshed (interior)");
+    CHECK(stats.cells_core == 1, "1 core cell");
+    CHECK(stats.cells_meshed == 98, "98 cells meshed (125 - 27 interior)");
 
     auto all = emit_all(lat, occ, default_params(1));
-    CHECK(all.size() == 125, "emit_all keeps all 125");
+    CHECK(all.size() == 1000, "emit_all keeps all 1000 slots");
 
-    auto m0 = cull_interior(lat, occ, default_params(0));
-    CHECK(m0.size() == 117, "margin 0 clamped to 1");
+    // margin 0 clamps to 1 -> same result.
+    CullStats s0;
+    auto m0 = cull_interior(lat, occ, default_params(0), &s0, nullptr);
+    CHECK(m0.size() == 992, "margin 0 clamped to 1");
+}
+
+// Same key formula as test_cell_key, but from an integer cell coord directly
+// (the cull reports no_mesh cells as integer coords with floor already applied).
+static long long cell_coord_key(int cx, int cy, int cz) {
+    return (cx + 1000) * 4000000LL + (cy + 1000) * 2000LL + (cz + 1000);
 }
 
 // A cell-key helper mirroring cull_interior's bucketing (offset 0 in tests).
@@ -102,34 +117,76 @@ static long long test_cell_key(const Vector3& pos, float cs) {
     return (cx + 1000) * 4000000LL + (cy + 1000) * 2000LL + (cz + 1000);
 }
 
-static void test_cell_atomic_no_partial() {
+static void test_no_meshed_cell_borders_dropped() {
     GridLattice lat(0.8f);
-    Occupancy occ = solid_block(5);
+    Occupancy occ = solid_block(10);
     CullParams p = default_params(1);
     p.jitter_amount = 0.0f;   // emitted position == slot_position, exact bucketing
 
-    // Expected occupied-slot count per cell, straight from the occupancy.
-    std::map<long long, int> expected;
+    std::vector<SlotCoord> no_mesh;
+    auto kept = cull_interior(lat, occ, p, nullptr, &no_mesh);
+
+    auto cell_of = [&](const Vector3& pos) {
+        return std::make_tuple((int)floorf(pos.x / p.cell_size),
+                               (int)floorf(pos.y / p.cell_size),
+                               (int)floorf(pos.z / p.cell_size));
+    };
+
+    std::set<std::tuple<int,int,int>> occupied;
     occ.for_each([&](SlotCoord c, const SlotData&) {
-        Vector3 sp = lat.slot_position(c);
-        expected[test_cell_key(sp, p.cell_size)]++;
+        occupied.insert(cell_of(lat.slot_position(c)));
+    });
+    std::set<std::tuple<int,int,int>> kept_cells;   // still bear particles
+    for (const auto& ep : kept) kept_cells.insert(cell_of(ep.position));
+    std::set<std::tuple<int,int,int>> interior;     // skip-meshed
+    for (const SlotCoord& c : no_mesh) interior.insert(std::make_tuple(c.x, c.y, c.z));
+
+    // dropped = occupied with no particles; meshed = occupied and not interior.
+    // Invariant: no dropped cell is a 26-neighbor of any meshed cell.
+    bool invariant = true;
+    for (const auto& cell : occupied) {
+        if (kept_cells.find(cell) != kept_cells.end()) continue;  // not dropped
+        int cx, cy, cz; std::tie(cx, cy, cz) = cell;
+        for (int dz = -1; dz <= 1; ++dz)
+        for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx) {
+            if (!dx && !dy && !dz) continue;
+            auto nb = std::make_tuple(cx + dx, cy + dy, cz + dz);
+            bool meshed = occupied.count(nb) && !interior.count(nb);
+            if (meshed) invariant = false;
+        }
+    }
+    CHECK(invariant, "no dropped cell borders a meshed cell (no inner surface)");
+}
+
+static void test_skip_set_is_interior() {
+    GridLattice lat(0.8f);
+    Occupancy occ = solid_block(10);
+    CullParams p = default_params(1);
+
+    std::vector<SlotCoord> no_mesh;
+    cull_interior(lat, occ, p, nullptr, &no_mesh);
+
+    // Reference: a cell is interior iff every slot in it is buried.
+    std::map<long long, bool> all_buried;
+    occ.for_each([&](SlotCoord c, const SlotData&) {
+        long long k = test_cell_key(lat.slot_position(c), p.cell_size);
+        bool b = slot_is_buried(occ, c, 1);
+        auto it = all_buried.find(k);
+        if (it == all_buried.end()) all_buried.emplace(k, b);
+        else it->second = it->second && b;
     });
 
-    // Actual emitted-particle count per cell after culling.
-    auto kept = cull_interior(lat, occ, p);
-    std::map<long long, int> got;
-    for (const auto& ep : kept) got[test_cell_key(ep.position, p.cell_size)]++;
+    std::set<long long> nm;
+    for (const SlotCoord& c : no_mesh) nm.insert(cell_coord_key(c.x, c.y, c.z));
 
-    // Every cell that contributes at least one particle must contribute ALL of
-    // its occupied slots (no partially-emitted cell -> no cavity).
-    bool all_full = true;
-    for (const auto& kv : got)
-        if (kv.second != expected[kv.first]) all_full = false;
-    CHECK(all_full, "every kept cell emits all of its slots (no partial cell)");
+    bool ok = true;
+    for (long long k : nm) if (!all_buried[k]) ok = false;
+    CHECK(ok, "every no-mesh cell is interior (all slots buried)");
 
-    // Exactly one cell (the fully-buried center) is dropped.
-    CHECK(got.size() == expected.size() - 1, "exactly one cell dropped at margin 1");
-    CHECK(kept.size() == 117, "117 particles survive cell-atomic margin-1 cull");
+    size_t interior_count = 0;
+    for (const auto& kv : all_buried) if (kv.second) ++interior_count;
+    CHECK(nm.size() == interior_count, "no-mesh set equals exactly the interior cells");
 }
 
 static void test_thin_shape_keeps_all() {
@@ -172,7 +229,8 @@ int main() {
     test_occupancy();
     test_burial();
     test_cull_counts();
-    test_cell_atomic_no_partial();
+    test_no_meshed_cell_borders_dropped();
+    test_skip_set_is_interior();
     test_thin_shape_keeps_all();
     test_determinism();
     if (failures == 0) printf("All particle_culling tests passed\n");
