@@ -91,63 +91,71 @@ typedef struct {
     size_t hashTableCapacity;
 } MemoryPool;
 
-// Global memory pool for reuse
-static MemoryPool g_memoryPool = {0};
+struct SurfaceScratch {
+    MemoryPool   pool;
+    SpatialHash* hash;          // reused across cells; NULL until first use (Task 2)
+    Particle*    hashParticles; // identity guard for hash reuse (Task 2)
+    int          hashCount;     // (Task 2)
+    float        hashCellSize;  // cellSize the hash was created with (Task 2)
+};
+
+// Legacy single-threaded API delegates here. Lazily created; freed by SurfaceLibCleanup.
+static SurfaceScratch* g_defaultScratch = NULL;
 
 // Memory pool management functions
-static void EnsureFieldCapacity(size_t requiredCells) {
-    if (g_memoryPool.fieldCapacity < requiredCells) {
+static void EnsureFieldCapacity(MemoryPool* pool, size_t requiredCells) {
+    if (pool->fieldCapacity < requiredCells) {
         // Grow by 50% or to required size, whichever is larger
-        size_t newCapacity = (g_memoryPool.fieldCapacity * 3) / 2;
+        size_t newCapacity = (pool->fieldCapacity * 3) / 2;
         if (newCapacity < requiredCells) newCapacity = requiredCells;
-        
-        g_memoryPool.scalarField = (float*)realloc(g_memoryPool.scalarField, newCapacity * sizeof(float));
-        g_memoryPool.materialField = (int*)realloc(g_memoryPool.materialField, newCapacity * sizeof(int));
-        g_memoryPool.fieldCapacity = newCapacity;
+
+        pool->scalarField = (float*)realloc(pool->scalarField, newCapacity * sizeof(float));
+        pool->materialField = (int*)realloc(pool->materialField, newCapacity * sizeof(int));
+        pool->fieldCapacity = newCapacity;
     }
 }
 
-static void EnsureMeshCapacity(size_t requiredVertices, size_t requiredTriangles) {
-    if (g_memoryPool.vertexCapacity < requiredVertices) {
-        size_t newCapacity = (g_memoryPool.vertexCapacity * 3) / 2;
+static void EnsureMeshCapacity(MemoryPool* pool, size_t requiredVertices, size_t requiredTriangles) {
+    if (pool->vertexCapacity < requiredVertices) {
+        size_t newCapacity = (pool->vertexCapacity * 3) / 2;
         if (newCapacity < requiredVertices) newCapacity = requiredVertices;
-        
-        g_memoryPool.vertices = (Vector3*)realloc(g_memoryPool.vertices, newCapacity * sizeof(Vector3));
-        g_memoryPool.normals = (Vector3*)realloc(g_memoryPool.normals, newCapacity * sizeof(Vector3));
-        g_memoryPool.materials = (int*)realloc(g_memoryPool.materials, newCapacity * sizeof(int));
-        g_memoryPool.vertexCapacity = newCapacity;
+
+        pool->vertices = (Vector3*)realloc(pool->vertices, newCapacity * sizeof(Vector3));
+        pool->normals = (Vector3*)realloc(pool->normals, newCapacity * sizeof(Vector3));
+        pool->materials = (int*)realloc(pool->materials, newCapacity * sizeof(int));
+        pool->vertexCapacity = newCapacity;
     }
-    
-    if (g_memoryPool.triangleCapacity < requiredTriangles) {
-        size_t newCapacity = (g_memoryPool.triangleCapacity * 3) / 2;
+
+    if (pool->triangleCapacity < requiredTriangles) {
+        size_t newCapacity = (pool->triangleCapacity * 3) / 2;
         if (newCapacity < requiredTriangles) newCapacity = requiredTriangles;
-        
-        g_memoryPool.triangles = (Triangle*)realloc(g_memoryPool.triangles, newCapacity * sizeof(Triangle));
-        g_memoryPool.triangleCapacity = newCapacity;
+
+        pool->triangles = (Triangle*)realloc(pool->triangles, newCapacity * sizeof(Triangle));
+        pool->triangleCapacity = newCapacity;
     }
 }
 
-static void EnsureHashTableCapacity(size_t requiredSize) {
-    if (g_memoryPool.hashTableCapacity < requiredSize) {
-        size_t newCapacity = (g_memoryPool.hashTableCapacity * 3) / 2;
+static void EnsureHashTableCapacity(MemoryPool* pool, size_t requiredSize) {
+    if (pool->hashTableCapacity < requiredSize) {
+        size_t newCapacity = (pool->hashTableCapacity * 3) / 2;
         if (newCapacity < requiredSize) newCapacity = requiredSize;
-        
-        g_memoryPool.edgeKeys = (unsigned long long*)realloc(g_memoryPool.edgeKeys, newCapacity * sizeof(unsigned long long));
-        g_memoryPool.globalEdgeVertexIndices = (int*)realloc(g_memoryPool.globalEdgeVertexIndices, newCapacity * sizeof(int));
-        g_memoryPool.hashTableCapacity = newCapacity;
+
+        pool->edgeKeys = (unsigned long long*)realloc(pool->edgeKeys, newCapacity * sizeof(unsigned long long));
+        pool->globalEdgeVertexIndices = (int*)realloc(pool->globalEdgeVertexIndices, newCapacity * sizeof(int));
+        pool->hashTableCapacity = newCapacity;
     }
 }
 
-static void CleanupMemoryPool(void) {
-    free(g_memoryPool.scalarField);
-    free(g_memoryPool.materialField);
-    free(g_memoryPool.vertices);
-    free(g_memoryPool.normals);
-    free(g_memoryPool.materials);
-    free(g_memoryPool.triangles);
-    free(g_memoryPool.edgeKeys);
-    free(g_memoryPool.globalEdgeVertexIndices);
-    g_memoryPool = (MemoryPool){0};
+static void CleanupMemoryPool(MemoryPool* pool) {
+    free(pool->scalarField);
+    free(pool->materialField);
+    free(pool->vertices);
+    free(pool->normals);
+    free(pool->materials);
+    free(pool->triangles);
+    free(pool->edgeKeys);
+    free(pool->globalEdgeVertexIndices);
+    *pool = (MemoryPool){0};
 }
 
 // Triangle face structure (defined above in forward declarations)
@@ -179,7 +187,7 @@ typedef struct {
 static ScalarMaterialPair CalculateScalarAndMaterial(Vector3 position, SpatialHash* spatialHash, float refRadius, float blendWidth, Particle* clipParticles, int clipCount, Particle* carveParticles, int carveCount, float carveBlend);
 static int     CalculateCubeIndex(GridCell cell, float isovalue);
 static Vector3 VertexInterpolation(Vector3 v1, float val1, Vector3 v2, float val2, float isovalue);
-static Mesh    GenerateMeshInternal(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth, MeshGenerationConfig config, Particle* clipParticles, int clipCount, Particle* carveParticles, int carveCount, float carveBlend);
+static Mesh    GenerateMeshInternal(SurfaceScratch* scratch, Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth, MeshGenerationConfig config, Particle* clipParticles, int clipCount, Particle* carveParticles, int carveCount, float carveBlend);
 
 
 // Utility function to convert grid cell coordinates to index in the scalar field array
@@ -195,20 +203,37 @@ MeshGenerationConfig GetDefaultMeshConfig(void) {
     return config;
 }
 
+SurfaceScratch* CreateSurfaceScratch(void) {
+    SurfaceScratch* s = (SurfaceScratch*)calloc(1, sizeof(SurfaceScratch));
+    return s; // pool zero-initialized; hash created lazily
+}
+
+void DestroySurfaceScratch(SurfaceScratch* s) {
+    if (!s) return;
+    CleanupMemoryPool(&s->pool);
+    if (s->hash) sh_destroy(s->hash);
+    free(s);
+}
+
+static SurfaceScratch* DefaultScratch(void) {
+    if (!g_defaultScratch) g_defaultScratch = CreateSurfaceScratch();
+    return g_defaultScratch;
+}
+
 // Public API wrapper function using default configuration
 Mesh GenerateMesh(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth, Particle* clipParticles, int clipCount, Particle* carveParticles, int carveCount, float carveBlend) {
     MeshGenerationConfig config = GetDefaultMeshConfig();
-    return GenerateMeshInternal(particles, particleRadius, particleCount, volume, blendWidth, config, clipParticles, clipCount, carveParticles, carveCount, carveBlend);
+    return GenerateMeshInternal(DefaultScratch(), particles, particleRadius, particleCount, volume, blendWidth, config, clipParticles, clipCount, carveParticles, carveCount, carveBlend);
 }
 
 // Public API function with custom configuration
 Mesh GenerateMeshWithConfig(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth, MeshGenerationConfig config, Particle* clipParticles, int clipCount, Particle* carveParticles, int carveCount, float carveBlend) {
-    return GenerateMeshInternal(particles, particleRadius, particleCount, volume, blendWidth, config, clipParticles, clipCount, carveParticles, carveCount, carveBlend);
+    return GenerateMeshInternal(DefaultScratch(), particles, particleRadius, particleCount, volume, blendWidth, config, clipParticles, clipCount, carveParticles, carveCount, carveBlend);
 }
 
 // Cleanup function to release memory pool resources
 void SurfaceLibCleanup(void) {
-    CleanupMemoryPool();
+    if (g_defaultScratch) { DestroySurfaceScratch(g_defaultScratch); g_defaultScratch = NULL; }
 }
 
 void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius, int particleCount, float blendWidth, Particle* clipParticles, int clipCount, Particle* carveParticles, int carveCount, float carveBlend) {
@@ -402,7 +427,7 @@ void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius
 }
 
 // Internal mesh generation function with configuration
-static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth, MeshGenerationConfig config, Particle* clipParticles, int clipCount, Particle* carveParticles, int carveCount, float carveBlend) {
+static Mesh GenerateMeshInternal(SurfaceScratch* scratch, Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth, MeshGenerationConfig config, Particle* clipParticles, int clipCount, Particle* carveParticles, int carveCount, float carveBlend) {
     TIMER_START(total);
     
     // Initialize mesh
@@ -428,9 +453,9 @@ static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int 
     
     // Allocate memory for scalar field and material field using memory pool if enabled
     if (config.enableMemoryReuse) {
-        EnsureFieldCapacity(data.totalCells);
-        data.scalarField = g_memoryPool.scalarField;
-        data.materialField = g_memoryPool.materialField;
+        EnsureFieldCapacity(&scratch->pool, data.totalCells);
+        data.scalarField = scratch->pool.scalarField;
+        data.materialField = scratch->pool.materialField;
     } else {
         data.scalarField = (float*)malloc(data.totalCells * sizeof(float));
         data.materialField = (int*)malloc(data.totalCells * sizeof(int));
@@ -501,11 +526,11 @@ static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int 
     Triangle* triangles;
     
     if (config.enableMemoryReuse) {
-        EnsureMeshCapacity(maxVertices, maxTriangles);
-        vertices = g_memoryPool.vertices;
-        normals = g_memoryPool.normals;
-        materials = g_memoryPool.materials;
-        triangles = g_memoryPool.triangles;
+        EnsureMeshCapacity(&scratch->pool, maxVertices, maxTriangles);
+        vertices = scratch->pool.vertices;
+        normals = scratch->pool.normals;
+        materials = scratch->pool.materials;
+        triangles = scratch->pool.triangles;
     } else {
         vertices = (Vector3*)malloc(maxVertices * sizeof(Vector3));
         normals = (Vector3*)malloc(maxVertices * sizeof(Vector3));
@@ -538,9 +563,9 @@ static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int 
         hashTableSize = 1024 * 1024; // 1M entries in hash table
         
         if (config.enableMemoryReuse) {
-            EnsureHashTableCapacity(hashTableSize);
-            edgeKeys = g_memoryPool.edgeKeys;
-            globalEdgeVertexIndices = g_memoryPool.globalEdgeVertexIndices;
+            EnsureHashTableCapacity(&scratch->pool, hashTableSize);
+            edgeKeys = scratch->pool.edgeKeys;
+            globalEdgeVertexIndices = scratch->pool.globalEdgeVertexIndices;
         } else {
             edgeKeys = (unsigned long long*)malloc(hashTableSize * sizeof(unsigned long long));
             globalEdgeVertexIndices = (int*)malloc(hashTableSize * sizeof(int));

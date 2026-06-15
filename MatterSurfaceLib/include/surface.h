@@ -37,6 +37,12 @@ typedef struct {
 extern "C" {
 #endif
 
+// Opaque per-thread scratch context owning all reusable mesh-build buffers (the
+// scalar/mesh/edge memory pool and the particle spatial hash). One per thread.
+typedef struct SurfaceScratch SurfaceScratch;
+SurfaceScratch* CreateSurfaceScratch(void);
+void            DestroySurfaceScratch(SurfaceScratch* scratch);
+
 // Main API function for generating a mesh from particles.
 // particleRadius is a reference radius (max effective radius in the set) used to
 // size the spatial-hash search; each particle's own .radius drives the SDF.
