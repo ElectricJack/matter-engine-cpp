@@ -302,8 +302,19 @@ void Cluster::update_cell_meshes(Cell* cell, float uniform_detail) {
     
     // Rebuild meshes for all materials if we have particles
     if (!cell->material_particle_indices.empty()) {
+        // Gather carve particles whose influence overlaps this cell, mirroring the
+        // additive intersects_sphere halo (slack covers the carve fillet reach) so
+        // shared-face field values match and no seam cracks.
+        std::vector<Particle> cell_carve;
+        for (const Particle& cpart : carve_particles_) {
+            if (cell->intersects_sphere(cpart.position, cpart.radius * 1.5f))
+                cell_carve.push_back(cpart);
+        }
+        const Particle* carvePtr = cell_carve.empty() ? nullptr : cell_carve.data();
+        int carveCount = static_cast<int>(cell_carve.size());
         cell->rebuild_meshes(particles_, blas_manager_, simplification_ratio_,
-                             base_detail_size_, max_division_pow_, uniform_detail);
+                             base_detail_size_, max_division_pow_, uniform_detail,
+                             carvePtr, carveCount);
     } else {
         cell->clear_meshes(&blas_manager_);
     }

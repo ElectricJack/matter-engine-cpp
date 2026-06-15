@@ -2,6 +2,7 @@
 #define CLUSTER_H
 
 #include "raylib.h"
+#include "particle.h"
 #include <vector>
 #include <cstdint>
 #include <memory>
@@ -84,6 +85,12 @@ public:
     void set_no_mesh_cells(const std::vector<Vector3>& coords);
     void clear_no_mesh_cells() { no_mesh_cells_.clear(); }
 
+    // Subtractive carve particles (smooth-CSG). Distributed per-cell by the same
+    // intersects_sphere halo as additive particles so the carved field stays
+    // continuous across cell boundaries.
+    void set_carve_particles(const std::vector<Particle>& carve) { carve_particles_ = carve; }
+    void clear_carve_particles() { carve_particles_.clear(); }
+
     // Mesh simplification (uniform across cells; per-cell distance LOD can drive
     // this later without changing the simplifier).
     void set_simplification_ratio(float ratio) {
@@ -127,6 +134,7 @@ private:
     SpatialHash* cell_spatial_hash_;
     std::vector<std::unique_ptr<Cell>> cells_;
     std::unordered_set<uint64_t> no_mesh_cells_;  // packed integer cell coords
+    std::vector<Particle> carve_particles_;
 
     // Helper methods
     Vector3 get_cell_coordinates(const Vector3& local_position) const;
