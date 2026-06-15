@@ -12,6 +12,7 @@ extern "C" {
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <thread>
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -1401,6 +1402,17 @@ private:
             if (ImGui::SliderFloat("Simplification", &ratio, 0.05f, 1.0f, "%.2f")) {
                 test_cluster_->set_simplification_ratio(ratio);
                 test_cluster_->force_rebuild_all_cells();
+            }
+        }
+
+        // Mesh worker threads: 1 = serial oracle (single worker), up to hardware
+        // concurrency. Applied immediately; the pool resizes between rebuilds.
+        {
+            int max_workers = (int)std::thread::hardware_concurrency();
+            if (max_workers < 1) max_workers = 1;
+            int workers = test_cluster_->get_mesh_worker_count();
+            if (ImGui::SliderInt("Mesh workers", &workers, 1, max_workers)) {
+                test_cluster_->set_mesh_worker_count(workers);
             }
         }
 
