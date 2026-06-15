@@ -525,13 +525,15 @@ private:
         // overlap (radius > SPACING/2). Jitter and size variation break up the
         // regular packing so the surface reads as bumpy stone, not a grid.
         const float SPACING     = 0.8f;
-        float BASE_RADIUS = 0.6f;             // overlap factor = 2*r/SPACING = 1.5
-        float POS_JITTER  = 0.35f * SPACING;  // per-axis position jitter
-        float RADIUS_VAR  = 0.5f;             // radius +/-50% (clustered)
-        float CLUSTER_FREQ = 0.25f;           // low freq -> big clumps of one scale
-        float VOID_AMT    = 0.28f;            // carve slots where noise < this (0=solid)
-        const float VOID_FREQ = 0.12f;        // low freq -> a few big bites, not swiss cheese
-        const float TINT_ALPHA  = 0.2f;
+        float BASE_RADIUS = 0.62f;            // overlap factor = 2*r/SPACING ~ 1.55
+        float POS_JITTER  = 0.18f * SPACING;  // light jitter -> tighter stone packing
+        float RADIUS_VAR  = 0.35f;            // clustered radius +/-35%
+        float CLUSTER_FREQ = 0.2f;            // low freq -> big clumps of one scale
+        float VOID_AMT    = 0.0f;             // clean brick (set >0 to carve voids)
+        const float VOID_FREQ = 0.12f;        // spatial frequency of carved voids
+        float TINT_ALPHA  = 0.88f;            // marble tint mostly overrides base gray
+        float VEIN_FREQ   = 0.25f;            // marble vein band frequency
+        float VEIN_WARP   = 1.6f;             // how much the veins meander
         const uint32_t MAT_OPAQUE_A = 8;  // stone_light (GROUP_STONE)
         const uint32_t MAT_OPAQUE_B = 9;  // stone_dark  (GROUP_STONE)
 
@@ -541,6 +543,9 @@ private:
         if (const char* e = getenv("MSL_SIZE_VAR"))     { float v = (float)atof(e); if (v >= 0.0f) RADIUS_VAR = v; }
         if (const char* e = getenv("MSL_CLUSTER_FREQ")) { float v = (float)atof(e); if (v >= 0.0f) CLUSTER_FREQ = v; }
         if (const char* e = getenv("MSL_VOID"))         { float v = (float)atof(e); if (v >= 0.0f) VOID_AMT = v; }
+        if (const char* e = getenv("MSL_TINT_ALPHA"))   { float v = (float)atof(e); if (v >= 0.0f) TINT_ALPHA = v; }
+        if (const char* e = getenv("MSL_VEIN_FREQ"))    { float v = (float)atof(e); if (v >= 0.0f) VEIN_FREQ = v; }
+        if (const char* e = getenv("MSL_VEIN_WARP"))    { float v = (float)atof(e); if (v >= 0.0f) VEIN_WARP = v; }
 
         // Default margin = 2 (conservatively safe). Set MSL_CULL_MARGIN to tune;
         // MSL_CULL_MARGIN=-1 bypasses culling (emit every slot) for A/B compare.
@@ -568,7 +573,16 @@ private:
             if (VOID_AMT > 0.0f &&
                 lattice_vnoise(ix * VOID_FREQ, iy * VOID_FREQ, iz * VOID_FREQ) < VOID_AMT)
                 continue;
-            uint32_t mat = ((ix + iy + iz) & 1) ? MAT_OPAQUE_A : MAT_OPAQUE_B;
+            // Vary metallic via material choice: most slots are plain stone, with
+            // sparse, scattered metallic flecks (mica/pyrite) from a high-freq
+            // noise field. All stone variants share GROUP_STONE so they merge
+            // into one mesh group per cell (no extra cells created).
+            float mn = lattice_vnoise(ix * 0.5f + 13.0f, iy * 0.5f, iz * 0.5f);
+            uint32_t mat;
+            if      (mn > 0.92f) mat = 12;  // rare bright fleck
+            else if (mn > 0.82f) mat = 11;  // occasional mid sheen
+            else if (mn > 0.68f) mat = 10;  // some low sheen
+            else                 mat = ((ix + iy + iz) & 1) ? MAT_OPAQUE_A : MAT_OPAQUE_B;
             occ.set(SlotCoord{ix, iy, iz}, SlotData{mat});
         }
 
@@ -585,6 +599,7 @@ private:
         p.radius_variation = RADIUS_VAR;
         p.radius_cluster_freq = CLUSTER_FREQ;
         p.jitter_amount = POS_JITTER; p.tint_alpha = TINT_ALPHA; p.seed = 1337;
+        p.vein_freq = VEIN_FREQ; p.vein_warp = VEIN_WARP;
         p.cell_size = test_cluster_->get_smallest_cell_size();   // LOD 0 cell size
         p.cell_origin_offset = Vector3{ -halfx, -halfy, -halfz };
 

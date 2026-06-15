@@ -20,6 +20,9 @@ static const MaterialDef g_materials[] = {
     /* 7 */ {{0.2f,0.4f,0.8f}, 0.0f,  0.1f, 0.0f, 1.0f, 1.33f, 0, GROUP_WATER},
     /* 8 */ {{0.55f,0.52f,0.5f},0.85f, 0.0f, 0.0f, 0.0f, 1.0f, 1, GROUP_STONE}, // stone_light
     /* 9 */ {{0.32f,0.30f,0.29f},0.9f, 0.0f, 0.0f, 0.0f, 1.0f, 1, GROUP_STONE}, // stone_dark
+    /* 10 */ {{0.50f,0.48f,0.46f},0.55f,0.30f,0.0f, 0.0f, 1.0f, 1, GROUP_STONE}, // stone_mica_low
+    /* 11 */ {{0.55f,0.53f,0.50f},0.35f,0.65f,0.0f, 0.0f, 1.0f, 1, GROUP_STONE}, // stone_mica_mid
+    /* 12 */ {{0.62f,0.59f,0.54f},0.22f,0.90f,0.0f, 0.0f, 1.0f, 1, GROUP_STONE}, // stone_pyrite_fleck
 };
 
 static const MaterialDef g_default =

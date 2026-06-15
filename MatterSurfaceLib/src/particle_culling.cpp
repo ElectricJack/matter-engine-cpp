@@ -26,6 +26,16 @@ float lattice_vnoise(float x, float y, float z) {
     return lerpf(lerpf(x00, x10, v), lerpf(x01, x11, v), w); // [0,1]
 }
 
+// 4-octave fractional Brownian motion over the value-noise field. ~[0,1).
+static float fbm3(float x, float y, float z) {
+    float sum = 0.0f, amp = 0.5f, freq = 1.0f;
+    for (int i = 0; i < 4; ++i) {
+        sum += amp * lattice_vnoise(x * freq, y * freq, z * freq);
+        freq *= 2.0f; amp *= 0.5f;
+    }
+    return sum;
+}
+
 bool slot_is_buried(const Occupancy& occ, SlotCoord c, int margin) {
     for (int dz = -margin; dz <= margin; ++dz)
     for (int dy = -margin; dy <= margin; ++dy)
@@ -56,10 +66,26 @@ static EmittedParticle make_particle(const Lattice& lat, SlotCoord c,
     float rv = cluster * 0.75f + fine * 0.25f;
     ep.radius     = p.base_radius * (1.0f + rv * p.radius_variation);
     ep.materialId = d.materialId;
-    float tr = lattice_vhash(c.x + 101 + s, c.y, c.z);
-    float tg = lattice_vhash(c.x, c.y + 101 + s, c.z);
-    float tb = lattice_vhash(c.x, c.y, c.z + 101 + s);
-    ep.tint = Vector4{ tr, tg, tb, p.tint_alpha };
+
+    if (p.vein_freq > 0.0f) {
+        // Marble veining: warp a sinusoidal band field with fractal turbulence so
+        // the veins meander, then sharpen the peaks into thin dark streaks over a
+        // warm-white body with subtle mottling. Grayscale keeps it stone-like.
+        float turb  = fbm3(c.x * 0.08f + s, c.y * 0.08f, c.z * 0.08f);
+        float band  = sinf((c.x + c.y * 0.6f + c.z) * p.vein_freq
+                           + p.vein_warp * turb * 6.2831853f);
+        float vein  = powf(0.5f + 0.5f * band, 6.0f);          // [0,1] sharp ridges
+        float mottle = (fbm3(c.x * 0.2f + 50.0f, c.y * 0.2f, c.z * 0.2f) - 0.5f) * 0.10f;
+        float L = (0.92f - 0.55f * vein) + mottle;
+        if (L < 0.05f) L = 0.05f;
+        if (L > 1.0f)  L = 1.0f;
+        ep.tint = Vector4{ L, L * 0.97f, L * 0.92f, p.tint_alpha }; // warm white marble
+    } else {
+        float tr = lattice_vhash(c.x + 101 + s, c.y, c.z);
+        float tg = lattice_vhash(c.x, c.y + 101 + s, c.z);
+        float tb = lattice_vhash(c.x, c.y, c.z + 101 + s);
+        ep.tint = Vector4{ tr, tg, tb, p.tint_alpha };
+    }
     return ep;
 }
 

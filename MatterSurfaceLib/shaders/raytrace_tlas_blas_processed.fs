@@ -14,7 +14,7 @@ uniform vec2  screenSize;
 // Enhanced lighting for better shadow visibility
 vec3 lightPos   = vec3(3.0, 8.0, 2.0);            // Lower sun position for better shadows
 vec3 lightColor = vec3(4.0, 3.8, 3.5);          // Brighter direct lighting
-vec3 ambient    = vec3(0.1, 0.15, 0.2);            // Darker ambient for contrast
+vec3 ambient    = vec3(0.34, 0.34, 0.33);          // Brighter neutral fill so light stone/marble reads
 
 // Light cache for performance optimization
 struct LightCache {
@@ -1212,12 +1212,11 @@ void main() {
     // Trace the ray
     vec3 color = trace(cameraPos, rayDir, seed);
     
-    // Gamma correction
-    color = pow(color, vec3(1.0/2.2));
-    
-    // Tone mapping for better color reproduction
+    // Tone mapping in linear space FIRST, then gamma. (Doing gamma before
+    // Reinhard crushes the whole range into a muddy mid-gray band.)
     color = color / (color + vec3(1.0)); // Simple Reinhard tone mapping
-    
+    color = pow(color, vec3(1.0/2.2));   // Gamma correction
+
     // Add subtle color grading
     color = pow(color, vec3(1.05)); // Slight contrast adjustment
     
