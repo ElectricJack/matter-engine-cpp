@@ -61,6 +61,13 @@ int slot_depth(const Occupancy& occ, SlotCoord c, int max_depth) {
     return k;
 }
 
+int slot_tier(int depth, int max_tier) {
+    if (max_tier < 0) max_tier = 0;
+    int d = depth < 0 ? 0 : depth;
+    if (d > max_tier) d = max_tier;
+    return max_tier - d;
+}
+
 // Build one emitted particle for a slot. Jitter and tint are pure functions of
 // (SlotCoord, seed) so the same design always bakes identically.
 static EmittedParticle make_particle(const Lattice& lat, SlotCoord c,

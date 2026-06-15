@@ -89,6 +89,15 @@ static void test_slot_depth() {
     CHECK(slot_depth(single, SlotCoord{0,0,0}, 3) == 0, "isolated slot has depth 0");
 }
 
+static void test_slot_tier() {
+    // tier = max_tier - min(depth, max_tier): outermost shell is finest.
+    CHECK(slot_tier(0, 2) == 2, "depth 0 -> finest tier (max_tier)");
+    CHECK(slot_tier(1, 2) == 1, "depth 1 -> one coarser");
+    CHECK(slot_tier(2, 2) == 0, "depth == max_tier -> tier 0");
+    CHECK(slot_tier(5, 2) == 0, "deep interior clamps to tier 0");
+    CHECK(slot_tier(0, 0) == 0, "max_tier 0 disables refinement");
+}
+
 static void test_cull_counts() {
     GridLattice lat(0.8f);
     Occupancy occ = solid_block(10);
@@ -242,6 +251,7 @@ int main() {
     test_occupancy();
     test_burial();
     test_slot_depth();
+    test_slot_tier();
     test_cull_counts();
     test_no_meshed_cell_borders_dropped();
     test_skip_set_is_interior();

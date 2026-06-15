@@ -53,6 +53,10 @@ bool slot_is_buried(const Occupancy& occ, SlotCoord c, int margin);
 // scan stays O(max_depth^3). (slot_is_buried(c, m) == slot_depth(c, m) >= m.)
 int slot_depth(const Occupancy& occ, SlotCoord c, int max_depth);
 
+// Map a depth to a refinement tier: max_tier - min(depth, max_tier). The
+// outermost shell (depth 0) gets the finest tier; depth >= max_tier gets tier 0.
+int slot_tier(int depth, int max_tier);
+
 // Cell-granular interior skip-meshing. Slots are bucketed into cells via
 // floor((slot_position + cell_origin_offset) / cell_size). A cell is INTERIOR
 // iff every slot in it is buried (slot_is_buried, margin>=1); a cell is CORE iff
