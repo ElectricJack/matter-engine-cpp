@@ -5,6 +5,9 @@
 #include "../include/cell_visitor.h"
 #include "material_registry.h"
 #include "mesh_simplifier.hpp"
+extern "C" {
+#include "../include/spatial_hash.h"  // sh_query_radius_nearest for per-triangle material/tint
+}
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -133,6 +136,7 @@ void Cell::clear_particle_indices() {
 }
 
 void Cell::rebuild_meshes(const std::vector<StaticParticle>& cluster_particles, BLASManager& blas_manager,
+                          SurfaceScratch* scratch,
                           float simplification_ratio, float base_detail, int max_pow, float uniform_detail,
                           const Particle* carveParticles, int carveCount) {
     clear_meshes(&blas_manager);
@@ -146,7 +150,7 @@ void Cell::rebuild_meshes(const std::vector<StaticParticle>& cluster_particles, 
     // materialId is still tagged per-triangle inside generate_mesh_for_group.
     for (const auto& group_entry : material_particle_indices) {
         uint32_t group_id = group_entry.first;
-        generate_mesh_for_group(group_id, cluster_particles, blas_manager, simplification_ratio, base_detail, max_pow, uniform_detail, carveParticles, carveCount);
+        generate_mesh_for_group(group_id, cluster_particles, blas_manager, scratch, simplification_ratio, base_detail, max_pow, uniform_detail, carveParticles, carveCount);
     }
 
     has_meshes = !material_meshes.empty();
@@ -311,6 +315,7 @@ std::vector<Particle> build_clip_particles(
 }
 
 void Cell::generate_mesh_for_group(uint32_t group_id, const std::vector<StaticParticle>& cluster_particles, BLASManager& blas_manager,
+                                   SurfaceScratch* scratch,
                                    float simplification_ratio, float base_detail, int max_pow, float uniform_detail,
                                    const Particle* carveParticles, int carveCount) {
     auto group_it = material_particle_indices.find(group_id);
@@ -392,7 +397,7 @@ void Cell::generate_mesh_for_group(uint32_t group_id, const std::vector<StaticPa
     int clipCount = static_cast<int>(clip.size());
 
     // max_radius is the reference radius for the SDF's spatial-hash search reach.
-    Mesh mesh = GenerateMesh(particles.data(), max_radius, static_cast<int>(particles.size()),
+    Mesh mesh = GenerateMeshWithScratch(scratch, particles.data(), max_radius, static_cast<int>(particles.size()),
                              bounds, blend_width, clipPtr, clipCount,
                              const_cast<Particle*>(carveParticles), carveCount, carve_blend);
 
@@ -411,7 +416,7 @@ void Cell::generate_mesh_for_group(uint32_t group_id, const std::vector<StaticPa
             // simplify_mesh rebuilds normals from face geometry, reintroducing
             // per-cell shading seams; reapply the cross-cell-continuous SDF
             // gradient (same blend width) so the proxy shades like the dense mesh.
-            ComputeSurfaceNormals(&simplified, particles.data(), max_radius,
+            ComputeSurfaceNormalsWithScratch(scratch, &simplified, particles.data(), max_radius,
                                   static_cast<int>(particles.size()), blend_width, clipPtr, clipCount,
                                   const_cast<Particle*>(carveParticles), carveCount, carve_blend);
             UnloadMesh(mesh);
@@ -436,20 +441,29 @@ void Cell::generate_mesh_for_group(uint32_t group_id, const std::vector<StaticPa
             // Tag each triangle with the material of the nearest particle to its centroid.
             // One mesh may carry multiple materials once meshing is regrouped, so resolve
             // per-triangle rather than assuming a single material for the whole mesh.
+            //
+            // Reuse the particle spatial hash the scratch already built during
+            // GenerateMeshWithScratch (it still holds exactly `particles` in the same
+            // index order). This turns the old O(triangles * particles) scan into one
+            // O(1)-ish hash query per triangle. The search radius matches the cellSize
+            // formula (max_radius*2.5 + blend_width*4) the hash was keyed with so the
+            // local bucket actually contains the nearest particle.
+            SpatialHash* tri_hash = SurfaceScratchHash(scratch);
+            float tri_search = max_radius * 2.5f + blend_width * 4.0f;
             for (size_t t = 0; t < triangle_normals.size() && t < triangles.size(); ++t) {
                 const float3& c = triangles[t].centroid;
                 // Seed the default from a REAL particle materialId (never the
                 // group id, which is the bucket key). particles is non-empty
-                // here, so the nearest-particle loop below always assigns a real
-                // materialId anyway; this seed is just a belt-and-braces guard
-                // so the group id can never leak onto a triangle's material.
+                // here, so the query below normally assigns a real materialId;
+                // this seed is just a belt-and-braces guard so the group id can
+                // never leak onto a triangle's material when nothing is found.
                 int bestIdx = 0;
-                float bestD = 3.4e38f;
-                for (size_t pi = 0; pi < particles.size(); ++pi) {
-                    const Particle& p = particles[pi];
-                    float dx = c.x - p.position.x, dy = c.y - p.position.y, dz = c.z - p.position.z;
-                    float d = dx*dx + dy*dy + dz*dz;
-                    if (d < bestD) { bestD = d; bestIdx = static_cast<int>(pi); }
+                Particle* nearest = NULL;
+                int nfound = tri_hash
+                    ? sh_query_radius_nearest(tri_hash, c.x, c.y, c.z, tri_search, (void**)&nearest, 1)
+                    : 0;
+                if (nfound > 0 && nearest) {
+                    bestIdx = (int)(nearest - particles.data());
                 }
                 triangle_normals[t].materialId = particles[bestIdx].materialId;
                 triangle_normals[t].tint = particle_tints[bestIdx];

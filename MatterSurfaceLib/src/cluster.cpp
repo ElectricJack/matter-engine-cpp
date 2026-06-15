@@ -3,11 +3,14 @@
 #include "../include/tlas_manager.hpp"
 #include "../include/cell_visitor.h"
 #include "../include/occupancy.h"  // pack_slot, SlotCoord
+#include "../include/surface.h"     // SurfaceScratch create/destroy
 extern "C" {
 #include "../include/spatial_hash.h"
 }
 #include <cmath>
 #include <cstdio>
+#include <cassert>
+#include <cstdlib>
 #include <algorithm>
 
 
@@ -39,7 +42,18 @@ Cluster::Cluster(uint32_t cluster_id, BLASManager& blas_manager, TLASManager& tl
     if (!cell_spatial_hash_) {
         printf("Warning: Failed to initialize spatial hash for cluster %u\n", cluster_id_);
     }
-    
+
+    // One reusable surface-build context shared by every cell mesh in this cluster.
+    surface_scratch_ = CreateSurfaceScratch();
+    // A null scratch is unrecoverable: the mesh-generation path dereferences it
+    // unconditionally (GenerateMeshWithScratch/ComputeSurfaceNormalsWithScratch).
+    // Fail fast at the real root cause rather than limping into a null-deref later.
+    if (!surface_scratch_) {
+        fprintf(stderr, "FATAL: CreateSurfaceScratch failed for cluster %u (out of memory)\n", cluster_id_);
+        assert(surface_scratch_ && "CreateSurfaceScratch failed (out of memory)");
+        abort();
+    }
+
     printf("Created cluster %u with smallest cell size %.2f\n", cluster_id_, smallest_cell_size_);
 }
 
@@ -51,7 +65,13 @@ Cluster::~Cluster() {
     if (cell_spatial_hash_) {
         sh_destroy(cell_spatial_hash_);
     }
-    
+
+    // Cleanup surface scratch context
+    if (surface_scratch_) {
+        DestroySurfaceScratch(surface_scratch_);
+        surface_scratch_ = nullptr;
+    }
+
     printf("Destroyed cluster %u\n", cluster_id_);
 }
 
@@ -312,7 +332,7 @@ void Cluster::update_cell_meshes(Cell* cell, float uniform_detail) {
         }
         const Particle* carvePtr = cell_carve.empty() ? nullptr : cell_carve.data();
         int carveCount = static_cast<int>(cell_carve.size());
-        cell->rebuild_meshes(particles_, blas_manager_, simplification_ratio_,
+        cell->rebuild_meshes(particles_, blas_manager_, surface_scratch_, simplification_ratio_,
                              base_detail_size_, max_division_pow_, uniform_detail,
                              carvePtr, carveCount);
     } else {

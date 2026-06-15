@@ -11,6 +11,7 @@
 // Forward declarations
 struct Cell;
 struct SpatialHash;
+struct SurfaceScratch;
 class BLASManager;
 class TLASManager;
 class CellVisitor;
@@ -135,6 +136,10 @@ private:
     float base_detail_size_ = 0.0f;   // lattice tier-0 spacing S (0 => disabled)
     int   max_division_pow_ = 6;      // resolution ceiling (64^3)
     SpatialHash* cell_spatial_hash_;
+    // Reusable per-cluster surface-build context: owns the marching-cubes memory
+    // pool and the particle spatial hash that GenerateMeshWithScratch builds, so
+    // the per-triangle nearest-particle lookup can reuse it instead of rescanning.
+    SurfaceScratch* surface_scratch_ = nullptr;
     std::vector<std::unique_ptr<Cell>> cells_;
     std::unordered_set<uint64_t> no_mesh_cells_;  // packed integer cell coords
     std::vector<Particle> carve_particles_;
