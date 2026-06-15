@@ -47,6 +47,12 @@ float lattice_vnoise(float x, float y, float z);
 // would instead expand neighbor_offsets via BFS to `margin` steps.
 bool slot_is_buried(const Occupancy& occ, SlotCoord c, int margin);
 
+// Chebyshev depth below the surface: the largest k in [0, max_depth] such that
+// every slot within Chebyshev radius k of c is occupied. depth 0 means an
+// immediate box-neighbor is empty (outermost shell). Capped at max_depth so the
+// scan stays O(max_depth^3). (slot_is_buried(c, m) == slot_depth(c, m) >= m.)
+int slot_depth(const Occupancy& occ, SlotCoord c, int max_depth);
+
 // Cell-granular interior skip-meshing. Slots are bucketed into cells via
 // floor((slot_position + cell_origin_offset) / cell_size). A cell is INTERIOR
 // iff every slot in it is buried (slot_is_buried, margin>=1); a cell is CORE iff

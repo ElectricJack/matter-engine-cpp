@@ -76,6 +76,19 @@ static void test_burial() {
     CHECK(slot_is_buried(occ, SlotCoord{2,2,2}, 2), "center of 5^3 is buried at margin 2");
 }
 
+static void test_slot_depth() {
+    Occupancy occ = solid_block(5);   // coords 0..4 each axis
+    // Center (2,2,2): radius-1 box fully occupied, radius-2 box hits the
+    // boundary at coord 0/4 which is still occupied, radius-3 would leave block.
+    CHECK(slot_depth(occ, SlotCoord{2,2,2}, 3) == 2, "center of 5^3 has depth 2 (capped scan 3)");
+    CHECK(slot_depth(occ, SlotCoord{0,2,2}, 3) == 0, "face slot has depth 0");
+    CHECK(slot_depth(occ, SlotCoord{1,2,2}, 3) == 1, "one-layer-in slot has depth 1");
+    // Cap: never report more than max_depth even if deeper matter exists.
+    CHECK(slot_depth(occ, SlotCoord{2,2,2}, 1) == 1, "depth is capped at max_depth");
+    Occupancy single; single.set(SlotCoord{0,0,0}, SlotData{8});
+    CHECK(slot_depth(single, SlotCoord{0,0,0}, 3) == 0, "isolated slot has depth 0");
+}
+
 static void test_cull_counts() {
     GridLattice lat(0.8f);
     Occupancy occ = solid_block(10);
@@ -228,6 +241,7 @@ int main() {
     test_grid_lattice();
     test_occupancy();
     test_burial();
+    test_slot_depth();
     test_cull_counts();
     test_no_meshed_cell_borders_dropped();
     test_skip_set_is_interior();

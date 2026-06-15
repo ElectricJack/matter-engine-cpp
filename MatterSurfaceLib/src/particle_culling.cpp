@@ -45,6 +45,22 @@ bool slot_is_buried(const Occupancy& occ, SlotCoord c, int margin) {
     return true;
 }
 
+int slot_depth(const Occupancy& occ, SlotCoord c, int max_depth) {
+    if (max_depth < 0) max_depth = 0;
+    int k = 0;
+    for (; k < max_depth; ++k) {
+        int r = k + 1;  // does the radius-(k+1) box stay fully occupied?
+        bool full = true;
+        for (int dz = -r; dz <= r && full; ++dz)
+        for (int dy = -r; dy <= r && full; ++dy)
+        for (int dx = -r; dx <= r && full; ++dx) {
+            if (!occ.occupied(SlotCoord{c.x + dx, c.y + dy, c.z + dz})) full = false;
+        }
+        if (!full) break;
+    }
+    return k;
+}
+
 // Build one emitted particle for a slot. Jitter and tint are pure functions of
 // (SlotCoord, seed) so the same design always bakes identically.
 static EmittedParticle make_particle(const Lattice& lat, SlotCoord c,
