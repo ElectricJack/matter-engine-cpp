@@ -226,23 +226,43 @@ int sh_query_radius_nearest(SpatialHash* hash, float x, float y, float z, float 
     if (!hash || !results || maxResults <= 0) return 0;
 
     float radiusSq = radius * radius;
-    int cellRange = (int)ceilf(radius / hash->cellSize);
-    GridCoord centerCoord = world_to_grid(x, y, z, hash->cellSize);
+    // Iterate exactly the buckets overlapping the query AABB [p-r, p+r]. Using
+    // the floor of the corner coords (not centerCoord +/- cellRange) keeps
+    // coverage correct for ANY hash cell size, so the cell size can be tuned to
+    // the query radius without dropping particles near a bucket edge.
+    GridCoord lo = world_to_grid(x - radius, y - radius, z - radius, hash->cellSize);
+    GridCoord hi = world_to_grid(x + radius, y + radius, z + radius, hash->cellSize);
 
     // Keep the maxResults nearest candidates. distSq[i] parallels results[i].
     // worstSlot tracks the kept entry with the largest distSq so a closer
     // candidate can evict it once the buffer is full. maxResults is small
     // (tens), so the linear worst-slot rescan on eviction is cheap.
-    float* distSq = (float*)malloc((size_t)maxResults * sizeof(float));
-    if (!distSq) return 0;
+    float distSqStack[256];
+    float* distSq = distSqStack;
+    float* distSqHeap = NULL;
+    if (maxResults > 256) {
+        distSqHeap = (float*)malloc((size_t)maxResults * sizeof(float));
+        if (!distSqHeap) return 0;
+        distSq = distSqHeap;
+    }
     int found = 0;
     int worstSlot = 0;
 
-    for (int dx = -cellRange; dx <= cellRange; dx++) {
-        for (int dy = -cellRange; dy <= cellRange; dy++) {
-            for (int dz = -cellRange; dz <= cellRange; dz++) {
-                GridCoord coord = {centerCoord.x + dx, centerCoord.y + dy, centerCoord.z + dz};
+    // Distinct grid coords can collide into the same bucket. Each bucket's chain
+    // holds every particle that hashes there, so walking it once already covers
+    // all colliding coords; walking it again would double-count those particles
+    // and, under the maxResults cap, evict genuine nearest neighbors. Track
+    // visited bucket indices and skip repeats.
+    unsigned char visited[HASH_TABLE_SIZE];
+    memset(visited, 0, sizeof(visited));
+
+    for (int gx = lo.x; gx <= hi.x; gx++) {
+        for (int gy = lo.y; gy <= hi.y; gy++) {
+            for (int gz = lo.z; gz <= hi.z; gz++) {
+                GridCoord coord = {gx, gy, gz};
                 unsigned int bucketIndex = hash_coord(coord);
+                if (visited[bucketIndex]) continue;
+                visited[bucketIndex] = 1;
 
                 BucketEntry* entry = hash->buckets[bucketIndex].head;
                 while (entry) {
@@ -278,7 +298,7 @@ int sh_query_radius_nearest(SpatialHash* hash, float x, float y, float z, float 
         }
     }
 
-    free(distSq);
+    if (distSqHeap) free(distSqHeap);
     return found;
 }
 

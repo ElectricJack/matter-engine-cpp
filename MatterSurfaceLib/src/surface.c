@@ -217,8 +217,9 @@ void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius
         return;
     }
 
-    // Mirror GenerateMesh's internal hash: cellSize = r*1.5, search = r*2.5.
-    float spatialCellSize = particleRadius * 1.5f;
+    // Size the hash cell to the query radius so each query scans a ~3^3 bucket
+    // neighborhood instead of 7^3 mostly-empty buckets. Mirrors GenerateMesh.
+    float spatialCellSize = particleRadius * 2.5f + blendWidth * 4.0f;
     SpatialHash* hash = sh_create(spatialCellSize, particleCount);
     if (!hash) return;
     for (int i = 0; i < particleCount; i++) {
@@ -227,13 +228,13 @@ void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius
     }
 
     float gradSearch = particleRadius * 2.5f + blendWidth * 4.0f;
-    Particle* nearby[64];
+    Particle* nearby[128];
     for (int i = 0; i < mesh->vertexCount; i++) {
         float vx = mesh->vertices[i*3+0];
         float vy = mesh->vertices[i*3+1];
         float vz = mesh->vertices[i*3+2];
 
-        int found = sh_query_radius_nearest(hash, vx, vy, vz, gradSearch, (void**)nearby, 64);
+        int found = sh_query_radius_nearest(hash, vx, vy, vz, gradSearch, (void**)nearby, 128);
 
         // Per-particle signed distance f_j = |v - c_j| - r_j (matches the field).
         // gx/gy/gz accumulates the analytic gradient direction.
@@ -241,7 +242,7 @@ void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius
         bool haveGrad = false;
         float fmin = INFINITY;
         int   fminIdx = -1;
-        float fj[64];
+        float fj[128];
         for (int j = 0; j < found; j++) {
             float dx = vx - nearby[j]->position.x;
             float dy = vy - nearby[j]->position.y;
@@ -444,10 +445,10 @@ static Mesh GenerateMeshInternal(Particle* particles, float particleRadius, int 
     
     TIMER_START(spatial_hash);
     
-    // Create spatial hash for efficient particle queries
-    // Optimized cell size: smaller cells (1.5x radius) for better spatial locality
-    // This reduces the number of particles per cell, improving query performance
-    float spatialCellSize = particleRadius * 1.5f;
+    // Create spatial hash for efficient particle queries. Size the cell to the
+    // field query radius (r*2.5 + blend*4) so each voxel query scans a ~3^3
+    // bucket neighborhood instead of 7^3 mostly-empty buckets.
+    float spatialCellSize = particleRadius * 2.5f + blendWidth * 4.0f;
     SpatialHash* spatialHash = sh_create(spatialCellSize, particleCount);
     
     if (!spatialHash) {
@@ -962,9 +963,9 @@ static ScalarMaterialPair CalculateScalarAndMaterial(Vector3 position, SpatialHa
     // fillet, so distant blend partners are not missed.
     float searchRadius = refRadius * 2.5f + blendWidth * 4.0f;
 
-    Particle* nearbyParticles[64];
+    Particle* nearbyParticles[128];
     int foundCount = sh_query_radius_nearest(spatialHash, position.x, position.y, position.z, searchRadius,
-                                             (void**)nearbyParticles, 64);
+                                             (void**)nearbyParticles, 128);
     if (foundCount <= 0) {
         return result; // INFINITY scalar, material 0
     }
@@ -972,7 +973,7 @@ static ScalarMaterialPair CalculateScalarAndMaterial(Vector3 position, SpatialHa
     // Per-particle signed distance f_i = |p - c_i| - r_i, using each particle's
     // own radius. Track the hard-min (dominant particle) for the material id and
     // as the stable base point for the smooth-min.
-    float perDist[64];
+    float perDist[128];
     float fmin = INFINITY;
     int   fminIdx = 0;
     for (int i = 0; i < foundCount; i++) {
