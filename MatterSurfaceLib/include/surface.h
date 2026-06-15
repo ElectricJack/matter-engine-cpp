@@ -40,8 +40,26 @@ extern "C" {
 // Opaque per-thread scratch context owning all reusable mesh-build buffers (the
 // scalar/mesh/edge memory pool and the particle spatial hash). One per thread.
 typedef struct SurfaceScratch SurfaceScratch;
+typedef struct SpatialHash SpatialHash;  // owned by the scratch; see SurfaceScratchHash
 SurfaceScratch* CreateSurfaceScratch(void);
 void            DestroySurfaceScratch(SurfaceScratch* scratch);
+
+// Scratch-aware variants of GenerateMesh / ComputeSurfaceNormals: the caller
+// supplies (and reuses) a SurfaceScratch so the spatial hash built during mesh
+// generation can be shared with the normal pass and with downstream
+// per-triangle nearest-particle lookups via SurfaceScratchHash. Geometry is
+// byte-identical to the non-scratch APIs.
+Mesh GenerateMeshWithScratch(SurfaceScratch* scratch, Particle* particles, float particleRadius,
+                             int particleCount, Bounds volume, float blendWidth,
+                             Particle* clipParticles, int clipCount,
+                             Particle* carveParticles, int carveCount, float carveBlend);
+void ComputeSurfaceNormalsWithScratch(SurfaceScratch* scratch, Mesh* mesh, Particle* particles,
+                             float particleRadius, int particleCount, float blendWidth,
+                             Particle* clipParticles, int clipCount,
+                             Particle* carveParticles, int carveCount, float carveBlend);
+// Returns the scratch's current spatial hash (the one the last GenerateMeshWithScratch
+// built), or NULL if none yet. The scratch owns it; do not destroy it.
+SpatialHash* SurfaceScratchHash(SurfaceScratch* scratch);
 
 // Main API function for generating a mesh from particles.
 // particleRadius is a reference radius (max effective radius in the set) used to

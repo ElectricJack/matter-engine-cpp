@@ -188,6 +188,8 @@ static ScalarMaterialPair CalculateScalarAndMaterial(Vector3 position, SpatialHa
 static int     CalculateCubeIndex(GridCell cell, float isovalue);
 static Vector3 VertexInterpolation(Vector3 v1, float val1, Vector3 v2, float val2, float isovalue);
 static Mesh    GenerateMeshInternal(SurfaceScratch* scratch, Particle* particles, float particleRadius, int particleCount, Bounds volume, float blendWidth, MeshGenerationConfig config, Particle* clipParticles, int clipCount, Particle* carveParticles, int carveCount, float carveBlend);
+static SpatialHash* scratch_ensure_hash(SurfaceScratch* s, Particle* particles, int count, float cellSize);
+static void    compute_surface_normals_impl(SpatialHash* hash, Mesh* mesh, Particle* particles, float particleRadius, int particleCount, float blendWidth, Particle* clipParticles, int clipCount, Particle* carveParticles, int carveCount, float carveBlend);
 
 
 // Utility function to convert grid cell coordinates to index in the scalar field array
@@ -231,27 +233,70 @@ Mesh GenerateMeshWithConfig(Particle* particles, float particleRadius, int parti
     return GenerateMeshInternal(DefaultScratch(), particles, particleRadius, particleCount, volume, blendWidth, config, clipParticles, clipCount, carveParticles, carveCount, carveBlend);
 }
 
+// Scratch-aware mesh generation: lets a caller supply (and reuse) its own
+// SurfaceScratch so the spatial hash built here can be reused for downstream
+// per-triangle nearest-particle lookups (see SurfaceScratchHash).
+Mesh GenerateMeshWithScratch(SurfaceScratch* scratch, Particle* particles, float particleRadius,
+        int particleCount, Bounds volume, float blendWidth, Particle* clipParticles, int clipCount,
+        Particle* carveParticles, int carveCount, float carveBlend) {
+    return GenerateMeshInternal(scratch, particles, particleRadius, particleCount, volume, blendWidth,
+        GetDefaultMeshConfig(), clipParticles, clipCount, carveParticles, carveCount, carveBlend);
+}
+
+// Scratch-aware normal recomputation: reuses the hash GenerateMeshWithScratch
+// just built when it still matches (same particles/count/cellSize), otherwise
+// rebuilds it in the scratch.
+void ComputeSurfaceNormalsWithScratch(SurfaceScratch* scratch, Mesh* mesh, Particle* particles,
+        float particleRadius, int particleCount, float blendWidth, Particle* clipParticles,
+        int clipCount, Particle* carveParticles, int carveCount, float carveBlend) {
+    if (!mesh || !mesh->vertices || !mesh->normals || mesh->vertexCount <= 0 ||
+        !particles || particleCount <= 0) return;
+    float cellSize = particleRadius * 2.5f + blendWidth * 4.0f;
+    SpatialHash* hash;
+    if (scratch->hash && scratch->hashParticles == particles && scratch->hashCount == particleCount
+        && scratch->hashCellSize == cellSize) {
+        hash = scratch->hash;                 // reuse the hash GenerateMesh just built
+    } else {
+        hash = scratch_ensure_hash(scratch, particles, particleCount, cellSize);
+    }
+    compute_surface_normals_impl(hash, mesh, particles, particleRadius, particleCount, blendWidth,
+        clipParticles, clipCount, carveParticles, carveCount, carveBlend);
+}
+
+SpatialHash* SurfaceScratchHash(SurfaceScratch* scratch) { return scratch ? scratch->hash : NULL; }
+
 // Cleanup function to release memory pool resources
 void SurfaceLibCleanup(void) {
     if (g_defaultScratch) { DestroySurfaceScratch(g_defaultScratch); g_defaultScratch = NULL; }
 }
 
-void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius, int particleCount, float blendWidth, Particle* clipParticles, int clipCount, Particle* carveParticles, int carveCount, float carveBlend) {
-    if (!mesh || !mesh->vertices || !mesh->normals || mesh->vertexCount <= 0 ||
-        !particles || particleCount <= 0) {
-        return;
+// Ensure scratch->hash holds exactly `particles` at `cellSize`, reusing storage
+// when possible. Recreates only when cellSize changes (the AABB query is correct
+// at any cellSize, but matching it to the search radius keeps queries cheap).
+static SpatialHash* scratch_ensure_hash(SurfaceScratch* s, Particle* particles,
+                                        int count, float cellSize) {
+    if (!s->hash || s->hashCellSize != cellSize) {
+        if (s->hash) sh_destroy(s->hash);
+        s->hash = sh_create(cellSize, count > 0 ? count : 1);
+        s->hashCellSize = cellSize;
+    } else {
+        sh_clear(s->hash);
     }
-
-    // Size the hash cell to the query radius so each query scans a ~3^3 bucket
-    // neighborhood instead of 7^3 mostly-empty buckets. Mirrors GenerateMesh.
-    float spatialCellSize = particleRadius * 2.5f + blendWidth * 4.0f;
-    SpatialHash* hash = sh_create(spatialCellSize, particleCount);
-    if (!hash) return;
-    for (int i = 0; i < particleCount; i++) {
-        sh_insert(hash, particles[i].position.x, particles[i].position.y,
+    for (int i = 0; i < count; i++)
+        sh_insert(s->hash, particles[i].position.x, particles[i].position.y,
                   particles[i].position.z, &particles[i]);
-    }
+    s->hashParticles = particles;
+    s->hashCount = count;
+    return s->hash;
+}
 
+static void compute_surface_normals_impl(SpatialHash* hash, Mesh* mesh, Particle* particles,
+        float particleRadius, int particleCount, float blendWidth,
+        Particle* clipParticles, int clipCount,
+        Particle* carveParticles, int carveCount, float carveBlend) {
+    // particles/particleCount are accepted for signature parity with the public
+    // API; the particle set is already resident in the passed hash.
+    (void)particles; (void)particleCount;
     float gradSearch = particleRadius * 2.5f + blendWidth * 4.0f;
     Particle* nearby[128];
     for (int i = 0; i < mesh->vertexCount; i++) {
@@ -422,8 +467,10 @@ void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius
             }
         }
     }
+}
 
-    sh_destroy(hash);
+void ComputeSurfaceNormals(Mesh* mesh, Particle* particles, float particleRadius, int particleCount, float blendWidth, Particle* clipParticles, int clipCount, Particle* carveParticles, int carveCount, float carveBlend) {
+    ComputeSurfaceNormalsWithScratch(DefaultScratch(), mesh, particles, particleRadius, particleCount, blendWidth, clipParticles, clipCount, carveParticles, carveCount, carveBlend);
 }
 
 // Internal mesh generation function with configuration
@@ -470,12 +517,13 @@ static Mesh GenerateMeshInternal(SurfaceScratch* scratch, Particle* particles, f
     
     TIMER_START(spatial_hash);
     
-    // Create spatial hash for efficient particle queries. Size the cell to the
-    // field query radius (r*2.5 + blend*4) so each voxel query scans a ~3^3
-    // bucket neighborhood instead of 7^3 mostly-empty buckets.
+    // Build (or reuse) the shared spatial hash for efficient particle queries.
+    // Size the cell to the field query radius (r*2.5 + blend*4) so each voxel
+    // query scans a ~3^3 bucket neighborhood instead of 7^3 mostly-empty
+    // buckets. The scratch owns the hash and reuses its storage across cells.
     float spatialCellSize = particleRadius * 2.5f + blendWidth * 4.0f;
-    SpatialHash* spatialHash = sh_create(spatialCellSize, particleCount);
-    
+    SpatialHash* spatialHash = scratch_ensure_hash(scratch, particles, particleCount, spatialCellSize);
+
     if (!spatialHash) {
         printf("Failed to create spatial hash\n");
         if (!config.enableMemoryReuse) {
@@ -484,12 +532,7 @@ static Mesh GenerateMeshInternal(SurfaceScratch* scratch, Particle* particles, f
         }
         return mesh;
     }
-    
-    // Insert all particles into the spatial hash
-    for (int i = 0; i < particleCount; i++) {
-        sh_insert(spatialHash, particles[i].position.x, particles[i].position.y, particles[i].position.z, &particles[i]);
-    }
-    
+
     TIMER_END(spatial_hash, "Spatial Hash Setup");
     
     TIMER_START(scalar_field);
@@ -543,7 +586,6 @@ static Mesh GenerateMeshInternal(SurfaceScratch* scratch, Particle* particles, f
                 free(data.scalarField);
                 free(data.materialField);
             }
-            sh_destroy(spatialHash);
             if (!config.enableMemoryReuse) {
                 free(vertices);
                 free(normals);
@@ -878,7 +920,8 @@ static Mesh GenerateMeshInternal(SurfaceScratch* scratch, Particle* particles, f
 
     // Overwrite the per-cell face normals with the cross-cell-continuous SDF
     // gradient (face normals remain only as the degenerate-vertex fallback).
-    ComputeSurfaceNormals(&mesh, particles, particleRadius, particleCount, blendWidth, clipParticles, clipCount, carveParticles, carveCount, carveBlend);
+    // Reuse the spatial hash we just built rather than rebuilding it.
+    compute_surface_normals_impl(spatialHash, &mesh, particles, particleRadius, particleCount, blendWidth, clipParticles, clipCount, carveParticles, carveCount, carveBlend);
 
     // Set material IDs as vertex colors
     mesh.colors = (unsigned char*)RL_MALLOC(vertexCount * 4 * sizeof(unsigned char));
@@ -905,8 +948,9 @@ static Mesh GenerateMeshInternal(SurfaceScratch* scratch, Particle* particles, f
             free(globalEdgeVertexIndices);
         }
     }
-    sh_destroy(spatialHash);
-    
+    // The scratch owns spatialHash; it is cleared/reused on the next call and
+    // freed by DestroySurfaceScratch, so we do NOT destroy it here.
+
     TIMER_END(total, "Total Mesh Generation");
     
     return mesh;
