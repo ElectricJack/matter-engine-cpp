@@ -2,6 +2,7 @@
 #include "../include/cell.h"
 #include "../include/tlas_manager.hpp"
 #include "../include/cell_visitor.h"
+#include "../include/occupancy.h"  // pack_slot, SlotCoord
 extern "C" {
 #include "../include/spatial_hash.h"
 }
@@ -205,6 +206,15 @@ Cell* Cluster::find_or_create_cell(const Vector3& cell_coords) {
     return cell_ptr;
 }
 
+void Cluster::set_no_mesh_cells(const std::vector<Vector3>& coords) {
+    no_mesh_cells_.clear();
+    no_mesh_cells_.reserve(coords.size());
+    for (const Vector3& c : coords) {
+        no_mesh_cells_.insert(pack_slot(SlotCoord{
+            (int)lroundf(c.x), (int)lroundf(c.y), (int)lroundf(c.z)}));
+    }
+}
+
 void Cluster::rebuild_dirty_cells() {
     uint32_t rebuilt_count = 0;
     uint32_t total_cells = static_cast<uint32_t>(cells_.size());
@@ -214,7 +224,16 @@ void Cluster::rebuild_dirty_cells() {
     
     for (auto& cell : cells_) {
         if (cell->is_dirty) {
-            // printf("  Rebuilding cell at (%.0f,%.0f,%.0f) size=%.1f\n", 
+            uint64_t key = pack_slot(SlotCoord{
+                (int)lroundf(cell->coordinates.x),
+                (int)lroundf(cell->coordinates.y),
+                (int)lroundf(cell->coordinates.z)});
+            if (no_mesh_cells_.find(key) != no_mesh_cells_.end()) {
+                cell->clear_meshes(&blas_manager_);  // drop any stale geometry
+                cell->is_dirty = false;
+                continue;                            // never meshed, no BLAS
+            }
+            // printf("  Rebuilding cell at (%.0f,%.0f,%.0f) size=%.1f\n",
             //        cell->coordinates.x, cell->coordinates.y, cell->coordinates.z, cell->actual_size);
             update_cell_meshes(cell.get());
             cell->is_dirty = false;
