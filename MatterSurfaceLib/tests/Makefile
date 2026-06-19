@@ -42,8 +42,16 @@ endif
 # Include directories
 INCLUDE_PATHS = -I../include -I$(RAYLIB_PATH) -I../../Libraries/raylib/src
 
-# Library paths
-LDLIBS = ../../Libraries/raylib/src/libraylib.a
+# Library paths. The src/ archive is the Windows (MinGW COFF) cross-compile
+# output; Linux/macOS test builds must link the native ELF/Mach-O archive under
+# build/<platform>/ (matching the main Makefile's per-platform LDLIBS).
+ifeq ($(UNAME_S),Linux)
+    LDLIBS = ../../Libraries/raylib/build/linux/libraylib.a
+else ifeq ($(UNAME_S),Darwin)
+    LDLIBS = ../../Libraries/raylib/build/macos/libraylib.a
+else
+    LDLIBS = ../../Libraries/raylib/src/libraylib.a
+endif
 
 # Source files
 MAIN_SOURCE = minimal_cell_test.cpp
@@ -189,7 +197,7 @@ CUBE_C_OBJ = material_registry.o
 
 $(CUBE_TARGET): $(CUBE_CPP) $(CUBE_C)
 	gcc -c $(CUBE_C) -O2 -DPLATFORM_DESKTOP $(INCLUDE_PATHS)
-	$(CC) $(CUBE_CPP) $(CUBE_C_OBJ) -o $(CUBE_TARGET) $(CFLAGS) $(INCLUDE_PATHS) $(LDFLAGS) ../../Libraries/raylib/build/linux/libraylib.a
+	$(CC) $(CUBE_CPP) $(CUBE_C_OBJ) -o $(CUBE_TARGET) $(CFLAGS) $(INCLUDE_PATHS) $(LDFLAGS) $(LDLIBS)
 	rm -f $(CUBE_C_OBJ)
 
 run-cube: $(CUBE_TARGET)
