@@ -32,6 +32,15 @@ int main() {
     CHECK(fabsf(buf[4 * MATERIAL_FLOATS_PER_DEF + 7] - MaterialRegistryGet(4)->translucency) < 1e-6f,
           "packed translucency for material 4 must match the table");
 
+    // Meshing algorithm defaults to 0 (marching cubes) for existing materials.
+    CHECK(MaterialMeshingAlgorithm(0) == 0, "material 0 should default to marching cubes (0)");
+    CHECK(MaterialMeshingAlgorithm(3) == 0, "material 3 should default to marching cubes (0)");
+    // Out-of-range id returns the default material's algorithm (0), never crashes.
+    CHECK(MaterialMeshingAlgorithm(99999) == 0, "out-of-range id must return default algorithm 0");
+    // Sand (new material id 13) selects the oriented-cube algorithm (1).
+    CHECK(MaterialMeshingAlgorithm(13) == 1, "sand(13) should select oriented cubes (1)");
+    CHECK(MaterialRegistryCount() >= 14, "expected at least 14 materials after adding sand");
+
     if (failures == 0) printf("All material_registry tests passed\n");
     return failures == 0 ? 0 : 1;
 }

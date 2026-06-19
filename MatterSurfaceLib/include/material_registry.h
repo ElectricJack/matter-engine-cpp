@@ -16,6 +16,7 @@ typedef struct {
     float ior;            // index of refraction
     int   flatShading;    // 0 = smooth normals, 1 = flat
     int   mergeGroup;     // particles whose materials share a mergeGroup blend together
+    int   meshingAlgorithm; // 0 = marching cubes (default), 1 = oriented cubes; selects the mesher
 } MaterialDef;
 
 // Number of defined materials.
@@ -27,6 +28,9 @@ const MaterialDef* MaterialRegistryGet(int materialId);
 
 // Merge group for a material id (the SDF grouping key).
 int MaterialMergeGroup(int materialId);
+
+// Meshing algorithm for a material id (MeshAlgorithm enum value; 0 = marching cubes).
+int MaterialMeshingAlgorithm(int materialId);
 
 // Non-zero when the material is translucent (translucency > 0). Drives the
 // cross-group carve decision in Phase 3.
