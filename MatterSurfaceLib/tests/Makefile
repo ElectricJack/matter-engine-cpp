@@ -56,7 +56,7 @@ TARGET = minimal_cell_test
 $(TARGET): $(MAIN_SOURCE) $(MATTER_SOURCES)
 	$(CC) $(MAIN_SOURCE) $(MATTER_SOURCES) -o $(TARGET) $(CFLAGS) $(INCLUDE_PATHS) $(LDFLAGS) $(LDLIBS)
 
-.PHONY: clean run run-simp run-blas run-cell run-cont run-reg run-tint run-cull run-par
+.PHONY: clean run run-simp run-blas run-cell run-cont run-reg run-tint run-cull run-par run-cube
 
 clean:
 	rm -f $(TARGET) $(SIMP_TARGET) $(BLAS_TARGET) $(CELL_TARGET) $(CONT_TARGET) $(REG_TARGET) $(TINT_TARGET) $(CULL_TARGET) $(PAR_TARGET)
@@ -179,3 +179,18 @@ $(PAR_TARGET): $(PAR_CPP) $(PAR_C)
 
 run-par: $(PAR_TARGET)
 	./$(PAR_TARGET)
+
+# Oriented-cube meshing algorithm unit tests (headless, GL-free; needs only the
+# material registry for albedo and raylib for MemAlloc/MemFree).
+CUBE_TARGET = oriented_cube_tests
+CUBE_CPP = oriented_cube_tests.cpp ../src/oriented_cube_algorithm.cpp
+CUBE_C   = ../src/material_registry.c
+CUBE_C_OBJ = material_registry.o
+
+$(CUBE_TARGET): $(CUBE_CPP) $(CUBE_C)
+	gcc -c $(CUBE_C) -O2 -DPLATFORM_DESKTOP $(INCLUDE_PATHS)
+	$(CC) $(CUBE_CPP) $(CUBE_C_OBJ) -o $(CUBE_TARGET) $(CFLAGS) $(INCLUDE_PATHS) $(LDFLAGS) ../../Libraries/raylib/build/linux/libraylib.a
+	rm -f $(CUBE_C_OBJ)
+
+run-cube: $(CUBE_TARGET)
+	./$(CUBE_TARGET)
