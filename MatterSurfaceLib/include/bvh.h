@@ -24,7 +24,12 @@ struct ALIGN(64) Tri
 // additional triangle data, for texturing and shading
 // tint is per-triangle RGBA copied from the nearest particle; a (alpha) is the
 // blend strength against the material albedo. (1,1,1,0) = no tint (neutral).
-struct TriEx { float2 uv0, uv1, uv2; float3 N0, N1, N2; int materialId; float4 tint; };
+struct TriEx {
+    float2 uv0, uv1, uv2; float3 N0, N1, N2; int materialId; float4 tint;
+    // Per-vertex baked ambient occlusion in [0,1]; 1.0 = fully unoccluded.
+    // Defaulted so unbaked meshes (e.g. marching cubes before any bake) render bright.
+    float ao0 = 1.0f, ao1 = 1.0f, ao2 = 1.0f;
+};
 
 // minimalist AABB struct with grow functionality
 struct aabb
