@@ -58,10 +58,14 @@ void bake_vertex_ao(const std::vector<Tri>& tris, std::vector<TriEx>& triEx,
 }
 
 float pack_ao_w(float ao0, float ao1, float ao2) {
+    // Floor each channel to 1 so a baked word is never all-zero: the shader uses
+    // bits==0 as the "never written / AO disabled" sentinel, so a genuinely
+    // fully-occluded vertex (AO 0) must not collide with it (1/255 is imperceptible).
     auto q = [](float v) -> uint32_t {
         if (v < 0.0f) v = 0.0f;
         if (v > 1.0f) v = 1.0f;
-        return (uint32_t)(v * 255.0f + 0.5f);
+        uint32_t b = (uint32_t)(v * 255.0f + 0.5f);
+        return b < 1u ? 1u : b;
     };
     const uint32_t bits = q(ao0) | (q(ao1) << 8) | (q(ao2) << 16);
     float f; std::memcpy(&f, &bits, sizeof(f));
