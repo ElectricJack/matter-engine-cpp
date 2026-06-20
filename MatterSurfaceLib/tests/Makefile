@@ -88,7 +88,7 @@ run-simp: $(SIMP_TARGET)
 
 # BLAS reference-counting / re-mesh leak regression tests (headless, no GL window)
 BLAS_TARGET = blas_refcount_tests
-BLAS_SOURCES = blas_refcount_tests.cpp ../src/blas_manager.cpp ../src/bvh.cpp
+BLAS_SOURCES = blas_refcount_tests.cpp ../src/blas_manager.cpp ../src/bvh.cpp ../src/vertex_ao.cpp ../src/occupancy.cpp
 
 $(BLAS_TARGET): $(BLAS_SOURCES)
 	$(CC) $(BLAS_SOURCES) -o $(BLAS_TARGET) $(CFLAGS) $(INCLUDE_PATHS) $(LDFLAGS) $(LDLIBS)
@@ -103,7 +103,8 @@ CELL_TARGET = cell_bounds_tests
 CELL_CPP = cell_bounds_tests.cpp ../src/cell.cpp ../src/mesh_simplifier.cpp \
            ../src/blas_manager.cpp ../src/bvh.cpp ../src/bvh_analyzer.cpp \
            ../src/mesh_build_utils.cpp ../src/meshing_algorithm.cpp \
-           ../src/marching_cubes_algorithm.cpp ../src/oriented_cube_algorithm.cpp
+           ../src/marching_cubes_algorithm.cpp ../src/oriented_cube_algorithm.cpp \
+           ../src/vertex_ao.cpp ../src/occupancy.cpp
 CELL_C = ../src/surface.c ../src/open_particle_surface.c \
          ../src/spatial_hash.c ../src/object_allocator.c ../src/material_registry.c
 
@@ -152,7 +153,7 @@ run-reg: $(REG_TARGET)
 
 # Per-triangle tint: GPU pack helper + dedup-identity regression (headless, no GL)
 TINT_TARGET = blas_tint_tests
-TINT_SOURCES = blas_tint_tests.cpp ../src/blas_manager.cpp ../src/bvh.cpp
+TINT_SOURCES = blas_tint_tests.cpp ../src/blas_manager.cpp ../src/bvh.cpp ../src/vertex_ao.cpp ../src/occupancy.cpp
 
 $(TINT_TARGET): $(TINT_SOURCES)
 	$(CC) $(TINT_SOURCES) -o $(TINT_TARGET) $(CFLAGS) $(INCLUDE_PATHS) $(LDFLAGS) $(LDLIBS)
@@ -188,7 +189,7 @@ PAR_CPP = parallel_mesh_tests.cpp ../src/cell.cpp ../src/mesh_simplifier.cpp \
           ../src/blas_manager.cpp ../src/bvh.cpp ../src/bvh_analyzer.cpp \
           ../src/mesh_worker_pool.cpp ../src/mesh_build_utils.cpp \
           ../src/meshing_algorithm.cpp ../src/marching_cubes_algorithm.cpp \
-          ../src/oriented_cube_algorithm.cpp
+          ../src/oriented_cube_algorithm.cpp ../src/vertex_ao.cpp ../src/occupancy.cpp
 PAR_C = ../src/surface.c ../src/open_particle_surface.c \
         ../src/spatial_hash.c ../src/object_allocator.c ../src/material_registry.c
 

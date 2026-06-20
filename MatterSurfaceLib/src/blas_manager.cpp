@@ -1,4 +1,5 @@
 #include "../include/blas_manager.hpp"
+#include "vertex_ao.h"  // pack_ao_w
 #include <algorithm>
 #include <cstring>
 #include <cstdio>
@@ -475,13 +476,22 @@ void BLASManager::ensure_gpu_textures_ready() {
                         texture_data[row_idx + 3] = 0.0f;
                     }
 
-                    // Pack tint.b/.a into the spare .w of normal rows 3 and 4
-                    // (row 5 .w stays unused); the shader reads these back as tint.
+                    // Pack tint.b/.a into the spare .w of normal rows 3 and 4,
+                    // and the three baked per-vertex AO values into row 5 .w
+                    // (8 bits each; see pack_ao_w / shader floatBitsToUint unpack).
+                    // Row 5 .xyz holds N2 (third per-vertex normal) and is left intact.
                     {
                         int rowB = texel_off(static_cast<int>(triangle_index), 3);
                         int rowA = texel_off(static_cast<int>(triangle_index), 4);
+                        int rowAO = texel_off(static_cast<int>(triangle_index), 5);
                         texture_data[rowB + 3] = pack_tint_w(entry->mesh->triEx, static_cast<int>(original_idx), 2); // tint.b
                         texture_data[rowA + 3] = pack_tint_w(entry->mesh->triEx, static_cast<int>(original_idx), 3); // tint.a
+                        if (has_normals) {
+                            const TriEx& exr = entry->mesh->triEx[original_idx];
+                            texture_data[rowAO + 3] = pack_ao_w(exr.ao0, exr.ao1, exr.ao2);
+                        } else {
+                            texture_data[rowAO + 3] = pack_ao_w(1.0f, 1.0f, 1.0f); // no triEx -> unoccluded
+                        }
                     }
 
                     triangle_index++;
