@@ -11,6 +11,12 @@ uniform vec3  cameraUp;
 uniform float cameraFovy;
 uniform vec2  screenSize;
 
+// Global-illumination feature flags (set from the ImGui lighting panel). Lowering
+// these trades softer fill light for deeper contrast and fewer secondary rays.
+uniform float giStrength;      // 0 = skip the indirect bounce ray entirely; 1 = full
+uniform float shadowStrength;  // 0 = no shadow darkening; 1 = fully black shadows
+uniform int   aoEnabled;       // 0 = skip AO rays (return unoccluded)
+
 // Enhanced lighting for better shadow visibility
 vec3 lightPos   = vec3(3.0, 8.0, 2.0);            // Lower sun position for better shadows
 vec3 lightColor = vec3(4.0, 3.8, 3.5);          // Brighter direct lighting
@@ -826,16 +832,17 @@ float calculateShadow(vec3 hitPos, vec3 lightDir, float lightDist, vec3 normal) 
     HitResult shadowHit = intersectScene(shadowRayOrigin, lightDir);
     
     if (shadowHit.hit && shadowHit.t < lightDist - bias) {
-        return 0.3; // In shadow
+        return 1.0 - shadowStrength; // In shadow; higher shadowStrength = deeper
     }
-    
+
     return 1.0; // Fully lit
 }
 
 // Efficient indirect lighting approximation with adaptive sampling
 vec3 calculateIndirectLighting(vec3 hitPos, vec3 normal, vec3 albedo, inout uint seed) {
     vec3 indirectLight = vec3(0.0);
-    
+    if (giStrength <= 0.0) return indirectLight; // GI off: skip the secondary bounce ray
+
     // Use screen-space hash to reduce samples for similar positions
     uint positionHash = getGridHash(hitPos);
     int sampleCount = 1; // Trimmed: single indirect sample to bound secondary-ray cost
@@ -888,11 +895,12 @@ vec3 calculateIndirectLighting(vec3 hitPos, vec3 normal, vec3 albedo, inout uint
     
     // Average the samples and apply albedo modulation
     indirectLight /= float(sampleCount);
-    return indirectLight * albedo; // Removed extra scaling for more pronounced effect
+    return indirectLight * albedo * giStrength; // scaled by the GI feature flag
 }
 
 // Fast ambient occlusion approximation with adaptive sampling
 float calculateAmbientOcclusion(vec3 hitPos, vec3 normal, inout uint seed) {
+    if (aoEnabled == 0) return 1.0; // AO disabled: fully accessible, no rays cast
     // Use spatial hashing to reduce AO samples in some areas
     uint posHash = getGridHash(hitPos);
     if (posHash % 4u != 0u) {
