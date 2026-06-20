@@ -257,41 +257,8 @@ vec3 calculateIndirectLighting(vec3 hitPos, vec3 normal, vec3 albedo, inout uint
     return indirectLight * albedo * giStrength; // scaled by the GI feature flag
 }
 
-// Fast ambient occlusion approximation with adaptive sampling
-float calculateAmbientOcclusion(vec3 hitPos, vec3 normal, inout uint seed) {
-    if (aoEnabled == 0) return 1.0; // AO disabled: fully accessible, no rays cast
-    // Use spatial hashing to reduce AO samples in some areas
-    uint posHash = getGridHash(hitPos);
-    if (posHash % 4u != 0u) {
-        // Skip AO calculation for 75% of pixels, return reasonable default
-        return 0.8; // Slightly occluded default
-    }
-    
-    float occlusion = 0.0;
-    const int AO_SAMPLES = 2; // Trimmed: fewer AO rays to bound secondary-ray cost
-    const float AO_RADIUS = 0.4; // Slightly smaller radius
-    
-    for (int i = 0; i < AO_SAMPLES; i++) {
-        // Sample hemisphere with shorter rays for AO
-        vec3 sampleDir = sampleHemisphere(normal, seed);
-        
-        // Cast short ray for occlusion test
-        HitResult aoHit = intersectScene(hitPos + normal * 0.002, sampleDir);
-        
-        if (aoHit.hit && aoHit.t < AO_RADIUS) {
-            // Surface is occluded
-            float occlusionFactor = 1.0 - (aoHit.t / AO_RADIUS);
-            occlusion += occlusionFactor * occlusionFactor; // Non-linear falloff
-        }
-    }
-    
-    // Convert occlusion to accessibility
-    occlusion /= float(AO_SAMPLES);
-    return 1.0 - clamp(occlusion * 0.6, 0.0, 0.4); // Limit AO strength
-}
-
 // Enhanced PBR lighting with indirect illumination
-vec3 calculatePBR(vec3 hitPos, vec3 normal, vec3 viewDir, vec3 albedo, float roughness, float metallic, inout uint seed) {
+vec3 calculatePBR(vec3 hitPos, vec3 normal, vec3 viewDir, vec3 albedo, float roughness, float metallic, float bakedAO, inout uint seed) {
     vec3 totalLight = vec3(0.0);
     
     // Primary sun light
@@ -346,8 +313,8 @@ vec3 calculatePBR(vec3 hitPos, vec3 normal, vec3 viewDir, vec3 albedo, float rou
         totalLight += (diffuse + specular) * lightColor * NdotL * lightFalloff * shadow;
     }
     
-    // Calculate ambient occlusion
-    float ao = calculateAmbientOcclusion(hitPos, normal, seed);
+    // Baked ambient occlusion (precomputed per-vertex, interpolated at the hit).
+    float ao = bakedAO;
     
     // Add indirect lighting from emissive surfaces
     vec3 indirectContribution = calculateIndirectLighting(hitPos, normal, albedo, seed);
@@ -440,7 +407,7 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, inout uint seed) {
         // Handle different material types based on properties
         if (matProps.translucency > 0.0 && rayDepth < MAX_DEPTH-1) {
             // Translucent material - handle both reflection and transmission
-            vec3 directLight = calculatePBR(hitPos, normal, rayDir, albedo, roughness, metallic, seed);
+            vec3 directLight = calculatePBR(hitPos, normal, rayDir, albedo, roughness, metallic, hit.ao, seed);
             
             // Determine if ray is entering or exiting the material
             bool entering = dot(rayDir, normal) < 0.0;
@@ -477,8 +444,8 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, inout uint seed) {
                         vec3 reflNormal = reflectionHit.normal;
                         
                         // Calculate direct lighting on reflected surface
-                        vec3 reflectedLight = calculatePBR(reflectionHit.position, reflNormal, reflectedDir, 
-                                                         reflAlbedo, reflMatProps.roughness, reflMatProps.metallic, seed);
+                        vec3 reflectedLight = calculatePBR(reflectionHit.position, reflNormal, reflectedDir,
+                                                         reflAlbedo, reflMatProps.roughness, reflMatProps.metallic, reflectionHit.ao, seed);
                         
                         // Add reflection contribution with proper energy conservation
                         color += attenuation * reflectedLight * albedo * reflectance;
@@ -510,7 +477,7 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, inout uint seed) {
             }
         } else if (isMirror && rayDepth < MAX_DEPTH-1) {
             // Reflective material
-            vec3 directLight = calculatePBR(hitPos, normal, rayDir, albedo, roughness, metallic, seed);
+            vec3 directLight = calculatePBR(hitPos, normal, rayDir, albedo, roughness, metallic, hit.ao, seed);
             
             // Calculate Fresnel for reflection
             float NdotV = max(0.0, dot(normal, -rayDir));
@@ -531,7 +498,7 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, inout uint seed) {
             attenuation *= fresnelVec * (1.0 - roughness) * 0.6;
         } else {
             // Opaque material - calculate full PBR lighting and terminate
-            vec3 materialColor = calculatePBR(hitPos, normal, rayDir, albedo, roughness, metallic, seed);
+            vec3 materialColor = calculatePBR(hitPos, normal, rayDir, albedo, roughness, metallic, hit.ao, seed);
             
             // Apply atmospheric fog
             materialColor = mix(materialColor, fogColor, fogFactor);

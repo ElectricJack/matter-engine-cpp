@@ -35,6 +35,7 @@ struct Ray
 struct Triangle
 {
     vec3 v0, v1, v2; vec3 n0, n1, n2; // triangle vertices + per-vertex shading normals
+    vec3 ao;         // per-vertex baked AO (x=v0, y=v1, z=v2); default 1.0
     vec3 center;     // for BVH construction (renamed from centroid - reserved keyword)
 };
 
@@ -75,6 +76,7 @@ struct HitResult
     int triangleTests; // Debug: number of triangle tests performed
     vec3 tint;       // per-triangle tint rgb (from spare .w of rows 1-3)
     float tintAlpha; // blend strength (from spare .w of row 4); 0 = no tint
+    float ao;        // baked ambient occlusion at the hit, [0,1]; 1.0 = unoccluded
 };
 
 // Random number generation (ported from tools.cl)
@@ -190,6 +192,7 @@ Triangle decodeTriangle(int triangleIndex)
     tri.v1 = data1.xyz;
     tri.v2 = data2.xyz;
     tri.n0 = tri.n1 = tri.n2 = vec3(0.0);
+    tri.ao = vec3(1.0); // baked AO sampled lazily at shade time, not during traversal
 
     return tri;
 }
@@ -509,17 +512,40 @@ HitResult intersectScene(vec3 rayOrigin, vec3 rayDir)
         // Material properties (incl. flatShading) sourced from the per-triangle material.
         MaterialProperties matProps = getMaterialProperties(effectiveMat);
 
+        // Barycentrics at the hit (shared by baked AO and smooth-normal shading).
+        vec3 localHitPos = transformPosition(result.position, inst.invTransform);
+        vec3 e1 = tri.v1 - tri.v0, e2 = tri.v2 - tri.v0, ep = localHitPos - tri.v0;
+        float d00 = dot(e1, e1), d01 = dot(e1, e2), d11 = dot(e2, e2);
+        float d20 = dot(ep, e1), d21 = dot(ep, e2);
+        float den = d00 * d11 - d01 * d01;
+        float bv = 0.0, bw = 0.0, bu = 1.0;
+        if (abs(den) >= 1e-12) {
+            bv = (d11 * d20 - d01 * d21) / den;
+            bw = (d00 * d21 - d01 * d20) / den;
+            bu = 1.0 - bv - bw;
+        }
+
+        // Baked AO: unpack 3x8-bit from row 5 .w and interpolate. bits==0 means the
+        // slot was never written (old texture / disabled) -> treat as unoccluded.
+        float aoPacked = texture(trianglesTexture, tiledTexel(trianglesTexture, int(triIdx), 5, 6)).w;
+        uint aoBits = floatBitsToUint(aoPacked);
+        vec3 aoV = (aoBits == 0u) ? vec3(1.0)
+                 : vec3(float(aoBits & 0xFFu), float((aoBits >> 8) & 0xFFu), float((aoBits >> 16) & 0xFFu)) / 255.0;
+        result.ao = (aoEnabled != 0) ? clamp(bu * aoV.x + bv * aoV.y + bw * aoV.z, 0.0, 1.0) : 1.0;
+
         vec3 normal;
         if (matProps.flatShading) {
             // Use face normal for flat shading
-            normal = normalize(cross(tri.v1 - tri.v0, tri.v2 - tri.v0));
+            normal = normalize(cross(e1, e2));
         } else {
-            // Transform world hit position to local space
-            vec3 localHitPos = transformPosition(result.position, inst.invTransform);
             // Smooth normal: lazily sample the per-vertex normals (rows 3-5) and interpolate by barycentrics at the hit
-            { vec3 N0 = texture(trianglesTexture, tiledTexel(trianglesTexture, int(triIdx), 3, 6)).xyz; vec3 N1 = texture(trianglesTexture, tiledTexel(trianglesTexture, int(triIdx), 4, 6)).xyz; vec3 N2 = texture(trianglesTexture, tiledTexel(trianglesTexture, int(triIdx), 5, 6)).xyz; vec3 e1 = tri.v1 - tri.v0; vec3 e2 = tri.v2 - tri.v0; vec3 ep = localHitPos - tri.v0; float d00 = dot(e1, e1); float d01 = dot(e1, e2); float d11 = dot(e2, e2); float d20 = dot(ep, e1); float d21 = dot(ep, e2); float den = d00 * d11 - d01 * d01; if (abs(den) < 1e-12) { normal = normalize(cross(e1, e2)); } else { float bv = (d11 * d20 - d01 * d21) / den; float bw = (d00 * d21 - d01 * d20) / den; float bu = 1.0 - bv - bw; normal = normalize(bu * N0 + bv * N1 + bw * N2); } }
+            vec3 N0 = texture(trianglesTexture, tiledTexel(trianglesTexture, int(triIdx), 3, 6)).xyz;
+            vec3 N1 = texture(trianglesTexture, tiledTexel(trianglesTexture, int(triIdx), 4, 6)).xyz;
+            vec3 N2 = texture(trianglesTexture, tiledTexel(trianglesTexture, int(triIdx), 5, 6)).xyz;
+            if (abs(den) < 1e-12) normal = normalize(cross(e1, e2));
+            else normal = normalize(bu * N0 + bv * N1 + bw * N2);
         }
-        
+
         // Transform normal to world space
         result.normal = transformNormal(normal, inst.invTransform);
         result.material = effectiveMat;
@@ -533,6 +559,7 @@ HitResult intersectScene(vec3 rayOrigin, vec3 rayDir)
         result.instanceId = -1;
         result.tint = vec3(0.0);
         result.tintAlpha = 0.0;
+        result.ao = 1.0;
     }
     
     return result;
