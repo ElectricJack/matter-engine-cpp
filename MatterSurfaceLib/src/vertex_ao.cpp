@@ -15,7 +15,11 @@ static float vertex_ao(float3 p, float3 n, const Occupancy& occ,
                        const AoGrid& g, const AoParams& params) {
     const float R = params.radius;
     if (R <= 0.0f || g.spacing <= 0.0f) return 1.0f;
-    const int reach = (int)std::ceil(R / g.spacing);
+    // Bound the dense box scan: a misconfigured (R >> spacing) would otherwise blow
+    // up to (2*reach+1)^3 lookups per vertex. Occupancy is sparse, so beyond a few
+    // slots the dense scan is the wrong tool anyway; clamp to keep the bake bounded.
+    int reach = (int)std::ceil(R / g.spacing);
+    if (reach > 64) reach = 64;
     const SlotCoord c = slot_of(g, p);
     float accum = 0.0f;
     for (int dz = -reach; dz <= reach; ++dz)
