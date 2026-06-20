@@ -3,6 +3,7 @@
 #include "../include/tlas_manager.hpp"
 #include "../include/cell_visitor.h"
 #include "../include/occupancy.h"  // pack_slot, SlotCoord
+#include "../include/vertex_ao.h"  // bake_vertex_ao, AoGrid, AoParams
 #include "../include/mesh_worker_pool.h"   // MeshWorkerPool + SurfaceScratch
 extern "C" {
 #include "../include/spatial_hash.h"
@@ -246,6 +247,12 @@ int Cluster::get_mesh_worker_count() const {
     return mesh_pool_ ? mesh_pool_->size() : 0;
 }
 
+void Cluster::set_ao_baker(const Occupancy* occ, AoGrid grid, AoParams params) {
+    ao_occ_ = occ;
+    ao_grid_ = grid;
+    ao_params_ = params;
+}
+
 void Cluster::rebuild_dirty_cells() {
     // One resolution for every meshed cell: derived from the globally finest
     // detail so neighboring marching-cubes grids align and stay watertight.
@@ -319,9 +326,15 @@ void Cluster::rebuild_dirty_cells() {
             });
     }
 
-    // PHASE 3 - DRAIN (serial, fixed job order): commit GL/BLAS deterministically.
+    // PHASE 3 - DRAIN (serial, fixed job order): bake per-vertex AO, then commit
+    // GL/BLAS deterministically.
     uint32_t committed_groups = 0;
     for (size_t i = 0; i < jobs.size(); ++i) {
+        if (ao_occ_) {
+            for (auto& g : results[i].groups) {
+                bake_vertex_ao(g.triangles, g.triangle_normals, *ao_occ_, ao_grid_, ao_params_);
+            }
+        }
         jobs[i].cell->commit_cell_meshes(results[i], blas_manager_);
         committed_groups += static_cast<uint32_t>(results[i].groups.size());
     }

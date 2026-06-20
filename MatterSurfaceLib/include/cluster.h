@@ -3,6 +3,7 @@
 
 #include "raylib.h"
 #include "particle.h"
+#include "vertex_ao.h"  // AoGrid, AoParams, Occupancy
 #include <vector>
 #include <cstdint>
 #include <memory>
@@ -118,6 +119,11 @@ public:
     void set_mesh_worker_count(int n);
     int  get_mesh_worker_count() const;
 
+    // Enables post-meshing per-vertex AO baking against `occ` (borrowed, must
+    // outlive the cluster). Pass occ=nullptr to disable. `grid` maps cluster-local
+    // positions to occupancy slots; see AoGrid.
+    void set_ao_baker(const Occupancy* occ, AoGrid grid, AoParams params);
+
     // Statistics
     uint32_t get_cell_count() const;
     uint32_t get_dirty_cell_count() const;
@@ -150,6 +156,11 @@ private:
     std::vector<std::unique_ptr<Cell>> cells_;
     std::unordered_set<uint64_t> no_mesh_cells_;  // packed integer cell coords
     std::vector<Particle> carve_particles_;
+
+    // Post-meshing per-vertex AO bake config (disabled while ao_occ_ is null).
+    const Occupancy* ao_occ_ = nullptr;
+    AoGrid    ao_grid_{};
+    AoParams  ao_params_{};
 
     // Helper methods
     Vector3 get_cell_coordinates(const Vector3& local_position) const;
