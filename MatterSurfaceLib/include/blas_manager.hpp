@@ -112,7 +112,8 @@ public:
     // Register a fully baked BLAS loaded from disk: installs the saved BVH arrays
     // directly (no BVH build, no dedup lookup). Used by part_asset::load. tris,
     // triex (may be null), nodes, and tri_idx are copied; the entry takes the
-    // provided hash and ref_count.
+    // provided hash and ref_count. tri_idx must contain exactly tri_count entries
+    // (it is indexed by BVH leaf offsets up to tri_count-1, not nodes_used).
     BLASHandle register_prebuilt(const Tri* tris, const TriEx* triex, int tri_count,
                                  const BVHNode* nodes, uint nodes_used, const uint* tri_idx,
                                  uint32_t hash, uint32_t ref_count);
