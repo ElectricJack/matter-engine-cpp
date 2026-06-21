@@ -88,4 +88,43 @@ bool bake_imposter(const ImpGenParams& p, const std::vector<Tri>& part_tris,
     return true;
 }
 
+std::vector<Tri> flatten_part_triangles(const BLASManager& blas, const TLASManager& tlas) {
+    std::vector<Tri> out;
+    const auto& recs = tlas.get_draw_records();
+    for (const auto& r : recs) {
+        const BLASManager::BLASEntry* e = blas.get_entry(r.blas_handle);
+        if (!e) continue;
+        const float* m = r.transform.m; // row-major 4x4
+        auto xf = [&](float3 p){
+            return make_float3(
+                m[0]*p.x + m[1]*p.y + m[2]*p.z + m[3],
+                m[4]*p.x + m[5]*p.y + m[6]*p.z + m[7],
+                m[8]*p.x + m[9]*p.y + m[10]*p.z + m[11]);
+        };
+        for (const Tri& t : e->triangles) {
+            Tri w;
+            w.vertex0 = xf(t.vertex0); w.vertex1 = xf(t.vertex1); w.vertex2 = xf(t.vertex2);
+            w.centroid = make_float3((w.vertex0.x+w.vertex1.x+w.vertex2.x)/3.0f,
+                                     (w.vertex0.y+w.vertex1.y+w.vertex2.y)/3.0f,
+                                     (w.vertex0.z+w.vertex1.z+w.vertex2.z)/3.0f);
+            out.push_back(w);
+        }
+    }
+    return out;
+}
+
+std::vector<Tri> cage_to_tris(const ImposterAsset& a) {
+    std::vector<Tri> out; out.reserve(a.tris.size());
+    for (const auto& ct : a.tris) {
+        const CageVert& A=a.verts[ct.i0]; const CageVert& B=a.verts[ct.i1]; const CageVert& C=a.verts[ct.i2];
+        Tri t;
+        t.vertex0=make_float3(A.px,A.py,A.pz);
+        t.vertex1=make_float3(B.px,B.py,B.pz);
+        t.vertex2=make_float3(C.px,C.py,C.pz);
+        t.centroid=make_float3((A.px+B.px+C.px)/3.0f,(A.py+B.py+C.py)/3.0f,(A.pz+B.pz+C.pz)/3.0f);
+        out.push_back(t);
+    }
+    return out;
+}
+
 } // namespace imposter_asset

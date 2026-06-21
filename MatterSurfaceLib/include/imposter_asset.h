@@ -95,4 +95,10 @@ bool bake_imposter(const ImpGenParams& p, const std::vector<Tri>& part_tris,
                    uint64_t source_part_hash,
                    class BLASManager& blas, class TLASManager& tlas, ImposterAsset& out);
 
+// Flatten all TLAS instances' triangles into one part-space triangle list. GL-free.
+std::vector<Tri> flatten_part_triangles(const class BLASManager& blas,
+                                        const class TLASManager& tlas);
+// Convert the cage (verts/tris) into a Tri list suitable for register_triangles. GL-free.
+std::vector<Tri> cage_to_tris(const ImposterAsset& a);
+
 } // namespace imposter_asset

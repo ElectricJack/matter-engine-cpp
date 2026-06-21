@@ -27,6 +27,7 @@ extern "C" {
 #include "include/blas_manager.hpp"
 #include "include/tlas_manager.hpp"
 #include "include/part_asset.h"
+#include "include/imposter_asset.h"
 #include "include/bvh_visualizer.hpp"
 #include "include/bvh_analyzer.h"
 #include "include/cluster.h"
@@ -340,7 +341,7 @@ public:
                     printf("WARNING: failed to save part cache: %s\n", part_path.c_str());
             }
         }
-        
+        if (getenv("MSL_SHOW_IMPOSTER")) setup_imposter_demo();
         // Initialize BVH analysis system
         setup_bvh_analysis();
     }
@@ -600,6 +601,55 @@ private:
         p.simplifyRatio = 0.65f;                    // set_simplification_ratio(0.65f)
         p.seed = 1337u;                             // CullParams seed (main.cpp:727)
         return p;
+    }
+
+    void setup_imposter_demo() {
+        imposter_asset::ImpGenParams ip{};
+        ip.cageRatio = 0.08f; ip.atlasW = 1024; ip.atlasH = 1024;
+        ip.inflation = 0.15f; ip.dispBits = 16; ip.seed = 1u;
+        uint64_t source_hash = part_asset::compute_param_hash(brick_gen_params());
+        uint64_t imp_hash = imposter_asset::compute_imp_hash(ip);
+        std::string imp_path = imposter_asset::cache_path(imp_hash);
+        imposter_asset::ImposterAsset imp;
+        if (!imposter_asset::load(imp_path, imp_hash, source_hash, imp)) {
+            std::vector<Tri> part_tris = imposter_asset::flatten_part_triangles(*blas_manager_, *tlas_manager_);
+            if (imposter_asset::bake_imposter(ip, part_tris, source_hash, *blas_manager_, *tlas_manager_, imp)) {
+                imposter_asset::save(imp_path, imp, imp_hash);
+                printf("[imposter] baked + saved %s\n", imp_path.c_str());
+            } else { printf("[imposter] bake FAILED\n"); }
+        } else { printf("[imposter] loaded %s\n", imp_path.c_str()); }
+
+        std::vector<Tri> cage_tris = imposter_asset::cage_to_tris(imp);
+        imposter_cage_blas_ = blas_manager_->register_triangles(cage_tris.data(), (int)cage_tris.size(), nullptr);
+        {
+            TLASManager::DrawInstance di;
+            di.blas_handle = imposter_cage_blas_;
+            di.material_id = 0;
+            di.is_imposter = true;
+            di.transform = Matrix4x4();
+            di.transform.m[3] = 24.0f; // +X offset beside the real part
+            std::vector<TLASManager::DrawInstance> one{di};
+            tlas_manager_->draw_batch(one);
+            tlas_manager_->build(*blas_manager_);
+        }
+        {
+            Image cimg{}; cimg.data=(void*)imp.color.data(); cimg.width=(int)imp.atlas_w; cimg.height=(int)imp.atlas_h;
+            cimg.mipmaps=1; cimg.format=PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+            imposter_color_tex_ = LoadTextureFromImage(cimg);
+            SetTextureFilter(imposter_color_tex_, TEXTURE_FILTER_BILINEAR);
+            std::vector<float> df((size_t)imp.atlas_w*imp.atlas_h);
+            if (imp.disp_bits==16) for (size_t i=0;i<df.size();++i){ uint16_t v; memcpy(&v,&imp.disp[i*2],2); df[i]=v/65535.0f; }
+            else                   for (size_t i=0;i<df.size();++i) df[i]=imp.disp[i]/255.0f;
+            Image dimg{}; dimg.data=df.data(); dimg.width=(int)imp.atlas_w; dimg.height=(int)imp.atlas_h;
+            dimg.mipmaps=1; dimg.format=PIXELFORMAT_UNCOMPRESSED_R32;
+            imposter_disp_tex_ = LoadTextureFromImage(dimg);
+            SetTextureFilter(imposter_disp_tex_, TEXTURE_FILTER_BILINEAR);
+            imposter_grid_ = (int)ceilf(sqrtf((float)imp.tris.size()));
+            imposter_tri_base_ = blas_manager_->get_offsets(imposter_cage_blas_).triangle_offset;
+            imposter_max_disp_ = imp.max_disp;
+            imposter_atlas_w_ = (float)imp.atlas_w; imposter_atlas_h_ = (float)imp.atlas_h;
+            imposter_enabled_ = true;
+        }
     }
 
     void setup_lattice_scene() {
@@ -1274,6 +1324,16 @@ private:
             SetShaderValue(raytracing_shader_, shadow_strength_loc_, &shadow_strength_, SHADER_UNIFORM_FLOAT);
             int ao_on = ao_enabled_ ? 1 : 0;
             SetShaderValue(raytracing_shader_, ao_enabled_loc_, &ao_on, SHADER_UNIFORM_INT);
+            if (imposter_enabled_) {
+                SetShaderValueTexture(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterColorTex"), imposter_color_tex_);
+                SetShaderValueTexture(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterDispTex"),  imposter_disp_tex_);
+                SetShaderValue(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterGrid"), &imposter_grid_, SHADER_UNIFORM_INT);
+                SetShaderValue(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterTriBase"), &imposter_tri_base_, SHADER_UNIFORM_INT);
+                SetShaderValue(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterMaxDisp"), &imposter_max_disp_, SHADER_UNIFORM_FLOAT);
+                float as[2]={imposter_atlas_w_, imposter_atlas_h_};
+                SetShaderValue(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterAtlasSize"), as, SHADER_UNIFORM_VEC2);
+                float pad=2.0f; SetShaderValue(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterPad"), &pad, SHADER_UNIFORM_FLOAT);
+            }
         }
 
         {
@@ -2054,7 +2114,15 @@ private:
     // Scene geometry BLAS handles
     BLASHandle sphere_blas_;
     BLASHandle ground_blas_;
-    
+
+    // Imposter demo (MSL_SHOW_IMPOSTER): one cage instance beside the real part.
+    BLASHandle imposter_cage_blas_ = 0;
+    Texture2D imposter_color_tex_{};
+    Texture2D imposter_disp_tex_{};
+    int   imposter_grid_ = 0, imposter_tri_base_ = 0;
+    float imposter_max_disp_ = 0.0f, imposter_atlas_w_ = 0.0f, imposter_atlas_h_ = 0.0f;
+    bool  imposter_enabled_ = false;
+
     // Mapping between BVH analysis names and BLAS handles for selective rendering
     std::unordered_map<std::string, BLASHandle> bvh_name_to_handle_;
     
