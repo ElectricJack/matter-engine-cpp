@@ -720,14 +720,16 @@ bool shadowQuery(vec3 origin, vec3 dir, float maxDist)
     return false;
 }
 
-// Main intersection interface
-HitResult intersectScene(vec3 rayOrigin, vec3 rayDir)
+// Main intersection interface. maxT bounds the search: seeding the ray's hit.t
+// lets AABB/triangle tests prune anything past maxT, so a short maxT (e.g. a
+// bounded GI ray) walks far less of the BVH. Pass 1e30 for an unbounded search.
+HitResult intersectScene(vec3 rayOrigin, vec3 rayDir, float maxT)
 {
     Ray ray;
     ray.O = rayOrigin;
     ray.D = rayDir;
     ray.rD = vec3(1.0) / rayDir;
-    ray.hit.t = 1e30;
+    ray.hit.t = maxT;
     ray.hit.u = 0.0;
     ray.hit.v = 0.0;
     ray.hit.primIdx = 0u;
@@ -738,7 +740,7 @@ HitResult intersectScene(vec3 rayOrigin, vec3 rayDir)
     TLASIntersect(ray);
 
     HitResult result;
-    result.hit = (ray.hit.t < 1e30);
+    result.hit = (ray.hit.t < maxT);
     result.t = ray.hit.t;
     result.triangleTests = ray.triangleTests; // Copy debug counter
 
@@ -825,6 +827,12 @@ HitResult intersectScene(vec3 rayOrigin, vec3 rayDir)
     return result;
 }
 
+// Unbounded closest-hit search (the common case).
+HitResult intersectScene(vec3 rayOrigin, vec3 rayDir)
+{
+    return intersectScene(rayOrigin, rayDir, 1e30);
+}
+
 // Debug visualization: convert triangle test count to color
 vec3 triangleTestCountToColor(int testCount)
 {
@@ -871,6 +879,15 @@ vec3 computeCameraRay(vec2 uv) {
     
     return rayDir;
 }
+
+// === BEGIN INCLUDE: lighting.glsl ===
+// Shared PBR shading + sky + sampling helpers, extracted from
+// raytrace_tlas_blas.fs so the imposter bake shader can reuse the exact
+// same lighting. Relies on the includer having already declared:
+//   - includes: materials.glsl, bvh_tlas_common.glsl (getMaterialProperties,
+//     intersectScene, RandomFloat, HitResult, MaterialProperties, intersectionMode)
+//   - inputs: getGridHash(), lightPos/lightColor/ambient,
+//     giStrength/shadowStrength/aoEnabled
 
 // Realistic sunny day sky with horizon
 vec3 sampleSky(vec3 direction) {
@@ -1022,11 +1039,13 @@ vec3 calculateIndirectLighting(vec3 hitPos, vec3 normal, vec3 albedo, inout uint
             sampleDir = sampleHemisphere(normal, seed);
         }
         
-        // Cast indirect ray with limited distance
-        float maxDistance = 4.0; // Slightly reduced for performance
-        HitResult indirectHit = intersectScene(hitPos + normal * 0.001, sampleDir);
-        
-        if (indirectHit.hit && indirectHit.t < maxDistance) {
+        // Cast indirect ray bounded to maxDistance: seeding the traversal cutoff
+        // prunes the BVH past this range instead of tracing to infinity and
+        // discarding far hits afterward.
+        float maxDistance = 4.0;
+        HitResult indirectHit = intersectScene(hitPos + normal * 0.001, sampleDir, maxDistance);
+
+        if (indirectHit.hit) {
             // Check if hit surface is emissive
             MaterialProperties hitMat = getMaterialProperties(indirectHit.material);
             if (hitMat.emission > 0.0) {
@@ -1061,7 +1080,7 @@ vec3 calculateIndirectLighting(vec3 hitPos, vec3 normal, vec3 albedo, inout uint
 }
 
 // Enhanced PBR lighting with indirect illumination
-vec3 calculatePBR(vec3 hitPos, vec3 normal, vec3 viewDir, vec3 albedo, float roughness, float metallic, float bakedAO, inout uint seed) {
+vec3 calculatePBR(vec3 hitPos, vec3 normal, vec3 viewDir, vec3 albedo, float roughness, float metallic, float bakedAO, bool doIndirect, inout uint seed) {
     vec3 totalLight = vec3(0.0);
     
     // Primary sun light
@@ -1119,8 +1138,10 @@ vec3 calculatePBR(vec3 hitPos, vec3 normal, vec3 viewDir, vec3 albedo, float rou
     // Baked ambient occlusion (precomputed per-vertex, interpolated at the hit).
     float ao = bakedAO;
     
-    // Add indirect lighting from emissive surfaces
-    vec3 indirectContribution = calculateIndirectLighting(hitPos, normal, albedo, seed);
+    // Indirect lighting (a full bounce ray). Only fire it on the primary hit;
+    // on reflected/secondary surfaces its contribution is barely visible and not
+    // worth another scene traversal.
+    vec3 indirectContribution = doIndirect ? calculateIndirectLighting(hitPos, normal, albedo, seed) : vec3(0.0);
     totalLight += indirectContribution * ao;
     
     // Enhanced ambient lighting with AO
@@ -1148,6 +1169,7 @@ vec3 calculatePBR(vec3 hitPos, vec3 normal, vec3 viewDir, vec3 albedo, float rou
     
     return totalLight;
 }
+// === END INCLUDE: lighting.glsl ===
 
 // Raytracing with shadows and reflections (performance balanced)
 vec3 trace(vec3 rayOrigin, vec3 rayDirection, inout uint seed) {
@@ -1159,8 +1181,8 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, inout uint seed) {
     // Atmospheric parameters - much more transparent haze
     float fogDensity = 0.00005;
     vec3  fogColor   = vec3(0.8, 0.8, 0.9);
-    int   MAX_DEPTH  = 3;
-    
+    int   MAX_DEPTH  = 2;
+
     for (int rayDepth = 0; rayDepth < MAX_DEPTH; rayDepth++) { // Limited to 2 bounces for performance
         HitResult hit = intersectScene(rayPos, rayDir);
         
@@ -1210,7 +1232,7 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, inout uint seed) {
         // Handle different material types based on properties
         if (matProps.translucency > 0.0 && rayDepth < MAX_DEPTH-1) {
             // Translucent material - handle both reflection and transmission
-            vec3 directLight = calculatePBR(hitPos, normal, rayDir, albedo, roughness, metallic, hit.ao, seed);
+            vec3 directLight = calculatePBR(hitPos, normal, rayDir, albedo, roughness, metallic, hit.ao, rayDepth == 0, seed);
             
             // Determine if ray is entering or exiting the material
             bool entering = dot(rayDir, normal) < 0.0;
@@ -1248,7 +1270,7 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, inout uint seed) {
                         
                         // Calculate direct lighting on reflected surface
                         vec3 reflectedLight = calculatePBR(reflectionHit.position, reflNormal, reflectedDir,
-                                                         reflAlbedo, reflMatProps.roughness, reflMatProps.metallic, reflectionHit.ao, seed);
+                                                         reflAlbedo, reflMatProps.roughness, reflMatProps.metallic, reflectionHit.ao, false, seed);
                         
                         // Add reflection contribution with proper energy conservation
                         color += attenuation * reflectedLight * albedo * reflectance;
@@ -1280,7 +1302,7 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, inout uint seed) {
             }
         } else if (isMirror && rayDepth < MAX_DEPTH-1) {
             // Reflective material
-            vec3 directLight = calculatePBR(hitPos, normal, rayDir, albedo, roughness, metallic, hit.ao, seed);
+            vec3 directLight = calculatePBR(hitPos, normal, rayDir, albedo, roughness, metallic, hit.ao, rayDepth == 0, seed);
             
             // Calculate Fresnel for reflection
             float NdotV = max(0.0, dot(normal, -rayDir));
@@ -1301,7 +1323,7 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, inout uint seed) {
             attenuation *= fresnelVec * (1.0 - roughness) * 0.6;
         } else {
             // Opaque material - calculate full PBR lighting and terminate
-            vec3 materialColor = calculatePBR(hitPos, normal, rayDir, albedo, roughness, metallic, hit.ao, seed);
+            vec3 materialColor = calculatePBR(hitPos, normal, rayDir, albedo, roughness, metallic, hit.ao, rayDepth == 0, seed);
             
             // Apply atmospheric fog
             materialColor = mix(materialColor, fogColor, fogFactor);
@@ -1358,6 +1380,6 @@ void main() {
 
     // Add subtle color grading
     color = pow(color, vec3(1.05)); // Slight contrast adjustment
-    
+
     finalColor = vec4(color, 1.0);
 }
