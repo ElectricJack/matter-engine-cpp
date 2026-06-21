@@ -1,5 +1,6 @@
 #include "../include/imposter_asset.h"
 #include "../include/mesh_simplifier.hpp"
+#include "raylib.h"
 
 #include <cstdio>
 #include <cstring>
@@ -144,7 +145,111 @@ bool load(const std::string& path, uint64_t expected_imp_hash,
     return true;
 }
 
-bool build_cage(const std::vector<Tri>&, const ImpGenParams&, uint64_t, ImposterAsset&) { return false; }
+static float3 v3(float x,float y,float z){ return make_float3(x,y,z); }
+static float3 sub3(float3 a,float3 b){ return make_float3(a.x-b.x,a.y-b.y,a.z-b.z); }
+static float3 cross3(float3 a,float3 b){ return make_float3(a.y*b.z-a.z*b.y, a.z*b.x-a.x*b.z, a.x*b.y-a.y*b.x); }
+static float3 norm3(float3 a){ float l=sqrtf(a.x*a.x+a.y*a.y+a.z*a.z); return l>1e-12f?make_float3(a.x/l,a.y/l,a.z/l):make_float3(0,0,0); }
+
+bool build_cage(const std::vector<Tri>& part_tris, const ImpGenParams& p,
+                uint64_t source_part_hash, ImposterAsset& out) {
+    if (part_tris.empty() || p.atlasW <= 0 || p.atlasH <= 0) return false;
+
+    // Non-indexed input mesh: 3 corners per triangle, simplifier welds internally.
+    Mesh in{};
+    in.triangleCount = (int)part_tris.size();
+    in.vertexCount   = in.triangleCount * 3;
+    in.vertices = (float*)MemAlloc(sizeof(float)*3*in.vertexCount);
+    for (int t=0;t<in.triangleCount;++t) {
+        const Tri& tr = part_tris[t];
+        const float3 c[3] = { tr.vertex0, tr.vertex1, tr.vertex2 };
+        for (int k=0;k<3;++k){ in.vertices[(t*3+k)*3+0]=c[k].x; in.vertices[(t*3+k)*3+1]=c[k].y; in.vertices[(t*3+k)*3+2]=c[k].z; }
+    }
+
+    SimplifyOptions opt; opt.target_ratio = p.cageRatio; opt.lock_boundary = false;
+    Mesh cage = simplify_mesh(in, opt, nullptr);
+    MemFree(in.vertices);
+    if (cage.vertexCount == 0 || cage.triangleCount == 0) {
+        if (cage.vertices) MemFree(cage.vertices);
+        if (cage.normals)  MemFree(cage.normals);
+        if (cage.indices)  MemFree(cage.indices);
+        return false;
+    }
+
+    // Smoothed per-vertex normals on the simplified mesh.
+    auto getv = [&](int i){ return make_float3(cage.vertices[i*3+0],cage.vertices[i*3+1],cage.vertices[i*3+2]); };
+
+    // Compute mesh centroid to orient face normals outward.
+    float3 centroid = make_float3(0,0,0);
+    for (int i=0;i<cage.vertexCount;++i) {
+        float3 p = getv(i);
+        centroid = make_float3(centroid.x+p.x, centroid.y+p.y, centroid.z+p.z);
+    }
+    float inv = 1.0f / (float)cage.vertexCount;
+    centroid = make_float3(centroid.x*inv, centroid.y*inv, centroid.z*inv);
+
+    std::vector<float3> vn(cage.vertexCount, make_float3(0,0,0));
+    for (int t=0;t<cage.triangleCount;++t) {
+        int i0=cage.indices[t*3+0], i1=cage.indices[t*3+1], i2=cage.indices[t*3+2];
+        float3 p0=getv(i0), p1=getv(i1), p2=getv(i2);
+        float3 fn = cross3(sub3(p1,p0), sub3(p2,p0));
+        // Orient face normal to point away from mesh centroid.
+        float3 fc = make_float3((p0.x+p1.x+p2.x)/3-(centroid.x),
+                                (p0.y+p1.y+p2.y)/3-(centroid.y),
+                                (p0.z+p1.z+p2.z)/3-(centroid.z));
+        float dot = fn.x*fc.x + fn.y*fc.y + fn.z*fc.z;
+        if (dot < 0.0f) { fn = make_float3(-fn.x,-fn.y,-fn.z); }
+        vn[i0]=make_float3(vn[i0].x+fn.x,vn[i0].y+fn.y,vn[i0].z+fn.z);
+        vn[i1]=make_float3(vn[i1].x+fn.x,vn[i1].y+fn.y,vn[i1].z+fn.z);
+        vn[i2]=make_float3(vn[i2].x+fn.x,vn[i2].y+fn.y,vn[i2].z+fn.z);
+    }
+    for (auto& n : vn) n = norm3(n);
+
+    // Atlas packing grid.
+    const int nt = cage.triangleCount;
+    int grid = (int)ceilf(sqrtf((float)nt)); if (grid < 1) grid = 1;
+    const float cell = (float)p.atlasW / (float)grid; // assume square atlas
+    const float pad = 2.0f;
+    const float aw = (float)p.atlasW, ah = (float)p.atlasH;
+
+    out = ImposterAsset{};
+    out.source_part_hash = source_part_hash;
+    out.atlas_w = (uint32_t)p.atlasW;
+    out.atlas_h = (uint32_t)p.atlasH;
+    out.disp_bits = p.dispBits;
+    out.max_disp = p.inflation;
+    out.verts.reserve(nt*3);
+    out.tris.reserve(nt);
+
+    float bmin[3]={1e30f,1e30f,1e30f}, bmax[3]={-1e30f,-1e30f,-1e30f};
+    for (int t=0;t<nt;++t) {
+        int idx[3] = { (int)cage.indices[t*3+0], (int)cage.indices[t*3+1], (int)cage.indices[t*3+2] };
+        int gx = t % grid, gy = t / grid;
+        float cx = gx*cell, cy = gy*cell;
+        float uv[3][2] = {
+            {(cx+pad)/aw,        (cy+pad)/ah},
+            {(cx+cell-pad)/aw,   (cy+pad)/ah},
+            {(cx+pad)/aw,        (cy+cell-pad)/ah},
+        };
+        for (int k=0;k<3;++k) {
+            float3 pos = getv(idx[k]);
+            float3 n   = vn[idx[k]];
+            float3 ip  = make_float3(pos.x + n.x*p.inflation, pos.y + n.y*p.inflation, pos.z + n.z*p.inflation);
+            CageVert cv; cv.px=ip.x; cv.py=ip.y; cv.pz=ip.z;
+            cv.nx=n.x; cv.ny=n.y; cv.nz=n.z; cv.u=uv[k][0]; cv.v=uv[k][1];
+            out.verts.push_back(cv);
+            bmin[0]=fminf(bmin[0],ip.x); bmin[1]=fminf(bmin[1],ip.y); bmin[2]=fminf(bmin[2],ip.z);
+            bmax[0]=fmaxf(bmax[0],ip.x); bmax[1]=fmaxf(bmax[1],ip.y); bmax[2]=fmaxf(bmax[2],ip.z);
+        }
+        out.tris.push_back({ (uint32_t)(t*3), (uint32_t)(t*3+1), (uint32_t)(t*3+2) });
+    }
+    for (int i=0;i<3;++i){ out.bounds_min[i]=bmin[i]; out.bounds_max[i]=bmax[i]; }
+    float ext = fmaxf(bmax[0]-bmin[0], fmaxf(bmax[1]-bmin[1], bmax[2]-bmin[2]));
+    out.parallax_radius = ext * 6.0f; // #3 hint; tune later
+
+    MemFree(cage.vertices); MemFree(cage.normals); MemFree(cage.indices);
+    return true;
+}
+
 bool bake_displacement_cpu(const std::vector<Tri>&, ImposterAsset&) { return false; }
 
 } // namespace imposter_asset

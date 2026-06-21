@@ -1,7 +1,9 @@
 #include "../include/imposter_asset.h"
+#include "../include/bvh.h"
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
+#include <cmath>
 #include <vector>
 
 static int failures = 0;
@@ -94,10 +96,69 @@ static void test_guards() {
     remove(path);
 }
 
+// A UV-sphere of Tri (radius R, centered at origin) for synthetic tests.
+static std::vector<Tri> make_sphere_tris(float R, int rings, int sectors) {
+    auto P = [&](int ri, int si){
+        float v = (float)ri/rings, u = (float)si/sectors;
+        float theta = v*3.14159265f, phi = u*2.0f*3.14159265f;
+        return make_float3(R*sinf(theta)*cosf(phi), R*cosf(theta), R*sinf(theta)*sinf(phi));
+    };
+    std::vector<Tri> out;
+    for (int ri=0; ri<rings; ++ri) for (int si=0; si<sectors; ++si) {
+        float3 a=P(ri,si), b=P(ri+1,si), c=P(ri+1,si+1), d=P(ri,si+1);
+        Tri t0; t0.vertex0=a; t0.vertex1=b; t0.vertex2=c;
+        t0.centroid=make_float3((a.x+b.x+c.x)/3,(a.y+b.y+c.y)/3,(a.z+b.z+c.z)/3);
+        Tri t1; t1.vertex0=a; t1.vertex1=c; t1.vertex2=d;
+        t1.centroid=make_float3((a.x+c.x+d.x)/3,(a.y+c.y+d.y)/3,(a.z+c.z+d.z)/3);
+        out.push_back(t0); out.push_back(t1);
+    }
+    return out;
+}
+
+static void test_build_cage() {
+    using namespace imposter_asset;
+    const float R = 1.0f;
+    std::vector<Tri> part = make_sphere_tris(R, 24, 24);
+    ImpGenParams p{}; p.cageRatio=0.1f; p.atlasW=256; p.atlasH=256; p.inflation=0.08f; p.dispBits=16; p.seed=0;
+
+    ImposterAsset a;
+    CHECK(build_cage(part, p, 0xABCull, a), "build_cage ok");
+    CHECK(a.source_part_hash == 0xABCull, "cage stores source hash");
+    CHECK(a.max_disp == p.inflation, "max_disp == inflation");
+    CHECK((int)a.tris.size() < (int)part.size(), "cage decimated below source");
+    CHECK(a.verts.size() == a.tris.size()*3, "non-indexed cage (3 verts/tri)");
+
+    // Enclosure: every cage vertex is radially outside the sphere surface.
+    bool enclosed = true;
+    for (const auto& v : a.verts) {
+        float d = sqrtf(v.px*v.px + v.py*v.py + v.pz*v.pz);
+        if (d < R - 1e-3f) { enclosed = false; break; }
+    }
+    CHECK(enclosed, "inflated cage encloses the sphere (all verts >= R)");
+
+    // UVs in [0,1].
+    bool uv_ok = true;
+    for (const auto& v : a.verts) if (v.u<0||v.u>1||v.v<0||v.v>1) { uv_ok=false; break; }
+    CHECK(uv_ok, "all cage UVs in [0,1]");
+
+    // Each triangle occupies a distinct atlas cell (centroids differ).
+    bool distinct = true;
+    for (size_t i=0;i<a.tris.size() && distinct;++i)
+        for (size_t j=i+1;j<a.tris.size() && distinct;++j) {
+            float ci_u=(a.verts[3*i].u+a.verts[3*i+1].u+a.verts[3*i+2].u)/3;
+            float ci_v=(a.verts[3*i].v+a.verts[3*i+1].v+a.verts[3*i+2].v)/3;
+            float cj_u=(a.verts[3*j].u+a.verts[3*j+1].u+a.verts[3*j+2].u)/3;
+            float cj_v=(a.verts[3*j].v+a.verts[3*j+1].v+a.verts[3*j+2].v)/3;
+            if (fabsf(ci_u-cj_u)<1e-5f && fabsf(ci_v-cj_v)<1e-5f) distinct=false;
+        }
+    CHECK(distinct, "each cage triangle maps to a distinct atlas cell");
+}
+
 int main() {
     test_hash_and_path();
     test_round_trip();
     test_guards();
+    test_build_cage();
     if (failures == 0) printf("All imposter_asset tests passed\n");
     return failures == 0 ? 0 : 1;
 }
