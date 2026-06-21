@@ -79,7 +79,8 @@ bool save(const std::string& path, const BLASManager& blas,
     put<uint32_t>(body, static_cast<uint32_t>(recs.size()));
     for (const auto& r : recs) {
         auto it = handle_to_index.find(r.blas_handle);
-        const uint32_t blas_index = (it == handle_to_index.end()) ? 0u : it->second;
+        if (it == handle_to_index.end()) return false; // dangling handle: refuse to write a corrupt cache
+        const uint32_t blas_index = it->second;
         put<uint32_t>(body, blas_index);
         put<uint32_t>(body, r.material_id);
         put_bytes(body, r.transform.m, 16 * sizeof(float));
