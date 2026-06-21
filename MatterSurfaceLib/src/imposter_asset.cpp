@@ -250,6 +250,60 @@ bool build_cage(const std::vector<Tri>& part_tris, const ImpGenParams& p,
     return true;
 }
 
-bool bake_displacement_cpu(const std::vector<Tri>&, ImposterAsset&) { return false; }
+bool bake_displacement_cpu(const std::vector<Tri>& part_tris, ImposterAsset& out) {
+    if (part_tris.empty() || out.tris.empty() || out.atlas_w==0 || out.atlas_h==0) return false;
+
+    // BVH over the part (BvhMesh owns a copy so the BVH's lifetime is self-contained).
+    BvhMesh mesh{};
+    mesh.triCount = (int)part_tris.size();
+    mesh.tri = (Tri*)MALLOC64(sizeof(Tri)*mesh.triCount);
+    for (int i=0;i<mesh.triCount;++i) mesh.tri[i] = part_tris[i];
+    BVH bvh(&mesh);
+
+    const int W=(int)out.atlas_w, H=(int)out.atlas_h;
+    const int nt=(int)out.tris.size();
+    int grid=(int)ceilf(sqrtf((float)nt)); if(grid<1) grid=1;
+    const float cell=(float)W/(float)grid, pad=2.0f;
+    const int bytes = out.disp_bits/8;
+
+    // First pass: cast all covered texels, record raw distances + max.
+    std::vector<float> dist((size_t)W*H, -1.0f);
+    float observed_max = 1e-6f;
+    for (int y=0;y<H;++y) for (int x=0;x<W;++x) {
+        int gx=(int)((x+0.5f)/cell), gy=(int)((y+0.5f)/cell);
+        int t=gy*grid+gx; if(t<0||t>=nt) continue;
+        float fu=((x+0.5f)-(gx*cell+pad))/(cell-2*pad);
+        float fv=((y+0.5f)-(gy*cell+pad))/(cell-2*pad);
+        if (fu<0||fv<0||fu+fv>1.0f) continue; // gutter (outside the padded right-tri)
+        float w1=fu,w2=fv,w0=1.0f-fu-fv;
+        const CageVert& A=out.verts[3*t]; const CageVert& B=out.verts[3*t+1]; const CageVert& C=out.verts[3*t+2];
+        float3 pos=make_float3(w0*A.px+w1*B.px+w2*C.px, w0*A.py+w1*B.py+w2*C.py, w0*A.pz+w1*B.pz+w2*C.pz);
+        float3 n=norm3(make_float3(w0*A.nx+w1*B.nx+w2*C.nx, w0*A.ny+w1*B.ny+w2*C.ny, w0*A.nz+w1*B.nz+w2*C.nz));
+        float3 dir=make_float3(-n.x,-n.y,-n.z);
+        BVHRay ray; ray.O=pos; ray.D=dir; ray.rD=make_float3(1.0f/dir.x,1.0f/dir.y,1.0f/dir.z);
+        ray.hit.t=1e30f;
+        bvh.Intersect(ray, 0);
+        if (ray.hit.t < 1e29f && ray.hit.t > 0.0f) {
+            dist[(size_t)y*W+x]=ray.hit.t;
+            if (ray.hit.t>observed_max) observed_max=ray.hit.t;
+        }
+    }
+    out.max_disp = fmaxf(out.max_disp, observed_max);
+
+    // Second pass: normalize + write disp + coverage.
+    out.disp.assign((size_t)W*H*bytes, 0);
+    out.color.assign((size_t)W*H*4, 0);
+    for (int i=0;i<W*H;++i) {
+        float d=dist[i];
+        if (d<0.0f) { out.color[i*4+3]=0; continue; } // miss/gutter
+        float nrm = d/out.max_disp; if(nrm>1.0f) nrm=1.0f; if(nrm<0.0f) nrm=0.0f;
+        if (bytes==2) { uint16_t v=(uint16_t)(nrm*65535.0f+0.5f); memcpy(&out.disp[(size_t)i*2], &v, 2); }
+        else          { out.disp[i]=(uint8_t)(nrm*255.0f+0.5f); }
+        out.color[i*4+3]=255; // coverage
+    }
+
+    FREE64(mesh.tri);
+    return true;
+}
 
 } // namespace imposter_asset

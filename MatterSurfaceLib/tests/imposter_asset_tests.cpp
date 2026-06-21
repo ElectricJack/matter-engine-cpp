@@ -154,11 +154,52 @@ static void test_build_cage() {
     CHECK(distinct, "each cage triangle maps to a distinct atlas cell");
 }
 
+static void test_displacement_reconstruction() {
+    using namespace imposter_asset;
+    const float R = 1.0f;
+    std::vector<Tri> part = make_sphere_tris(R, 32, 32);
+    ImpGenParams p{}; p.cageRatio=0.2f; p.atlasW=128; p.atlasH=128; p.inflation=0.12f; p.dispBits=16; p.seed=0;
+
+    ImposterAsset a;
+    CHECK(build_cage(part, p, 0x1ull, a), "cage for displacement ok");
+    CHECK(bake_displacement_cpu(part, a), "displacement bake ok");
+    CHECK(a.disp.size() == (size_t)a.atlas_w*a.atlas_h*2, "disp sized for R16");
+    CHECK(a.color.size() == (size_t)a.atlas_w*a.atlas_h*4, "color sized RGBA8");
+    CHECK(a.max_disp >= p.inflation, "max_disp at least inflation");
+
+    // Reconstruct surface points from covered texels; assert they lie on the sphere.
+    int covered = 0; float max_err = 0.0f;
+    const int W=a.atlas_w, H=a.atlas_h;
+    int grid = (int)ceilf(sqrtf((float)a.tris.size()));
+    float cell = (float)W/(float)grid; float pad=2.0f;
+    for (int y=0;y<H;++y) for (int x=0;x<W;++x) {
+        if (a.color[(y*W+x)*4+3] == 0) continue; // gutter/miss
+        int gx=(int)((x+0.5f)/cell), gy=(int)((y+0.5f)/cell);
+        int t = gy*grid+gx; if (t<0 || t>=(int)a.tris.size()) continue;
+        float fu = ((x+0.5f)-(gx*cell+pad))/(cell-2*pad);
+        float fv = ((y+0.5f)-(gy*cell+pad))/(cell-2*pad);
+        float w1=fu, w2=fv, w0=1.0f-fu-fv;
+        const CageVert& A=a.verts[3*t], &B=a.verts[3*t+1], &C=a.verts[3*t+2];
+        float px=w0*A.px+w1*B.px+w2*C.px, py=w0*A.py+w1*B.py+w2*C.py, pz=w0*A.pz+w1*B.pz+w2*C.pz;
+        float nx=w0*A.nx+w1*B.nx+w2*C.nx, ny=w0*A.ny+w1*B.ny+w2*C.ny, nz=w0*A.nz+w1*B.nz+w2*C.nz;
+        float nl=sqrtf(nx*nx+ny*ny+nz*nz); nx/=nl; ny/=nl; nz/=nl;
+        uint16_t raw; memcpy(&raw, &a.disp[(y*W+x)*2], 2);
+        float d = (raw/65535.0f)*a.max_disp;
+        float sx=px-nx*d, sy=py-ny*d, sz=pz-nz*d;
+        float err = fabsf(sqrtf(sx*sx+sy*sy+sz*sz) - R);
+        if (err>max_err) max_err=err;
+        ++covered;
+    }
+    CHECK(covered > 100, "displacement covered a meaningful texel count");
+    CHECK(max_err < 0.05f, "reconstructed surface within 5% of sphere radius");
+}
+
 int main() {
     test_hash_and_path();
     test_round_trip();
     test_guards();
     test_build_cage();
+    test_displacement_reconstruction();
     if (failures == 0) printf("All imposter_asset tests passed\n");
     return failures == 0 ? 0 : 1;
 }
