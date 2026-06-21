@@ -613,10 +613,13 @@ private:
         imposter_asset::ImposterAsset imp;
         if (!imposter_asset::load(imp_path, imp_hash, source_hash, imp)) {
             std::vector<Tri> part_tris = imposter_asset::flatten_part_triangles(*blas_manager_, *tlas_manager_);
-            if (imposter_asset::bake_imposter(ip, part_tris, source_hash, *blas_manager_, *tlas_manager_, imp)) {
-                imposter_asset::save(imp_path, imp, imp_hash);
-                printf("[imposter] baked + saved %s\n", imp_path.c_str());
-            } else { printf("[imposter] bake FAILED\n"); }
+            if (!imposter_asset::bake_imposter(ip, part_tris, source_hash, *blas_manager_, *tlas_manager_, imp)) {
+                // Bail before uploading a 0x0 atlas / registering an empty cage BLAS.
+                printf("[imposter] bake FAILED\n");
+                return;
+            }
+            imposter_asset::save(imp_path, imp, imp_hash);
+            printf("[imposter] baked + saved %s\n", imp_path.c_str());
         } else { printf("[imposter] loaded %s\n", imp_path.c_str()); }
 
         std::vector<Tri> cage_tris = imposter_asset::cage_to_tris(imp);
@@ -2086,6 +2089,8 @@ private:
     void cleanup() {
         if (raytracing_shader_.id != 0) UnloadShader(raytracing_shader_);
         if (rt_target_.id != 0) UnloadRenderTexture(rt_target_);
+        if (imposter_color_tex_.id != 0) UnloadTexture(imposter_color_tex_);
+        if (imposter_disp_tex_.id != 0) UnloadTexture(imposter_disp_tex_);
         // Managers clean up their own textures in destructors
     }
     
