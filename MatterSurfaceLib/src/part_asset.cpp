@@ -188,6 +188,7 @@ bool load(const std::string& path, uint64_t expected_hash,
         if (!r.ok) return false;
         handles[i] = blas.register_prebuilt(tris, triex, static_cast<int>(tri_count),
                                             nodes, nodes_used, triIdx, hash, ref_count);
+        if (handles[i] == INVALID_BLAS_HANDLE) return false; // bad/zero geometry: regenerate
     }
 
     // --- Instances ---
