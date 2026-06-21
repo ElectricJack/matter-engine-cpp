@@ -134,9 +134,59 @@ static part_asset::PartGenParams sample_params() {
     return p;
 }
 
+static void test_round_trip() {
+    using namespace part_asset;
+
+    // Source scene.
+    BLASManager blasA; TLASManager tlasA(64);
+    BLASHandle hA, hB; build_scene(blasA, tlasA, hA, hB);
+
+    std::vector<Tri> triA; blasA.generate_triangle_data(triA);
+    std::vector<LegacyBVHNode> nodeA; blasA.generate_node_data(nodeA);
+    const auto recsA = tlasA.get_draw_records();
+
+    const char* path = "test_round.part";
+    remove(path);
+    CHECK(save(path, blasA, tlasA, 0x55AA55AAu), "round-trip save ok");
+
+    // Load into fresh managers.
+    BLASManager blasB; TLASManager tlasB(64);
+    bool ok = load(path, 0x55AA55AAu, blasB, tlasB);
+    CHECK(ok, "round-trip load ok");
+
+    // BLAS CPU data byte-identical.
+    std::vector<Tri> triB; blasB.generate_triangle_data(triB);
+    std::vector<LegacyBVHNode> nodeB; blasB.generate_node_data(nodeB);
+    CHECK(triA.size() == triB.size(), "round-trip triangle count");
+    CHECK(triA.size() == triB.size() &&
+          memcmp(triA.data(), triB.data(), triA.size()*sizeof(Tri)) == 0,
+          "round-trip triangle bytes");
+    CHECK(nodeA.size() == nodeB.size(), "round-trip node count");
+    CHECK(nodeA.size() == nodeB.size() &&
+          memcmp(nodeA.data(), nodeB.data(), nodeA.size()*sizeof(LegacyBVHNode)) == 0,
+          "round-trip node bytes");
+
+    // Instances: same count, material ids, and transforms (handles may differ).
+    const auto recsB = tlasB.get_draw_records();
+    CHECK(recsA.size() == recsB.size() && recsB.size() == 3, "round-trip instance count");
+    bool inst_ok = recsA.size() == recsB.size();
+    for (size_t i = 0; inst_ok && i < recsA.size(); ++i) {
+        if (recsA[i].material_id != recsB[i].material_id) inst_ok = false;
+        if (memcmp(recsA[i].transform.m, recsB[i].transform.m, 16*sizeof(float)) != 0) inst_ok = false;
+    }
+    CHECK(inst_ok, "round-trip instance material+transform");
+
+    // Wrong expected hash must be rejected.
+    BLASManager blasC; TLASManager tlasC(64);
+    CHECK(!load(path, 0xDEADBEEFu, blasC, tlasC), "load rejects wrong param hash");
+
+    remove(path);
+}
+
 int main() {
     test_prebuilt_parity();
     test_save_header();
+    test_round_trip();
 
     using namespace part_asset;
 

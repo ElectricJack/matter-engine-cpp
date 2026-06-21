@@ -22,6 +22,22 @@ void ensure_parent_dir(const std::string& path) {
     if (pos == std::string::npos) return;
     mkdir(path.substr(0, pos).c_str(), 0755); // ignore EEXIST
 }
+
+struct Reader {
+    const uint8_t* p;
+    const uint8_t* end;
+    bool ok = true;
+    template <class T> T get() {
+        T v{};
+        if (p + sizeof(T) > end) { ok = false; return v; }
+        std::memcpy(&v, p, sizeof(T)); p += sizeof(T);
+        return v;
+    }
+    const uint8_t* take(size_t n) {
+        if (p + n > end) { ok = false; return nullptr; }
+        const uint8_t* r = p; p += n; return r;
+    }
+};
 } // namespace
 
 namespace part_asset {
@@ -107,6 +123,96 @@ bool save(const std::string& path, const BLASManager& blas,
     std::fclose(f);
     if (!ok) { std::remove(tmp.c_str()); return false; }
     return std::rename(tmp.c_str(), path.c_str()) == 0;
+}
+
+bool load(const std::string& path, uint64_t expected_hash,
+          BLASManager& blas, TLASManager& tlas) {
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return false;
+    std::fseek(f, 0, SEEK_END);
+    long sz = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (sz < 36) { std::fclose(f); return false; }
+    std::vector<uint8_t> buf(static_cast<size_t>(sz));
+    bool read_ok = std::fread(buf.data(), 1, buf.size(), f) == buf.size();
+    std::fclose(f);
+    if (!read_ok) return false;
+
+    Reader r{ buf.data(), buf.data() + buf.size() };
+
+    // --- Header + validation ---
+    const uint32_t magic    = r.get<uint32_t>();
+    const uint32_t version  = r.get<uint32_t>();
+    const uint64_t phash    = r.get<uint64_t>();
+    const uint32_t s_tri    = r.get<uint32_t>();
+    const uint32_t s_triex  = r.get<uint32_t>();
+    const uint32_t s_node   = r.get<uint32_t>();
+    const uint64_t content  = r.get<uint64_t>();
+    if (!r.ok) return false;
+    if (magic != kMagic)           return false;
+    if (version != kFormatVersion) return false;
+    if (s_tri   != sizeof(Tri))    return false;
+    if (s_triex != sizeof(TriEx))  return false;
+    if (s_node  != sizeof(BVHNode)) return false;
+    if (phash   != expected_hash)  return false;
+    if (fnv1a64(r.p, static_cast<size_t>(r.end - r.p)) != content) return false;
+
+    // --- Materials (validate against the live code-defined registry) ---
+    const uint32_t mcount = r.get<uint32_t>();
+    if (!r.ok) return false;
+    if (static_cast<int>(mcount) != MaterialRegistryCount()) return false;
+    for (uint32_t i = 0; i < mcount; ++i) {
+        const uint8_t* md = r.take(sizeof(MaterialDef));
+        if (!r.ok) return false;
+        if (std::memcmp(md, MaterialRegistryGet(static_cast<int>(i)), sizeof(MaterialDef)) != 0)
+            return false;
+    }
+
+    // --- BLAS table ---
+    const uint32_t blas_count = r.get<uint32_t>();
+    if (!r.ok) return false;
+    std::vector<BLASHandle> handles(blas_count, INVALID_BLAS_HANDLE);
+    for (uint32_t i = 0; i < blas_count; ++i) {
+        const uint32_t hash       = r.get<uint32_t>();
+        const uint32_t ref_count  = r.get<uint32_t>();
+        const uint32_t tri_count  = r.get<uint32_t>();
+        const uint32_t nodes_used = r.get<uint32_t>();
+        const uint32_t has_triex  = r.get<uint32_t>();
+        if (!r.ok) return false;
+        const Tri*     tris  = reinterpret_cast<const Tri*>(r.take(tri_count * sizeof(Tri)));
+        const TriEx*   triex = has_triex
+                               ? reinterpret_cast<const TriEx*>(r.take(tri_count * sizeof(TriEx)))
+                               : nullptr;
+        const BVHNode* nodes  = reinterpret_cast<const BVHNode*>(r.take(nodes_used * sizeof(BVHNode)));
+        const uint*    triIdx = reinterpret_cast<const uint*>(r.take(tri_count * sizeof(uint)));
+        if (!r.ok) return false;
+        handles[i] = blas.register_prebuilt(tris, triex, static_cast<int>(tri_count),
+                                            nodes, nodes_used, triIdx, hash, ref_count);
+    }
+
+    // --- Instances ---
+    const uint32_t inst_count = r.get<uint32_t>();
+    if (!r.ok) return false;
+    std::vector<TLASManager::DrawInstance> insts;
+    insts.reserve(inst_count);
+    for (uint32_t i = 0; i < inst_count; ++i) {
+        const uint32_t blas_index = r.get<uint32_t>();
+        const uint32_t material   = r.get<uint32_t>();
+        const uint8_t* tf         = r.take(16 * sizeof(float));
+        if (!r.ok) return false;
+        if (blas_index >= blas_count) return false;
+        TLASManager::DrawInstance di;
+        di.blas_handle = handles[blas_index];
+        di.material_id = material;
+        std::memcpy(di.transform.m, tf, 16 * sizeof(float));
+        insts.push_back(di);
+    }
+
+    if (!insts.empty()) {
+        tlas.draw_batch(insts);
+        tlas.build(blas);
+    }
+    return true;
 }
 
 } // namespace part_asset
