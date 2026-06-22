@@ -116,6 +116,10 @@ bool bake_imposter(const ImpGenParams& p, const std::vector<Tri>& part_tris,
                    uint64_t source_part_hash,
                    class BLASManager& blas, class TLASManager& tlas, ImposterAsset& out);
 
+// Orthonormal basis (T,B) spanning the plane with normal n. Robust when n aligns
+// with the chosen up-axis. GL-free.
+void plane_basis(const float n[3], float T[3], float B[3]);
+
 // Flatten all TLAS instances' triangles into one part-space triangle list. GL-free.
 std::vector<Tri> flatten_part_triangles(const class BLASManager& blas,
                                         const class TLASManager& tlas);

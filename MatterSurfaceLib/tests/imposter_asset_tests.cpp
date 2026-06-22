@@ -275,6 +275,35 @@ static void test_chartcone_hash_and_new_fields() {
     remove(path);
 }
 
+static void test_plane_basis() {
+    using namespace imposter_asset;
+    auto check_basis = [](float nx,float ny,float nz){
+        float n[3]={nx,ny,nz}, T[3],B[3];
+        plane_basis(n, T, B);
+        float lt=sqrtf(T[0]*T[0]+T[1]*T[1]+T[2]*T[2]);
+        float lb=sqrtf(B[0]*B[0]+B[1]*B[1]+B[2]*B[2]);
+        CHECK(fabsf(lt-1.0f)<1e-4f && fabsf(lb-1.0f)<1e-4f, "basis vectors unit length");
+        float tn=T[0]*nx+T[1]*ny+T[2]*nz, bn=B[0]*nx+B[1]*ny+B[2]*nz;
+        float tb=T[0]*B[0]+T[1]*B[1]+T[2]*B[2];
+        CHECK(fabsf(tn)<1e-4f && fabsf(bn)<1e-4f, "basis perpendicular to normal");
+        CHECK(fabsf(tb)<1e-4f, "basis vectors orthogonal");
+    };
+    check_basis(0,0,1);   // z-up: must not collapse against the up-vector
+    check_basis(1,0,0);
+    check_basis(0.577f,0.577f,0.577f);
+
+    // A flat triangle in z=0 projects with zero distortion: projected edge lengths
+    // equal 3D edge lengths.
+    float n[3]={0,0,1}, T[3],B[3]; plane_basis(n,T,B);
+    float3 p0=make_float3(0,0,0), p1=make_float3(2,0,0), p2=make_float3(0,3,0);
+    auto proj=[&](float3 p){ return make_float3(p.x*T[0]+p.y*T[1]+p.z*T[2],
+                                                p.x*B[0]+p.y*B[1]+p.z*B[2], 0); };
+    float3 q0=proj(p0),q1=proj(p1),q2=proj(p2);
+    float e01=sqrtf((q1.x-q0.x)*(q1.x-q0.x)+(q1.y-q0.y)*(q1.y-q0.y));
+    float e02=sqrtf((q2.x-q0.x)*(q2.x-q0.x)+(q2.y-q0.y)*(q2.y-q0.y));
+    CHECK(fabsf(e01-2.0f)<1e-4f && fabsf(e02-3.0f)<1e-4f, "flat projection is isometric");
+}
+
 static void test_segment_charts() {
     using namespace imposter_asset;
     // A flat 2-triangle quad in z=0 -> one chart (normals identical).
@@ -318,6 +347,7 @@ int main() {
     test_chartcone_hash_and_new_fields();
     test_build_adjacency();
     test_segment_charts();
+    test_plane_basis();
     if (failures == 0) printf("All imposter_asset tests passed\n");
     return failures == 0 ? 0 : 1;
 }

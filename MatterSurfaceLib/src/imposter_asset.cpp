@@ -254,6 +254,15 @@ std::vector<int> segment_charts(const float* positions, const unsigned short* in
     return cid;
 }
 
+void plane_basis(const float n[3], float T[3], float B[3]) {
+    float3 N = norm3(make_float3(n[0],n[1],n[2]));
+    float3 up = (fabsf(N.z) < 0.9f) ? make_float3(0,0,1) : make_float3(1,0,0);
+    float3 t = norm3(cross3(up, N));
+    float3 b = cross3(N, t);     // already unit (N,t orthonormal)
+    T[0]=t.x; T[1]=t.y; T[2]=t.z;
+    B[0]=b.x; B[1]=b.y; B[2]=b.z;
+}
+
 bool build_cage(const std::vector<Tri>& part_tris, const ImpGenParams& p,
                 uint64_t source_part_hash, ImposterAsset& out) {
     if (part_tris.empty() || p.atlasW <= 0 || p.atlasH <= 0) return false;
