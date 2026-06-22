@@ -617,7 +617,6 @@ private:
         if (const char* e = getenv("MSL_IMP_RATIO"))     ip.cageRatio = (float)atof(e);
         if (const char* e = getenv("MSL_IMP_MAXTRIS"))   ip.maxCageTris = atoi(e);
         const bool cube = (getenv("MSL_IMPOSTER_CUBE") != nullptr);
-        imposter_quad_charts_ = cube ? 1 : 0;
         uint64_t source_hash = part_asset::compute_param_hash(brick_gen_params());
         uint64_t imp_hash = imposter_asset::compute_imp_hash(ip);
         if (cube) imp_hash ^= 0x9E3779B97F4A7C15ull; // distinct cache key for the cube cage
@@ -659,7 +658,6 @@ private:
             dimg.mipmaps=1; dimg.format=PIXELFORMAT_UNCOMPRESSED_R32;
             imposter_disp_tex_ = LoadTextureFromImage(dimg);
             SetTextureFilter(imposter_disp_tex_, TEXTURE_FILTER_BILINEAR);
-            imposter_grid_ = (int)ceilf(sqrtf((float)(cube ? (imp.tris.size()+1)/2 : imp.tris.size())));
             imposter_tri_base_ = blas_manager_->get_offsets(imposter_cage_blas_).triangle_offset;
             {
                 const BLASManager::BLASEntry* e = blas_manager_->get_entry(imposter_cage_blas_);
@@ -674,15 +672,6 @@ private:
                 SetTextureFilter(imposter_triuv_tex_, TEXTURE_FILTER_POINT);
             }
             imposter_max_disp_ = imp.max_disp;
-            imposter_atlas_w_ = (float)imp.atlas_w; imposter_atlas_h_ = (float)imp.atlas_h;
-            // Cage AABB in world space (cage bounds + the +X 24.0 instance offset),
-            // used by the cube's reorder-safe geometry UVs in the shader.
-            imposter_aabb_min_[0] = imp.bounds_min[0] + 24.0f;
-            imposter_aabb_min_[1] = imp.bounds_min[1];
-            imposter_aabb_min_[2] = imp.bounds_min[2];
-            imposter_aabb_max_[0] = imp.bounds_max[0] + 24.0f;
-            imposter_aabb_max_[1] = imp.bounds_max[1];
-            imposter_aabb_max_[2] = imp.bounds_max[2];
             imposter_enabled_ = true;
         }
     }
@@ -1374,12 +1363,8 @@ private:
             if (imposter_enabled_) {
                 SetShaderValueTexture(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterColorTex"), imposter_color_tex_);
                 SetShaderValueTexture(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterDispTex"),  imposter_disp_tex_);
-                SetShaderValue(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterGrid"), &imposter_grid_, SHADER_UNIFORM_INT);
                 SetShaderValue(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterTriBase"), &imposter_tri_base_, SHADER_UNIFORM_INT);
                 SetShaderValue(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterMaxDisp"), &imposter_max_disp_, SHADER_UNIFORM_FLOAT);
-                float as[2]={imposter_atlas_w_, imposter_atlas_h_};
-                SetShaderValue(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterAtlasSize"), as, SHADER_UNIFORM_VEC2);
-                float pad=2.0f; SetShaderValue(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterPad"), &pad, SHADER_UNIFORM_FLOAT);
                 int impDbg = getenv("MSL_IMP_DBG") ? atoi(getenv("MSL_IMP_DBG")) : 0;
                 SetShaderValue(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterDbg"), &impDbg, SHADER_UNIFORM_INT);
                 SetShaderValueTexture(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterTriUvTex"), imposter_triuv_tex_);
@@ -2172,10 +2157,8 @@ private:
     BLASHandle imposter_cage_blas_ = 0;
     Texture2D imposter_color_tex_{};
     Texture2D imposter_disp_tex_{};
-    int   imposter_grid_ = 0, imposter_tri_base_ = 0;
-    int   imposter_quad_charts_ = 0;
-    float imposter_max_disp_ = 0.0f, imposter_atlas_w_ = 0.0f, imposter_atlas_h_ = 0.0f;
-    float imposter_aabb_min_[3] = {0,0,0}, imposter_aabb_max_[3] = {0,0,0};
+    int   imposter_tri_base_ = 0;
+    float imposter_max_disp_ = 0.0f;
     Texture2D imposter_triuv_tex_{};
     int   imposter_tri_count_ = 0;
     bool  imposter_enabled_ = false;

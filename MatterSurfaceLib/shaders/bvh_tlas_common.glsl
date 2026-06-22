@@ -15,11 +15,8 @@ uniform sampler2D instancesTexture;    // Instance transforms
 // --- Imposter (v1: single bound atlas + global params) ---
 uniform sampler2D imposterColorTex;   // baked radiance (rgb) + coverage (a)
 uniform sampler2D imposterDispTex;    // scalar inward depth, normalized [0,1]
-uniform int   imposterGrid;           // atlas cell grid (ceil(sqrt(cageTriCount)))
 uniform int   imposterTriBase;        // global triangle index of the cage's first triangle
 uniform float imposterMaxDisp;        // shell thickness (denormalizes displacement)
-uniform vec2  imposterAtlasSize;      // (atlasW, atlasH) for padding math
-uniform float imposterPad;            // gutter padding in texels (matches build_cage)
 uniform int   imposterDbg;            // 0=normal, 1=color by cage triangle index (no relief)
 uniform sampler2D imposterTriUvTex;   // RGBA32F: col=BVH triangle slot, row=corner, .xy=uv
 uniform int   imposterTriCount;       // number of cage triangles (texture width)
