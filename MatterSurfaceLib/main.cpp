@@ -611,11 +611,13 @@ private:
         ip.cageRatio = 0.08f; ip.atlasW = 1024; ip.atlasH = 1024;
         ip.inflation = 1.0f; ip.dispBits = 16; ip.seed = 1u;
         ip.maxCageTris = 2000; // keep atlas cells ~22 texels (1024/ceil(sqrt(2000)))
+        ip.chartConeDeg = 75.0f; // chart normal-cone half-angle; must stay < 90
         // Debug knobs: override bake params from env so the bake can be iterated
         // without recompiling (each changes imp_hash, so the cache won't collide).
         if (const char* e = getenv("MSL_IMP_INFLATION")) ip.inflation = (float)atof(e);
         if (const char* e = getenv("MSL_IMP_RATIO"))     ip.cageRatio = (float)atof(e);
         if (const char* e = getenv("MSL_IMP_MAXTRIS"))   ip.maxCageTris = atoi(e);
+        if (const char* e = getenv("MSL_IMP_CONE"))      ip.chartConeDeg = (float)atof(e);
         const bool cube = (getenv("MSL_IMPOSTER_CUBE") != nullptr);
         uint64_t source_hash = part_asset::compute_param_hash(brick_gen_params());
         uint64_t imp_hash = imposter_asset::compute_imp_hash(ip);
