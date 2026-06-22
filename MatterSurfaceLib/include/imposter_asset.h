@@ -145,4 +145,11 @@ std::vector<Tri> cage_to_tris(const ImposterAsset& a);
 std::vector<float> pack_cage_uvs_bvh_order(const ImposterAsset& a,
                                            const uint32_t* triIdx, int nTris);
 
+// Pack per-triangle cage data keyed by cage-triangle-id (native tris order; BVH-independent)
+// into an RGBA32F buffer. Layout: width = nTris, height = 6. Rows 0-2 = corner positions
+// (.xyz, cage space), rows 3-5 = corner UVs (.xy). float offset = (row*nTris + tri)*4.
+// The shader uses this to re-anchor the tangent frame when the relief march crosses into a
+// new triangle. GL-free.
+std::vector<float> pack_cage_tri_data(const ImposterAsset& a);
+
 } // namespace imposter_asset

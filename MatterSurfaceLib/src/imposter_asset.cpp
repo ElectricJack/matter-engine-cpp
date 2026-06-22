@@ -662,4 +662,22 @@ std::vector<float> pack_cage_uvs_bvh_order(const ImposterAsset& a,
     return buf;
 }
 
+std::vector<float> pack_cage_tri_data(const ImposterAsset& a) {
+    const int nt=(int)a.tris.size();
+    std::vector<float> buf((size_t)nt*6*4, 0.0f);
+    auto setpx=[&](int row,int tri,float x,float y,float z,float w){
+        size_t o=((size_t)row*nt + tri)*4; buf[o]=x; buf[o+1]=y; buf[o+2]=z; buf[o+3]=w; };
+    for (int t=0;t<nt;++t){
+        const CageTri& tr=a.tris[t];
+        const CageVert& v0=a.verts[tr.i0]; const CageVert& v1=a.verts[tr.i1]; const CageVert& v2=a.verts[tr.i2];
+        setpx(0,t, v0.px,v0.py,v0.pz, 0.0f);
+        setpx(1,t, v1.px,v1.py,v1.pz, 0.0f);
+        setpx(2,t, v2.px,v2.py,v2.pz, 0.0f);
+        setpx(3,t, v0.u,v0.v, 0.0f, 0.0f);
+        setpx(4,t, v1.u,v1.v, 0.0f, 0.0f);
+        setpx(5,t, v2.u,v2.v, 0.0f, 0.0f);
+    }
+    return buf;
+}
+
 } // namespace imposter_asset

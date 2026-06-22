@@ -406,6 +406,22 @@ static void test_segment_charts() {
     }
 }
 
+static void test_pack_cage_tri_data() {
+    using namespace imposter_asset;
+    ImposterAsset a;
+    a.verts = { {1,2,3, 0,0,1, 0.1f,0.2f},
+                {4,5,6, 0,0,1, 0.3f,0.4f},
+                {7,8,9, 0,0,1, 0.5f,0.6f} };
+    a.tris = { {0,1,2} };
+    std::vector<float> buf = pack_cage_tri_data(a);
+    CHECK(buf.size()==(size_t)1*6*4, "buffer = nTris*6*4");
+    auto px=[&](int row,int tri,int c){ return buf[(size_t)(row*1 + tri)*4 + c]; };
+    CHECK(px(0,0,0)==1&&px(0,0,1)==2&&px(0,0,2)==3, "row0 = corner0 pos");
+    CHECK(px(2,0,0)==7&&px(2,0,1)==8&&px(2,0,2)==9, "row2 = corner2 pos");
+    CHECK(px(3,0,0)==0.1f&&px(3,0,1)==0.2f, "row3 = corner0 uv");
+    CHECK(px(5,0,0)==0.5f&&px(5,0,1)==0.6f, "row5 = corner2 uv");
+}
+
 static void test_bake_triid_and_continuity() {
     using namespace imposter_asset;
     // Flat 2-triangle quad part facing +Z, so the cage's single chart maps the quad
@@ -446,6 +462,7 @@ int main() {
     test_plane_basis();
     test_pack_charts();
     test_bake_triid_and_continuity();
+    test_pack_cage_tri_data();
     if (failures == 0) printf("All imposter_asset tests passed\n");
     return failures == 0 ? 0 : 1;
 }
