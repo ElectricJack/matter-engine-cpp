@@ -202,6 +202,58 @@ std::vector<TriAdj> build_adjacency(const float* positions, const unsigned short
     return adj;
 }
 
+std::vector<int> segment_charts(const float* positions, const unsigned short* indices,
+                                int triCount, const std::vector<TriAdj>& adj,
+                                float coneDeg, int& nCharts) {
+    auto vpos = [&](int corner){ int vi=indices[corner];
+        return make_float3(positions[vi*3+0],positions[vi*3+1],positions[vi*3+2]); };
+
+    // Mesh centroid for outward orientation.
+    float3 centroid = make_float3(0,0,0);
+    for (int t=0;t<triCount;++t) for (int k=0;k<3;++k){ float3 p=vpos(t*3+k);
+        centroid=make_float3(centroid.x+p.x,centroid.y+p.y,centroid.z+p.z); }
+    float invn = (triCount>0) ? 1.0f/(float)(triCount*3) : 0.0f;
+    centroid=make_float3(centroid.x*invn,centroid.y*invn,centroid.z*invn);
+
+    // Outward per-face normals.
+    std::vector<float3> fn(triCount);
+    for (int t=0;t<triCount;++t){
+        float3 p0=vpos(t*3+0),p1=vpos(t*3+1),p2=vpos(t*3+2);
+        float3 n=cross3(sub3(p1,p0),sub3(p2,p0));
+        float3 fc=make_float3((p0.x+p1.x+p2.x)/3-centroid.x,
+                              (p0.y+p1.y+p2.y)/3-centroid.y,
+                              (p0.z+p1.z+p2.z)/3-centroid.z);
+        if (n.x*fc.x+n.y*fc.y+n.z*fc.z < 0.0f) n=make_float3(-n.x,-n.y,-n.z);
+        fn[t]=norm3(n);
+    }
+
+    const float coneCos = cosf(coneDeg * 3.14159265358979f / 180.0f);
+    std::vector<int> cid(triCount, -1);
+    nCharts = 0;
+    std::vector<int> stack;
+    for (int seed=0; seed<triCount; ++seed) {
+        if (cid[seed] != -1) continue;
+        int c = nCharts++;
+        cid[seed] = c;
+        float3 sumN = fn[seed];               // running (unnormalized) chart normal
+        stack.clear(); stack.push_back(seed);
+        while (!stack.empty()) {
+            int t = stack.back(); stack.pop_back();
+            float3 avg = norm3(sumN);
+            for (int e=0;e<3;++e) {
+                int nb = adj[t].nbr[e];
+                if (nb < 0 || cid[nb] != -1) continue;
+                if (fn[nb].x*avg.x + fn[nb].y*avg.y + fn[nb].z*avg.z >= coneCos) {
+                    cid[nb] = c;
+                    sumN = make_float3(sumN.x+fn[nb].x, sumN.y+fn[nb].y, sumN.z+fn[nb].z);
+                    stack.push_back(nb);
+                }
+            }
+        }
+    }
+    return cid;
+}
+
 bool build_cage(const std::vector<Tri>& part_tris, const ImpGenParams& p,
                 uint64_t source_part_hash, ImposterAsset& out) {
     if (part_tris.empty() || p.atlasW <= 0 || p.atlasH <= 0) return false;

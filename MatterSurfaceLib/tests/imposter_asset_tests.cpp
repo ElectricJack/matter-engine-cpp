@@ -275,6 +275,38 @@ static void test_chartcone_hash_and_new_fields() {
     remove(path);
 }
 
+static void test_segment_charts() {
+    using namespace imposter_asset;
+    // A flat 2-triangle quad in z=0 -> one chart (normals identical).
+    {
+        float pos[6*3] = { 0,0,0, 1,0,0, 0,1,0,  1,0,0, 1,1,0, 0,1,0 };
+        unsigned short idx[6] = {0,1,2, 3,4,5};
+        auto adj = build_adjacency(pos, idx, 2);
+        int nCharts=0;
+        auto cid = segment_charts(pos, idx, 2, adj, 75.0f, nCharts);
+        CHECK(nCharts==1, "flat quad -> 1 chart");
+        CHECK(cid[0]==cid[1], "both tris in same chart");
+    }
+    // Axis-aligned unit cube (12 tris, shared corners) @ cone 75 -> 6 charts.
+    {
+        float c[8][3] = {
+            {0,0,0},{1,0,0},{1,1,0},{0,1,0},
+            {0,0,1},{1,0,1},{1,1,1},{0,1,1},
+        };
+        int F[6][4] = { {1,2,6,5},{0,4,7,3},{3,7,6,2},{0,1,5,4},{4,5,6,7},{0,3,2,1} };
+        std::vector<float> pos; std::vector<unsigned short> idx;
+        auto push=[&](int v){ pos.push_back(c[v][0]);pos.push_back(c[v][1]);pos.push_back(c[v][2]);
+                              idx.push_back((unsigned short)(idx.size())); };
+        for (int f=0;f<6;++f){ int a=F[f][0],b=F[f][1],d=F[f][2],e=F[f][3];
+            push(a);push(b);push(d); push(a);push(d);push(e); }
+        auto adj = build_adjacency(pos.data(), idx.data(), 12);
+        int nCharts=0;
+        auto cid = segment_charts(pos.data(), idx.data(), 12, adj, 75.0f, nCharts);
+        CHECK(nCharts==6, "cube @ cone75 -> 6 charts");
+        CHECK(cid[0]==cid[1], "two tris of a face share a chart");
+    }
+}
+
 int main() {
     test_hash_and_path();
     test_round_trip();
@@ -285,6 +317,7 @@ int main() {
     test_pack_cage_uvs_bvh_order();
     test_chartcone_hash_and_new_fields();
     test_build_adjacency();
+    test_segment_charts();
     if (failures == 0) printf("All imposter_asset tests passed\n");
     return failures == 0 ? 0 : 1;
 }

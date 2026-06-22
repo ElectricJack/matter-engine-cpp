@@ -79,6 +79,14 @@ struct TriAdj { int nbr[3]; };
 std::vector<TriAdj> build_adjacency(const float* positions, const unsigned short* indices,
                                     int triCount);
 
+// Region-grow charts: a triangle joins a chart iff its outward face normal is within
+// `coneDeg` of the chart's running average normal. coneDeg must be < 90 so each chart
+// stays a function over its average plane (no projection fold). Returns per-triangle
+// chart id [0..nCharts). Face normals are oriented outward via the mesh centroid. GL-free.
+std::vector<int> segment_charts(const float* positions, const unsigned short* indices,
+                                int triCount, const std::vector<TriAdj>& adj,
+                                float coneDeg, int& nCharts);
+
 // --- CPU geometry (GL-free, unit-tested) ---
 
 // Build the cage from the merged part triangles: decimate via simplify_mesh to
