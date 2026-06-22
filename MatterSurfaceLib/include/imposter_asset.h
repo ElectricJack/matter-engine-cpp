@@ -70,6 +70,15 @@ bool save(const std::string& path, const ImposterAsset& a, uint64_t imp_hash);
 bool load(const std::string& path, uint64_t expected_imp_hash,
           uint64_t expected_source_hash, ImposterAsset& out);
 
+// Per-triangle neighbor across edge slots (i0,i1)=0, (i1,i2)=1, (i2,i0)=2; -1 = boundary.
+struct TriAdj { int nbr[3]; };
+
+// Build triangle adjacency. Vertices are welded by EXACT position first (the cube
+// cage emits bit-identical duplicate corners; simplify_mesh shares by index), so an
+// edge shared by two triangles is detected regardless of index duplication. GL-free.
+std::vector<TriAdj> build_adjacency(const float* positions, const unsigned short* indices,
+                                    int triCount);
+
 // --- CPU geometry (GL-free, unit-tested) ---
 
 // Build the cage from the merged part triangles: decimate via simplify_mesh to

@@ -234,6 +234,29 @@ static void test_pack_cage_uvs_bvh_order() {
     CHECK(at(1,1,0)==1.0f && at(2,1,0)==2.0f, "slot1 corners1,2 = verts1,2");
 }
 
+static void test_build_adjacency() {
+    using namespace imposter_asset;
+    // Two triangles sharing edge (1,2), with the shared corners given as
+    // bit-identical DUPLICATE vertices (mimics the cube cage branch).
+    // tri0: A(0,0,0) B(1,0,0) C(0,1,0)
+    // tri1: B'(1,0,0) D(1,1,0) C'(0,1,0)
+    float pos[6*3] = {
+        0,0,0,  1,0,0,  0,1,0,     // tri0 corners 0,1,2
+        1,0,0,  1,1,0,  0,1,0,     // tri1 corners 3,4,5 (3==1, 5==2 by position)
+    };
+    unsigned short idx[6] = {0,1,2, 3,4,5};
+    auto adj = build_adjacency(pos, idx, 2);
+    CHECK(adj.size()==2, "adjacency size == triCount");
+    // tri0 edge (B,C) = corner pair (1,2) = its 2nd edge slot -> neighbor tri1
+    bool tri0_has1 = (adj[0].nbr[0]==1 || adj[0].nbr[1]==1 || adj[0].nbr[2]==1);
+    bool tri1_has0 = (adj[1].nbr[0]==0 || adj[1].nbr[1]==0 || adj[1].nbr[2]==0);
+    CHECK(tri0_has1, "tri0 sees tri1 across shared edge");
+    CHECK(tri1_has0, "tri1 sees tri0 across shared edge");
+    // The non-shared edges are boundaries (-1).
+    int bcount0=0; for(int e=0;e<3;++e) if(adj[0].nbr[e]==-1) ++bcount0;
+    CHECK(bcount0==2, "tri0 has two boundary edges");
+}
+
 static void test_chartcone_hash_and_new_fields() {
     using namespace imposter_asset;
     ImpGenParams a = sample_params();
@@ -260,6 +283,7 @@ int main() {
     test_dilate_atlas();
     test_pack_cage_uvs_bvh_order();
     test_chartcone_hash_and_new_fields();
+    test_build_adjacency();
     if (failures == 0) printf("All imposter_asset tests passed\n");
     return failures == 0 ? 0 : 1;
 }

@@ -9,6 +9,8 @@
 #include <vector>
 #include <cstdlib>
 #include <sys/stat.h>
+#include <map>
+#include <array>
 
 namespace {
 template <class T> void put(std::vector<uint8_t>& b, const T& v){
@@ -164,6 +166,41 @@ static float3 v3(float x,float y,float z){ return make_float3(x,y,z); }
 static float3 sub3(float3 a,float3 b){ return make_float3(a.x-b.x,a.y-b.y,a.z-b.z); }
 static float3 cross3(float3 a,float3 b){ return make_float3(a.y*b.z-a.z*b.y, a.z*b.x-a.x*b.z, a.x*b.y-a.y*b.x); }
 static float3 norm3(float3 a){ float l=sqrtf(a.x*a.x+a.y*a.y+a.z*a.z); return l>1e-12f?make_float3(a.x/l,a.y/l,a.z/l):make_float3(0,0,0); }
+
+std::vector<TriAdj> build_adjacency(const float* positions, const unsigned short* indices,
+                                    int triCount) {
+    // Weld corners by exact position -> welded vertex id.
+    std::map<std::array<float,3>,int> weld;
+    auto wid = [&](int corner)->int {
+        int vi = indices[corner];
+        std::array<float,3> k{ positions[vi*3+0], positions[vi*3+1], positions[vi*3+2] };
+        auto it = weld.find(k);
+        if (it != weld.end()) return it->second;
+        int id = (int)weld.size(); weld.emplace(k, id); return id;
+    };
+
+    std::vector<TriAdj> adj(triCount);
+    for (auto& a : adj) { a.nbr[0]=a.nbr[1]=a.nbr[2]=-1; }
+
+    // edge (sorted welded id pair) -> first (tri, edgeSlot) that claimed it.
+    std::map<std::pair<int,int>, std::pair<int,int>> seen;
+    for (int t=0;t<triCount;++t) {
+        int w[3] = { wid(t*3+0), wid(t*3+1), wid(t*3+2) };
+        for (int e=0;e<3;++e) {
+            int a=w[e], b=w[(e+1)%3];
+            std::pair<int,int> key = (a<b) ? std::make_pair(a,b) : std::make_pair(b,a);
+            auto it = seen.find(key);
+            if (it == seen.end()) {
+                seen.emplace(key, std::make_pair(t,e));
+            } else {
+                int ot = it->second.first, oe = it->second.second;
+                adj[t].nbr[e]  = ot;
+                adj[ot].nbr[oe] = t;
+            }
+        }
+    }
+    return adj;
+}
 
 bool build_cage(const std::vector<Tri>& part_tris, const ImpGenParams& p,
                 uint64_t source_part_hash, ImposterAsset& out) {
