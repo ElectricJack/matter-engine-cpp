@@ -251,6 +251,7 @@ static void test_build_adjacency() {
     bool tri0_has1 = (adj[0].nbr[0]==1 || adj[0].nbr[1]==1 || adj[0].nbr[2]==1);
     bool tri1_has0 = (adj[1].nbr[0]==0 || adj[1].nbr[1]==0 || adj[1].nbr[2]==0);
     CHECK(tri0_has1, "tri0 sees tri1 across shared edge");
+    CHECK(adj[0].nbr[1]==1, "tri0's shared edge (B,C) is edge slot 1 -> tri1");
     CHECK(tri1_has0, "tri1 sees tri0 across shared edge");
     // The non-shared edges are boundaries (-1).
     int bcount0=0; for(int e=0;e<3;++e) if(adj[0].nbr[e]==-1) ++bcount0;
