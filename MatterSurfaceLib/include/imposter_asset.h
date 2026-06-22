@@ -12,7 +12,7 @@
 namespace imposter_asset {
 
 constexpr uint32_t kMagic = 0x494D504Fu;   // 'IMPO'
-constexpr uint32_t kFormatVersion = 1u;
+constexpr uint32_t kFormatVersion = 2u;   // was 1u: chart layout + triid + tri_chart
 
 // Bake parameters; padding-free so it hashes deterministically by bytes.
 struct ImpGenParams {
@@ -22,8 +22,9 @@ struct ImpGenParams {
     int      dispBits;        // 8 or 16: displacement texel precision
     uint32_t seed;            // reserved for determinism / future jitter
     int      maxCageTris;     // hard cap on cage triangles so atlas cells stay large
+    float    chartConeDeg;    // chart normal-cone half-angle in degrees (must be < 90)
 };
-static_assert(sizeof(ImpGenParams) == 28,
+static_assert(sizeof(ImpGenParams) == 32,
               "ImpGenParams must be padding-free for stable byte hashing");
 
 // 32-byte cage vertex: position, normal, uv. Padding-free.
@@ -51,6 +52,8 @@ struct ImposterAsset {
     std::vector<CageTri>  tris;
     std::vector<uint8_t>  disp;        // atlas_w*atlas_h*(disp_bits/8)
     std::vector<uint8_t>  color;       // atlas_w*atlas_h*4
+    std::vector<uint32_t> tri_chart;   // one chart id per cage triangle (size == tris.size())
+    std::vector<uint8_t>  triid;       // atlas_w*atlas_h*2: little-endian uint16 per texel, 0xFFFF = uncovered
 };
 
 // Cache key: FNV-1a of the params XOR the format version.

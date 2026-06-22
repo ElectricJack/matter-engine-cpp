@@ -61,6 +61,10 @@ bool save(const std::string& path, const ImposterAsset& a, uint64_t imp_hash) {
     put_bytes(body, a.disp.data(), a.disp.size());
     put<uint32_t>(body, static_cast<uint32_t>(a.color.size()));
     put_bytes(body, a.color.data(), a.color.size());
+    put<uint32_t>(body, static_cast<uint32_t>(a.tri_chart.size()));
+    put_bytes(body, a.tri_chart.data(), a.tri_chart.size()*sizeof(uint32_t));
+    put<uint32_t>(body, static_cast<uint32_t>(a.triid.size()));
+    put_bytes(body, a.triid.data(), a.triid.size());
 
     const uint64_t content_hash = part_asset::fnv1a64(body.data(), body.size());
     std::vector<uint8_t> head;
@@ -143,6 +147,16 @@ bool load(const std::string& path, uint64_t expected_imp_hash,
     const uint8_t* cp = r.take(cc);
     if (!r.ok) return false;
     out.color.assign(cp, cp+cc);
+    const uint32_t tcc = r.get<uint32_t>();
+    if (!r.ok) return false;
+    const uint8_t* tcp = r.take(tcc*sizeof(uint32_t));
+    if (!r.ok) return false;
+    out.tri_chart.resize(tcc); std::memcpy(out.tri_chart.data(), tcp, tcc*sizeof(uint32_t));
+    const uint32_t idc = r.get<uint32_t>();
+    if (!r.ok) return false;
+    const uint8_t* idp = r.take(idc);
+    if (!r.ok) return false;
+    out.triid.assign(idp, idp+idc);
     return true;
 }
 

@@ -16,6 +16,8 @@ static imposter_asset::ImpGenParams sample_params() {
     p.inflation = 0.05f;
     p.dispBits = 16;
     p.seed = 7u;
+    p.maxCageTris = 4096;
+    p.chartConeDeg = 75.0f;
     return p;
 }
 
@@ -43,6 +45,9 @@ static imposter_asset::ImposterAsset sample_asset() {
     a.tris  = { {0,1,2} };
     a.disp.assign(a.atlas_w*a.atlas_h*2, 0); for (size_t i=0;i<a.disp.size();++i) a.disp[i]=(uint8_t)(i*7);
     a.color.assign(a.atlas_w*a.atlas_h*4, 0); for (size_t i=0;i<a.color.size();++i) a.color[i]=(uint8_t)(i*3+1);
+    a.tri_chart = { 0 };                  // one chart for the single triangle
+    a.triid.assign(a.atlas_w*a.atlas_h*2, 0xFF); // default 0xFFFF per texel
+    a.triid[0]=0x00; a.triid[1]=0x00;     // texel0 -> triangle 0
     return a;
 }
 
@@ -229,6 +234,23 @@ static void test_pack_cage_uvs_bvh_order() {
     CHECK(at(1,1,0)==1.0f && at(2,1,0)==2.0f, "slot1 corners1,2 = verts1,2");
 }
 
+static void test_chartcone_hash_and_new_fields() {
+    using namespace imposter_asset;
+    ImpGenParams a = sample_params();
+    ImpGenParams b = sample_params(); b.chartConeDeg = 60.0f;
+    CHECK(compute_imp_hash(a) != compute_imp_hash(b), "chartConeDeg change rehashes");
+
+    ImposterAsset s = sample_asset();
+    const char* path = "test_v2.imp";
+    remove(path);
+    CHECK(save(path, s, 0xABCDull), "save with new fields ok");
+    ImposterAsset r;
+    CHECK(load(path, 0xABCDull, s.source_part_hash, r), "load with new fields ok");
+    CHECK(r.tri_chart == s.tri_chart, "tri_chart round-trips");
+    CHECK(r.triid == s.triid, "triid round-trips");
+    remove(path);
+}
+
 int main() {
     test_hash_and_path();
     test_round_trip();
@@ -237,6 +259,7 @@ int main() {
     test_displacement_reconstruction();
     test_dilate_atlas();
     test_pack_cage_uvs_bvh_order();
+    test_chartcone_hash_and_new_fields();
     if (failures == 0) printf("All imposter_asset tests passed\n");
     return failures == 0 ? 0 : 1;
 }
