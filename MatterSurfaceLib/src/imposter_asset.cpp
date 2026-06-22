@@ -263,6 +263,43 @@ void plane_basis(const float n[3], float T[3], float B[3]) {
     B[0]=b.x; B[1]=b.y; B[2]=b.z;
 }
 
+static bool shelf_pack(const std::vector<ChartRect>& charts, int atlasW, int atlasH,
+                       int pad, float scale, std::vector<ChartPlacement>& out) {
+    const int n = (int)charts.size();
+    out.assign(n, ChartPlacement{0,0});
+    // Pack tallest-first for tighter shelves; remember original indices.
+    std::vector<int> order(n); for (int i=0;i<n;++i) order[i]=i;
+    std::sort(order.begin(), order.end(), [&](int a,int b){
+        return charts[a].h > charts[b].h; });
+    int cursorX=0, shelfY=0, shelfH=0;
+    for (int oi=0; oi<n; ++oi) {
+        int i = order[oi];
+        int w = (int)ceilf(charts[i].w*scale)+2*pad;
+        int h = (int)ceilf(charts[i].h*scale)+2*pad;
+        if (w>atlasW || h>atlasH) return false;
+        if (cursorX + w > atlasW) { shelfY += shelfH; cursorX = 0; shelfH = 0; }
+        if (shelfY + h > atlasH) return false;
+        out[i].ox = cursorX; out[i].oy = shelfY;
+        cursorX += w; if (h>shelfH) shelfH = h;
+    }
+    return true;
+}
+
+bool pack_charts(const std::vector<ChartRect>& charts, int atlasW, int atlasH, int pad,
+                 float& scale, std::vector<ChartPlacement>& placements) {
+    if (charts.empty() || atlasW<=0 || atlasH<=0) return false;
+    double area = 0.0;
+    for (const auto& c : charts) area += (double)std::max(c.w,1e-6f) * std::max(c.h,1e-6f);
+    if (area <= 0.0) return false;
+    // Initial guess assumes 55% fill; iterate down if packing overflows.
+    scale = (float)sqrt(0.55 * (double)atlasW * (double)atlasH / area);
+    for (int attempt=0; attempt<24; ++attempt) {
+        if (shelf_pack(charts, atlasW, atlasH, pad, scale, placements)) return true;
+        scale *= 0.85f;
+    }
+    return false;
+}
+
 bool build_cage(const std::vector<Tri>& part_tris, const ImpGenParams& p,
                 uint64_t source_part_hash, ImposterAsset& out) {
     if (part_tris.empty() || p.atlasW <= 0 || p.atlasH <= 0) return false;

@@ -304,6 +304,35 @@ static void test_plane_basis() {
     CHECK(fabsf(e01-2.0f)<1e-4f && fabsf(e02-3.0f)<1e-4f, "flat projection is isometric");
 }
 
+static void test_pack_charts() {
+    using namespace imposter_asset;
+    auto no_overlap_in_atlas = [](const std::vector<ChartRect>& cs, int W,int H,int pad){
+        float scale=0; std::vector<ChartPlacement> pl;
+        bool ok = pack_charts(cs, W, H, pad, scale, pl);
+        CHECK(ok, "pack succeeds");
+        CHECK(pl.size()==cs.size(), "one placement per chart");
+        // Build texel rects and check bounds + pairwise non-overlap.
+        struct R{int x0,y0,x1,y1;};
+        std::vector<R> rs;
+        for (size_t i=0;i<cs.size();++i){
+            int w=(int)ceilf(cs[i].w*scale)+2*pad, h=(int)ceilf(cs[i].h*scale)+2*pad;
+            R r{pl[i].ox,pl[i].oy,pl[i].ox+w,pl[i].oy+h}; rs.push_back(r);
+            CHECK(r.x0>=0&&r.y0>=0&&r.x1<=W&&r.y1<=H, "rect within atlas");
+        }
+        for (size_t i=0;i<rs.size();++i) for (size_t j=i+1;j<rs.size();++j){
+            bool disjoint = rs[i].x1<=rs[j].x0||rs[j].x1<=rs[i].x0||
+                            rs[i].y1<=rs[j].y0||rs[j].y1<=rs[i].y0;
+            CHECK(disjoint, "rects do not overlap");
+        }
+    };
+    std::vector<ChartRect> few = { {0,0,1,1},{0,0,2,1},{0,0,1,3},{0,0,0.5f,0.5f} };
+    no_overlap_in_atlas(few, 256, 256, 2);
+    // Over-budget set still fits after auto rescale.
+    std::vector<ChartRect> many;
+    for (int i=0;i<400;++i) many.push_back({0,0,1.0f,1.0f});
+    no_overlap_in_atlas(many, 256, 256, 1);
+}
+
 static void test_segment_charts() {
     using namespace imposter_asset;
     // A flat 2-triangle quad in z=0 -> one chart (normals identical).
@@ -348,6 +377,7 @@ int main() {
     test_build_adjacency();
     test_segment_charts();
     test_plane_basis();
+    test_pack_charts();
     if (failures == 0) printf("All imposter_asset tests passed\n");
     return failures == 0 ? 0 : 1;
 }

@@ -116,6 +116,16 @@ bool bake_imposter(const ImpGenParams& p, const std::vector<Tri>& part_tris,
                    uint64_t source_part_hash,
                    class BLASManager& blas, class TLASManager& tlas, ImposterAsset& out);
 
+struct ChartRect  { float minU, minV, w, h; };  // projected-space bbox (world units)
+struct ChartPlacement { int ox, oy; };           // texel offset of the chart's padded rect
+
+// Shelf-pack chart rects into an atlasW x atlasH texel grid with `pad` texels of gutter
+// around each chart. Picks a uniform world->texel `scale` from total area, shrinking and
+// retrying on overflow. Returns false if charts cannot fit. `placements` is filled in the
+// same order as `charts`. GL-free.
+bool pack_charts(const std::vector<ChartRect>& charts, int atlasW, int atlasH, int pad,
+                 float& scale, std::vector<ChartPlacement>& placements);
+
 // Orthonormal basis (T,B) spanning the plane with normal n. Robust when n aligns
 // with the chosen up-axis. GL-free.
 void plane_basis(const float n[3], float T[3], float B[3]);
