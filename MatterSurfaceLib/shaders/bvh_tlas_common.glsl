@@ -625,7 +625,7 @@ void fetchCageTri(int id, float xform[16], out vec3 p0, out vec3 p1, out vec3 p2
 // Project world point P into triangle (p0,p1,p2)/(t0,t1,t2): UV via barycentrics,
 // and signed depth `pen` below the triangle plane (positive = inside the shell).
 bool projectInTri(vec3 P, vec3 p0, vec3 p1, vec3 p2, vec2 t0, vec2 t1, vec2 t2,
-                  out vec2 uv, out float pen) {
+                  vec3 refN, out vec2 uv, out float pen) {
     vec3 e1=p1-p0, e2=p2-p0, ep=P-p0;
     float d00=dot(e1,e1), d01=dot(e1,e2), d11=dot(e2,e2), d20=dot(ep,e1), d21=dot(ep,e2);
     float den=d00*d11-d01*d01;
@@ -633,7 +633,8 @@ bool projectInTri(vec3 P, vec3 p0, vec3 p1, vec3 p2, vec2 t0, vec2 t1, vec2 t2,
     float bv=(d11*d20-d01*d21)/den, bw=(d00*d21-d01*d20)/den, bu=1.0-bv-bw;
     uv = bu*t0 + bv*t1 + bw*t2;
     vec3 fn = normalize(cross(e1,e2));
-    pen = -dot(ep, fn);            // below the plane along the outward face normal
+    if (dot(fn, refN) < 0.0) fn = -fn;   // orient outward (winding is not outward-consistent)
+    pen = -dot(ep, fn);            // depth below the outward-facing triangle plane
     return true;
 }
 
@@ -654,9 +655,7 @@ bool reliefMarch(vec3 entryPos, vec3 rayDir,
     vec3 p0=v0, p1=v1, p2=v2; vec2 t0=uv0, t1=uv1, t2=uv2;
 
     // Arc-length budget to traverse the full shell depth, using the seed inward rate.
-    vec3 e1=v1-v0, e2=v2-v0;
-    vec3 fn0 = normalize(cross(e1,e2));
-    float inward0 = -dot(ndir, fn0);
+    float inward0 = -dot(ndir, cageN);
     if (inward0 <= 1e-5) return false;        // ray not entering the shell
     float sMax = imposterMaxDisp / inward0;
 
@@ -669,7 +668,7 @@ bool reliefMarch(vec3 entryPos, vec3 rayDir,
         vec3 P = entryPos + ndir * s;
 
         vec2 uvc; float pen;
-        if (!projectInTri(P, p0,p1,p2, t0,t1,t2, uvc, pen)) { prevS=s; continue; }
+        if (!projectInTri(P, p0,p1,p2, t0,t1,t2, cageN, uvc, pen)) { prevS=s; continue; }
 
         // Stay inside this triangle's chart rect; else terminate (option 1).
         if (uvc.x < chartLo.x-0.002 || uvc.x > chartHi.x+0.002 ||
@@ -682,7 +681,7 @@ bool reliefMarch(vec3 entryPos, vec3 rayDir,
         if (sampleId != curId) {
             curId = sampleId;
             fetchCageTri(curId, instXform, p0,p1,p2, t0,t1,t2);
-            if (!projectInTri(P, p0,p1,p2, t0,t1,t2, uvc, pen)) { prevS=s; continue; }
+            if (!projectInTri(P, p0,p1,p2, t0,t1,t2, cageN, uvc, pen)) { prevS=s; continue; }
         }
 
         float d = texture(imposterDispTex, uvc).r * imposterMaxDisp;
@@ -694,13 +693,13 @@ bool reliefMarch(vec3 entryPos, vec3 rayDir,
                 float mid=0.5*(lo+hi);
                 vec3 Pm=entryPos+ndir*mid;
                 vec2 um; float pm;
-                if (!projectInTri(Pm, p0,p1,p2, t0,t1,t2, um, pm)) { lo=mid; continue; }
+                if (!projectInTri(Pm, p0,p1,p2, t0,t1,t2, cageN, um, pm)) { lo=mid; continue; }
                 float dm = texture(imposterDispTex, um).r * imposterMaxDisp;
                 if (pm - dm >= 0.0) hi=mid; else lo=mid;
             }
             vec3 Ph=entryPos+ndir*hi;
             vec2 uh; float ph;
-            projectInTri(Ph, p0,p1,p2, t0,t1,t2, uh, ph);
+            projectInTri(Ph, p0,p1,p2, t0,t1,t2, cageN, uh, ph);
             hitUV = uh; hitS = hi;
             return texture(imposterColorTex, hitUV).a > 0.5;
         }
