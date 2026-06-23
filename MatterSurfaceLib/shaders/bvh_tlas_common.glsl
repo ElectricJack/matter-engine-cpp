@@ -108,10 +108,36 @@ vec3 octDecode(vec2 e){
     n.y += n.y>=0.0 ? -t : t;
     return normalize(n);
 }
-// Voxel DDA march through imposterColorVolume/imposterNormalVolume.
-// Filled in next task. Returns false for now (pass-through) so the build is green.
-bool voxelMarch(vec3 originBox, vec3 dirBox, out ivec3 hitVox, out float tBox){
-    hitVox = ivec3(0); tBox = 0.0; return false;
+// Voxel DDA march through imposterColorVolume.
+// o and d are in unit-box space [0,1]^3 (invTransform already handles world->box).
+// Coverage threshold: alpha > 0.5 == occupied.
+bool voxelMarch(vec3 o, vec3 d, out ivec3 hitVox, out float tBox){
+    ivec3 dim = textureSize(imposterColorVolume, 0);
+    vec3 fdim = vec3(dim);
+    ivec3 v = clamp(ivec3(floor(o * fdim)), ivec3(0), dim - 1);
+    vec3 stepV = sign(d);
+    vec3 tDelta, tMax;
+    for (int a = 0; a < 3; ++a) {
+        if (abs(d[a]) < 1e-12) { tDelta[a] = 1e30; tMax[a] = 1e30; }
+        else {
+            float cs = 1.0 / fdim[a];
+            float bnd = (float(v[a]) + (d[a] > 0.0 ? 1.0 : 0.0)) * cs;
+            tMax[a] = (bnd - o[a]) / d[a];
+            tDelta[a] = cs / abs(d[a]);
+        }
+    }
+    // Check starting voxel
+    if (texelFetch(imposterColorVolume, v, 0).a > 0.5) { hitVox = v; tBox = 0.0; return true; }
+    int budget = (dim.x + dim.y + dim.z) * 2;
+    for (int i = 0; i < budget; ++i) {
+        int axis = (tMax.x < tMax.y) ? (tMax.x < tMax.z ? 0 : 2) : (tMax.y < tMax.z ? 1 : 2);
+        v[axis] += int(stepV[axis]);
+        if (v[axis] < 0 || v[axis] >= dim[axis]) return false;
+        float tEnter = tMax[axis];
+        tMax[axis] += tDelta[axis];
+        if (texelFetch(imposterColorVolume, v, 0).a > 0.5) { hitVox = v; tBox = tEnter; return true; }
+    }
+    return false;
 }
 
 // Random number generation (ported from tools.cl)
@@ -824,55 +850,32 @@ HitResult intersectScene(vec3 rayOrigin, vec3 rayDir, float maxT)
         result.isImposter = inst.isImposter;
         result.bakedColor = vec3(0.0);
         if (inst.isImposter) {
-            int localTri = int(triIdx) - imposterTriBase;
-            if (imposterDbg == 1) {
-                // Debug: paint each cage triangle a distinct hue, skip relief, so the
-                // raw cage-triangle hit layout is visible on screen.
-                float h = float(localTri) / 12.0;
-                result.bakedColor = vec3(fract(h*3.0), fract(h*5.0+0.33), fract(h*7.0+0.66));
-                return result;
-            }
-            // Cage verts in world space.
-            vec3 w0 = transformPosition(tri.v0, inst.transform);
-            vec3 w1 = transformPosition(tri.v1, inst.transform);
-            vec3 w2 = transformPosition(tri.v2, inst.transform);
-            vec3 cageN = normalize(result.normal);
-            // Per-corner baked UVs, fetched in BVH-triangle order -> reorder-safe and
-            // geometry-agnostic (same path for cube and fitted cages).
-            vec4 r0 = texelFetch(imposterTriUvTex, ivec2(localTri, 0), 0);
-            vec4 r1 = texelFetch(imposterTriUvTex, ivec2(localTri, 1), 0);
-            vec4 r2 = texelFetch(imposterTriUvTex, ivec2(localTri, 2), 0);
-            vec2 uv0 = r0.xy, uv1 = r1.xy, uv2 = r2.xy;
-            vec2 chartLo = r0.zw, chartHi = r1.zw;
-            int  seedTriId = int(r2.z + 0.5);
-            vec3 ndir = normalize(rayDir);
-            // Diagnostic (imposterDbg==2): skip the relief march, sample baked color at
-            // the cage-surface entry UV. Solid result => cage/coverage/UV are fine and the
-            // relief march is what drops pixels. Doubles as the "flat imposter" preview.
-            if (imposterDbg == 2) {
-                vec3 e1f = w1 - w0, e2f = w2 - w0, epf = result.position - w0;
-                float a00=dot(e1f,e1f), a01=dot(e1f,e2f), a11=dot(e2f,e2f);
-                float a20=dot(epf,e1f), a21=dot(epf,e2f);
-                float den2 = a00*a11 - a01*a01;
-                float fv = (a11*a20 - a01*a21) / den2;
-                float fw = (a00*a21 - a01*a20) / den2;
-                float fu = 1.0 - fv - fw;
-                vec2 euv = fu*uv0 + fv*uv1 + fw*uv2;
-                result.bakedColor = texture(imposterColorTex, euv).rgb;
-                return result;
-            }
-            vec2 hitUV; float hitS;
-            if (reliefMarch(result.position, ndir, w0, w1, w2, uv0, uv1, uv2,
-                            cageN, chartLo, chartHi, seedTriId, inst.transform, hitUV, hitS)) {
-                // Advance from the cage plane to the true displaced surface so depth
-                // and lighting use the real hit, and neighbouring cage triangles'
-                // relief surfaces line up instead of painting flat at the cage.
-                result.position += ndir * hitS;
-                result.t += hitS / length(rayDir);
-                result.bakedColor = texture(imposterColorTex, hitUV).rgb;
+            // Voxel box imposter path (v2): DDA through the 3-D voxel volume.
+            // invTransform maps world -> unit-cube [0,1]^3 (the instance is built as
+            // a unit-cube BLAS scaled/translated to the bounding box in world space).
+            vec3 oLocal = transformPosition(rayOrigin, inst.invTransform);
+            vec3 dLocal = transformVector(rayDir, inst.invTransform);
+            ivec3 hv; float tBox;
+            if (voxelMarch(oLocal, dLocal, hv, tBox)) {
+                vec4 colorSample  = texelFetch(imposterColorVolume,  hv, 0);
+                vec3 albedo = colorSample.rgb;
+                vec2 ne = texelFetch(imposterNormalVolume, hv, 0).rg;
+                vec3 nLocal = octDecode(ne);
+                // Reconstruct world-space hit position from the local-space march distance.
+                vec3 pLocal = oLocal + dLocal * tBox;
+                vec3 pWorld = transformPosition(pLocal, inst.transform);
+                result.hit      = true;
+                result.position = pWorld;
+                result.t        = length(pWorld - rayOrigin);
+                result.normal   = transformNormal(nLocal, inst.invTransform);
+                result.tint     = albedo;
+                result.tintAlpha = 1.0;
+                result.material  = 0;
+                result.isImposter = true;
             } else {
-                result.hit = false;          // coverage miss: ray passes through
-                result.material = -1;
+                // Miss (porosity): ray passes through.
+                result.hit        = false;
+                result.material   = -1;
                 result.instanceId = -1;
             }
         }
