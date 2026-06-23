@@ -148,6 +148,12 @@ private:
     void mark_dirty() const {
         textures_dirty_ = true;
         shader_values_dirty_ = true;
+        // Force uniform locations to be re-cached on the next bind. GL reuses
+        // program ids after a shader is deleted (e.g. the imposter bake shader),
+        // so a cached location can silently belong to a stale program; without
+        // this reset the count uniforms get written to the wrong program and the
+        // shader reads 0. Mirrors BLASManager::mark_dirty.
+        cached_shader_id_ = 0;
     }
     
     // Conversion utilities

@@ -556,7 +556,7 @@ void TLASManager::bind_to_shader(Shader shader, const BLASManager& blas_manager)
     // Only update shader values if they're dirty or shader changed
     if (shader_values_dirty_) {
         PROFILE_SECTION("Update Shader Values");
-        
+
         // Set counts
         int node_count = get_node_count();
         int inst_count = get_instance_count();
@@ -570,17 +570,15 @@ void TLASManager::bind_to_shader(Shader shader, const BLASManager& blas_manager)
         shader_values_dirty_ = false;
     }
     
-    // Only bind textures if they've been updated or shader changed
-    if (textures_were_updated || shader_changed) {
-        PROFILE_SECTION("Bind Textures");
-        
-        if (nodes_texture_.id != 0 && tlas_nodes_texture_loc_ != -1) {
-            SetShaderValueTexture(shader, tlas_nodes_texture_loc_, nodes_texture_);
-        }
-        
-        if (instances_texture_.id != 0 && instances_texture_loc_ != -1) {
-            SetShaderValueTexture(shader, instances_texture_loc_, instances_texture_);
-        }
+    // Stage textures every frame; see BLASManager::bind_to_shader for why the
+    // "bind only when dirty" optimization is unsafe under raylib's per-draw
+    // sampler-slot reset.
+    (void)textures_were_updated;
+    if (nodes_texture_.id != 0 && tlas_nodes_texture_loc_ != -1) {
+        SetShaderValueTexture(shader, tlas_nodes_texture_loc_, nodes_texture_);
+    }
+    if (instances_texture_.id != 0 && instances_texture_loc_ != -1) {
+        SetShaderValueTexture(shader, instances_texture_loc_, instances_texture_);
     }
 }
 

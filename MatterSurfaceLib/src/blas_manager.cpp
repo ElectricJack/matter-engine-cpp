@@ -662,17 +662,17 @@ void BLASManager::bind_to_shader(Shader shader) const {
         shader_values_dirty_ = false;
     }
     
-    // Only bind textures if they've been updated or shader changed
-    if (textures_were_updated || shader_changed) {
-        PROFILE_SECTION("Bind Textures");
-        
-        if (triangles_texture_.id != 0 && triangles_texture_loc_ != -1) {
-            SetShaderValueTexture(shader, triangles_texture_loc_, triangles_texture_);
-        }
-        
-        if (nodes_texture_.id != 0 && blas_nodes_texture_loc_ != -1) {
-            SetShaderValueTexture(shader, blas_nodes_texture_loc_, nodes_texture_);
-        }
+    // Stage textures every frame. raylib's batch resets its sampler-slot
+    // tracking (activeTextureId) after each draw, so a "bind only when dirty"
+    // optimization is unsafe: any other code path that stages textures (e.g.
+    // the imposter binds) would grab the low slots and clobber these on the
+    // next draw. Re-staging here keeps the slot assignment deterministic.
+    (void)textures_were_updated;
+    if (triangles_texture_.id != 0 && triangles_texture_loc_ != -1) {
+        SetShaderValueTexture(shader, triangles_texture_loc_, triangles_texture_);
+    }
+    if (nodes_texture_.id != 0 && blas_nodes_texture_loc_ != -1) {
+        SetShaderValueTexture(shader, blas_nodes_texture_loc_, nodes_texture_);
     }
 }
 

@@ -151,7 +151,7 @@ else
 	$(CXX) $(CXXFLAGS) -o $@ $<
 endif
 
-shaders/raytrace_tlas_blas_processed.fs: shaders/raytrace_tlas_blas.fs shaders/bvh_tlas_common.glsl $(PREPROCESSOR)
+shaders/raytrace_tlas_blas_processed.fs: shaders/raytrace_tlas_blas.fs shaders/bvh_tlas_common.glsl shaders/materials.glsl shaders/lighting.glsl $(PREPROCESSOR)
 	@echo "Processing shader with includes (C++)..."
 	$(PREPROCESSOR) shaders/raytrace_tlas_blas.fs shaders/raytrace_tlas_blas_processed.fs
 

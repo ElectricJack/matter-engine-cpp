@@ -73,10 +73,15 @@ clean_one() {
 
 # raylib's intermediate .o files can be stale from a different OS; make
 # sure the static lib gets rebuilt for the current platform.
+# The raytrace shader samples 9 textures at once (4 core BVH + 5 imposter),
+# which exceeds raylib's default RL_DEFAULT_BATCH_MAX_TEXTURE_UNITS of 8. Bump
+# it so every sampler gets a slot; otherwise the last texture silently fails to
+# bind. Must be defined when raylib itself is compiled (it lives in rlgl).
+RAYLIB_CUSTOM_CFLAGS="-DRL_DEFAULT_BATCH_MAX_TEXTURE_UNITS=16"
 prep_raylib() {
     echo "Rebuilding raylib for $PLATFORM..."
     ( cd Libraries/raylib/src && make clean PLATFORM=PLATFORM_DESKTOP >/dev/null 2>&1 || true
-      make PLATFORM=PLATFORM_DESKTOP >/dev/null 2>&1 )
+      make PLATFORM=PLATFORM_DESKTOP CUSTOM_CFLAGS="$RAYLIB_CUSTOM_CFLAGS" >/dev/null 2>&1 )
     # Some projects look in build/<platform>/libraylib.a -- mirror it there too.
     mkdir -p "Libraries/raylib/build/$PLATFORM"
     cp Libraries/raylib/src/libraylib.a "Libraries/raylib/build/$PLATFORM/libraylib.a"
