@@ -65,4 +65,24 @@ bool tri_box_overlap(const float bc[3], const float bh[3],
     return plane_box_overlap(n,d,bh);
 }
 
+void oct_encode(const float n[3], uint8_t out[2]) {
+    double ax=std::fabs((double)n[0])+std::fabs((double)n[1])+std::fabs((double)n[2]);
+    double x=n[0]/ax, y=n[1]/ax;
+    if (n[2] < 0.0f) {
+        double ox=(1.0-std::fabs(y))*(x>=0?1.0:-1.0);
+        double oy=(1.0-std::fabs(x))*(y>=0?1.0:-1.0);
+        x=ox; y=oy;
+    }
+    auto q=[](double v){ v=0.5*(v+1.0); v=v<0?0:(v>1?1:v); return (uint8_t)(v*255.0+0.5); };
+    out[0]=q(x); out[1]=q(y);
+}
+void oct_decode(const uint8_t in[2], float n[3]) {
+    float x=in[0]/255.0f*2.0f-1.0f, y=in[1]/255.0f*2.0f-1.0f;
+    float z=1.0f-std::fabs(x)-std::fabs(y);
+    if (z<0.0f) { float ox=(1.0f-std::fabs(y))*(x>=0?1.0f:-1.0f);
+                  float oy=(1.0f-std::fabs(x))*(y>=0?1.0f:-1.0f); x=ox; y=oy; }
+    float l=std::sqrt(x*x+y*y+z*z); if(l<1e-12f)l=1.0f;
+    n[0]=x/l; n[1]=y/l; n[2]=z/l;
+}
+
 } // namespace voxel_imposter

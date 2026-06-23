@@ -40,4 +40,9 @@ bool choose_grid_dims(const float bounds_min[3], const float bounds_max[3],
 bool tri_box_overlap(const float boxCenter[3], const float boxHalf[3],
                      const float v0[3], const float v1[3], const float v2[3]);
 
+// Octahedral-encode a unit normal into two bytes (RG8) and back. Must match the
+// GLSL decode in bvh_tlas_common.glsl (Task 12).
+void oct_encode(const float n[3], uint8_t out[2]);
+void oct_decode(const uint8_t in[2], float n[3]);
+
 } // namespace voxel_imposter

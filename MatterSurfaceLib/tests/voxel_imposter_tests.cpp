@@ -31,9 +31,23 @@ static void test_tribox_miss() {
     CHECK(!tri_box_overlap(c,h,a,b,d), "distant triangle does not overlap");
 }
 
+static void test_oct_roundtrip() {
+    const float ns[][3] = {{0,0,1},{0,0,-1},{1,0,0},{0,1,0},
+                           {0.577f,0.577f,0.577f},{-0.5f,0.7f,-0.5f}};
+    for (auto& n : ns) {
+        float ln=std::sqrt(n[0]*n[0]+n[1]*n[1]+n[2]*n[2]);
+        float u[3]={n[0]/ln,n[1]/ln,n[2]/ln};
+        uint8_t enc[2]; oct_encode(u,enc);
+        float dec[3]; oct_decode(enc,dec);
+        float err=std::fabs(u[0]-dec[0])+std::fabs(u[1]-dec[1])+std::fabs(u[2]-dec[2]);
+        CHECK(err<0.02f, "oct round-trip within tolerance");
+    }
+}
+
 int main(){
     test_grid_dims_cube(); test_grid_dims_flat(); test_grid_dims_degenerate();
     test_tribox_hit(); test_tribox_miss();
+    test_oct_roundtrip();
     if(!failures) printf("All voxel_imposter tests passed\n");
     return failures?1:0;
 }
