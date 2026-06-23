@@ -35,4 +35,9 @@ struct VoxelImposter {
 bool choose_grid_dims(const float bounds_min[3], const float bounds_max[3],
                       int maxDim, int& nx, int& ny, int& nz);
 
+// Akenine-Moller triangle / axis-aligned-box overlap. boxCenter/boxHalf in the
+// same space as the triangle verts. Returns true if the triangle intersects the box.
+bool tri_box_overlap(const float boxCenter[3], const float boxHalf[3],
+                     const float v0[3], const float v1[3], const float v2[3]);
+
 } // namespace voxel_imposter

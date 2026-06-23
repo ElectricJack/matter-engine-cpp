@@ -4,6 +4,19 @@
 #include <cmath>
 #include <cstring>
 
+namespace {
+inline void sub(float r[3],const float a[3],const float b[3]){ r[0]=a[0]-b[0];r[1]=a[1]-b[1];r[2]=a[2]-b[2]; }
+inline void cross(float r[3],const float a[3],const float b[3]){ r[0]=a[1]*b[2]-a[2]*b[1]; r[1]=a[2]*b[0]-a[0]*b[2]; r[2]=a[0]*b[1]-a[1]*b[0]; }
+inline float dot(const float a[3],const float b[3]){ return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+inline bool plane_box_overlap(const float n[3],float d,const float h[3]){
+    float vmin[3],vmax[3];
+    for(int q=0;q<3;++q){ if(n[q]>0){vmin[q]=-h[q];vmax[q]=h[q];}else{vmin[q]=h[q];vmax[q]=-h[q];} }
+    if(dot(n,vmin)+d>0) return false;
+    if(dot(n,vmax)+d>=0) return true;
+    return false;
+}
+} // namespace
+
 namespace voxel_imposter {
 
 bool choose_grid_dims(const float lo[3], const float hi[3],
@@ -15,6 +28,41 @@ bool choose_grid_dims(const float lo[3], const float hi[3],
     auto dim = [&](float e){ int d = (int)std::ceil(e / v); return std::max(1, std::min(maxDim, d)); };
     nx = dim(ex); ny = dim(ey); nz = dim(ez);
     return true;
+}
+
+bool tri_box_overlap(const float bc[3], const float bh[3],
+                     const float V0[3], const float V1[3], const float V2[3]) {
+    float v0[3],v1[3],v2[3]; sub(v0,V0,bc); sub(v1,V1,bc); sub(v2,V2,bc);
+    float e0[3],e1[3],e2[3]; sub(e0,v1,v0); sub(e1,v2,v1); sub(e2,v0,v2);
+    float fex,fey,fez,p0,p1,p2,rad,minv,maxv;
+    (void)p2;
+    #define AXISTEST_X(a,b,fa,fb,va,vb) \
+        p0=a*va[1]-b*va[2]; p1=a*vb[1]-b*vb[2]; \
+        minv=p0<p1?p0:p1; maxv=p0<p1?p1:p0; rad=fa*bh[1]+fb*bh[2]; \
+        if(minv>rad||maxv<-rad) return false;
+    #define AXISTEST_Y(a,b,fa,fb,va,vb) \
+        p0=-a*va[0]+b*va[2]; p1=-a*vb[0]+b*vb[2]; \
+        minv=p0<p1?p0:p1; maxv=p0<p1?p1:p0; rad=fa*bh[0]+fb*bh[2]; \
+        if(minv>rad||maxv<-rad) return false;
+    #define AXISTEST_Z(a,b,fa,fb,va,vb) \
+        p0=a*va[0]-b*va[1]; p1=a*vb[0]-b*vb[1]; \
+        minv=p0<p1?p0:p1; maxv=p0<p1?p1:p0; rad=fa*bh[0]+fb*bh[1]; \
+        if(minv>rad||maxv<-rad) return false;
+    fex=std::fabs(e0[0]);fey=std::fabs(e0[1]);fez=std::fabs(e0[2]);
+    AXISTEST_X(e0[2],e0[1],fez,fey,v0,v2); AXISTEST_Y(e0[2],e0[0],fez,fex,v0,v2); AXISTEST_Z(e0[1],e0[0],fey,fex,v1,v2);
+    fex=std::fabs(e1[0]);fey=std::fabs(e1[1]);fez=std::fabs(e1[2]);
+    AXISTEST_X(e1[2],e1[1],fez,fey,v0,v2); AXISTEST_Y(e1[2],e1[0],fez,fex,v0,v2); AXISTEST_Z(e1[1],e1[0],fey,fex,v0,v1);
+    fex=std::fabs(e2[0]);fey=std::fabs(e2[1]);fez=std::fabs(e2[2]);
+    AXISTEST_X(e2[2],e2[1],fez,fey,v0,v1); AXISTEST_Y(e2[2],e2[0],fez,fex,v0,v1); AXISTEST_Z(e2[1],e2[0],fey,fex,v1,v2);
+    #undef AXISTEST_X
+    #undef AXISTEST_Y
+    #undef AXISTEST_Z
+    auto mm=[&](float a,float b,float c,float&mn,float&mx){ mn=mx=a; if(b<mn)mn=b; if(b>mx)mx=b; if(c<mn)mn=c; if(c>mx)mx=c; };
+    mm(v0[0],v1[0],v2[0],minv,maxv); if(minv>bh[0]||maxv<-bh[0]) return false;
+    mm(v0[1],v1[1],v2[1],minv,maxv); if(minv>bh[1]||maxv<-bh[1]) return false;
+    mm(v0[2],v1[2],v2[2],minv,maxv); if(minv>bh[2]||maxv<-bh[2]) return false;
+    float n[3]; cross(n,e0,e1); float d=-dot(n,v0);
+    return plane_box_overlap(n,d,bh);
 }
 
 } // namespace voxel_imposter
