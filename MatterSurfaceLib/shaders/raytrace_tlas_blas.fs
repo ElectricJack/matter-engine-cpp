@@ -106,10 +106,8 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, inout uint seed) {
             break;
         }
 
-        if (hit.isImposter) {
-            color += attenuation * hit.bakedColor;   // baked radiance, no live PBR
-            break;
-        }
+        // Imposters carry real albedo (tint/tintAlpha) and a world-space normal,
+        // so they fall through to the standard PBR lighting path below.
 
         //return vec3(1.0,0.0,0.0);
 
@@ -168,13 +166,10 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, inout uint seed) {
                     HitResult reflectionHit = intersectScene(reflectionPos, reflectedDir);
                     
                     if (reflectionHit.hit) {
-                        if (reflectionHit.isImposter) {
-                            // Reflected surface is an imposter: use baked radiance directly
-                            color += attenuation * reflectionHit.bakedColor * albedo * reflectance;
-                        } else {
-                        // Get material properties for reflected surface
+                        // Get material properties for reflected surface (works for imposters too:
+                        // imposter sets tintAlpha=1 so mix() returns the baked albedo directly).
                         MaterialProperties reflMatProps = getMaterialProperties(reflectionHit.material);
-                        vec3 reflAlbedo = reflMatProps.albedo;
+                        vec3 reflAlbedo = mix(reflMatProps.albedo, reflectionHit.tint, reflectionHit.tintAlpha);
                         vec3 reflNormal = reflectionHit.normal;
 
                         // Calculate direct lighting on reflected surface
@@ -183,7 +178,6 @@ vec3 trace(vec3 rayOrigin, vec3 rayDirection, inout uint seed) {
 
                         // Add reflection contribution with proper energy conservation
                         color += attenuation * reflectedLight * albedo * reflectance;
-                        }
                     } else {
                         // Reflection hits sky
                         vec3 skyReflection = sampleSky(reflectedDir);
