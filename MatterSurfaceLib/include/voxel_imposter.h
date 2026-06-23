@@ -1,5 +1,7 @@
 #pragma once
-#include "bvh.h"        // Tri, float3
+#include "bvh.h"        // Tri, TriEx, float3
+#include "tlas_manager.hpp"
+#include "blas_manager.hpp"
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -7,6 +9,16 @@
 // Dense voxel-volume imposter. See
 // docs/superpowers/specs/2026-06-22-voxel-box-imposter-design.md
 namespace voxel_imposter {
+
+// A flattened world-space triangle plus its material/tint for albedo baking.
+struct FlatTri { float3 v0, v1, v2; int materialId; float tint[4]; };
+
+// Flatten all TLAS instances into world-space triangles, carrying per-triangle
+// materialId and tint from the corresponding BLASEntry::tri_extra.
+// Falls back to the instance material_id / neutral tint (1,1,1,0) when the
+// BLAS entry has no tri_extra for a given triangle.
+std::vector<FlatTri> flatten_part_triangles_mat(const BLASManager& blas,
+                                                const TLASManager& tlas);
 
 constexpr uint32_t kMagic = 0x49584F56u;   // 'VOXI'
 constexpr uint32_t kFormatVersion = 1u;

@@ -1,4 +1,6 @@
 #include "../include/voxel_imposter.h"
+#include "../include/blas_manager.hpp"
+#include "../include/tlas_manager.hpp"
 #include <cstdio>
 #include <cmath>
 using namespace voxel_imposter;
@@ -44,10 +46,28 @@ static void test_oct_roundtrip() {
     }
 }
 
+static void test_flatten_mat_count() {
+    BLASManager blas; TLASManager tlas;
+    Tri t{};
+    t.vertex0 = make_float3(0,0,0); t.vertex1 = make_float3(1,0,0); t.vertex2 = make_float3(0,1,0);
+    t.centroid = make_float3(1.0f/3.0f, 1.0f/3.0f, 0.0f);
+    TriEx tx{};
+    tx.materialId = 2; tx.tint = make_float4(1,1,1,0);
+    auto h = blas.register_triangles(std::vector<Tri>{t}, std::vector<TriEx>{tx});
+    TLASManager::DrawInstance di;
+    di.blas_handle = h; di.material_id = 0; di.transform = Matrix4x4(); // identity
+    tlas.draw_batch(std::vector<TLASManager::DrawInstance>{di});
+    tlas.build(blas);
+    auto fl = voxel_imposter::flatten_part_triangles_mat(blas, tlas);
+    CHECK(fl.size() == 1, "one flattened triangle");
+    CHECK(fl[0].materialId == 2, "materialId carried through flatten");
+}
+
 int main(){
     test_grid_dims_cube(); test_grid_dims_flat(); test_grid_dims_degenerate();
     test_tribox_hit(); test_tribox_miss();
     test_oct_roundtrip();
+    test_flatten_mat_count();
     if(!failures) printf("All voxel_imposter tests passed\n");
     return failures?1:0;
 }

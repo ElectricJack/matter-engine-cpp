@@ -56,11 +56,14 @@ public:
         std::unique_ptr<BvhMesh> mesh;
         std::unique_ptr<BVH> bvh;
         std::vector<Tri> triangles;
+        std::vector<TriEx> tri_extra;   // parallel to triangles; empty if none supplied
         uint32_t hash;
         uint32_t ref_count; // number of live owners (cells) referencing this BLAS
 
-        BLASEntry(BLASHandle h, std::unique_ptr<BvhMesh> m, std::unique_ptr<BVH> b, std::vector<Tri>&& tris, uint32_t hash_val)
-            : handle(h), mesh(std::move(m)), bvh(std::move(b)), triangles(std::move(tris)), hash(hash_val), ref_count(1) {}
+        BLASEntry(BLASHandle h, std::unique_ptr<BvhMesh> m, std::unique_ptr<BVH> b,
+                  std::vector<Tri>&& tris, std::vector<TriEx>&& tex, uint32_t hash_val)
+            : handle(h), mesh(std::move(m)), bvh(std::move(b)), triangles(std::move(tris)),
+              tri_extra(std::move(tex)), hash(hash_val), ref_count(1) {}
     };
 
     // Texel columns are capped to this so the texture width never exceeds

@@ -182,9 +182,16 @@ BLASHandle BLASManager::register_triangles(Tri* triangles, int triangle_count, c
         }
         
         BLASHandle handle = next_handle_++;
-        
+
+        // Build tri_extra parallel array (empty when no triex provided).
+        std::vector<TriEx> tri_extra_copy;
+        if (triex) {
+            tri_extra_copy.assign(triex, triex + triangle_count);
+        }
+
         // Create entry
-        auto entry = std::make_unique<BLASEntry>(handle, std::move(mesh), std::move(bvh), std::move(triangle_copy), hash);
+        auto entry = std::make_unique<BLASEntry>(handle, std::move(mesh), std::move(bvh),
+                                                 std::move(triangle_copy), std::move(tri_extra_copy), hash);
         
         // Add to hash table
         size_t entry_index = entries_.size();
@@ -223,8 +230,12 @@ BLASHandle BLASManager::register_prebuilt(const Tri* tris, const TriEx* triex, i
     auto bvh = std::make_unique<BVH>(mesh.get(), nodes, nodes_used, tri_idx);
 
     BLASHandle handle = next_handle_++;
+    std::vector<TriEx> tri_extra_copy;
+    if (triex) {
+        tri_extra_copy.assign(triex, triex + tri_count);
+    }
     auto entry = std::make_unique<BLASEntry>(handle, std::move(mesh), std::move(bvh),
-                                             std::move(triangle_copy), hash);
+                                             std::move(triangle_copy), std::move(tri_extra_copy), hash);
     entry->ref_count = ref_count;
 
     size_t entry_index = entries_.size();

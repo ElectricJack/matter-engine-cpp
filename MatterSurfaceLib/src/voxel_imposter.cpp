@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+// tlas_manager.hpp and blas_manager.hpp are already pulled in via voxel_imposter.h
 
 namespace {
 inline void sub(float r[3],const float a[3],const float b[3]){ r[0]=a[0]-b[0];r[1]=a[1]-b[1];r[2]=a[2]-b[2]; }
@@ -83,6 +84,37 @@ void oct_decode(const uint8_t in[2], float n[3]) {
                   float oy=(1.0f-std::fabs(x))*(y>=0?1.0f:-1.0f); x=ox; y=oy; }
     float l=std::sqrt(x*x+y*y+z*z); if(l<1e-12f)l=1.0f;
     n[0]=x/l; n[1]=y/l; n[2]=z/l;
+}
+
+std::vector<FlatTri> flatten_part_triangles_mat(const BLASManager& blas, const TLASManager& tlas) {
+    std::vector<FlatTri> out;
+    const auto& recs = tlas.get_draw_records();
+    for (const auto& r : recs) {
+        const BLASManager::BLASEntry* e = blas.get_entry(r.blas_handle);
+        if (!e) continue;
+        const float* m = r.transform.m; // row-major 4x4
+        auto xf = [&](float3 p) {
+            return make_float3(
+                m[0]*p.x + m[1]*p.y + m[2]*p.z + m[3],
+                m[4]*p.x + m[5]*p.y + m[6]*p.z + m[7],
+                m[8]*p.x + m[9]*p.y + m[10]*p.z + m[11]);
+        };
+        for (size_t i = 0; i < e->triangles.size(); ++i) {
+            const Tri& t = e->triangles[i];
+            FlatTri f{};
+            f.v0 = xf(t.vertex0); f.v1 = xf(t.vertex1); f.v2 = xf(t.vertex2);
+            if (i < e->tri_extra.size()) {
+                f.materialId = e->tri_extra[i].materialId;
+                const float4& tn = e->tri_extra[i].tint;
+                f.tint[0] = tn.x; f.tint[1] = tn.y; f.tint[2] = tn.z; f.tint[3] = tn.w;
+            } else {
+                f.materialId = static_cast<int>(r.material_id);
+                f.tint[0] = 1.0f; f.tint[1] = 1.0f; f.tint[2] = 1.0f; f.tint[3] = 0.0f;
+            }
+            out.push_back(f);
+        }
+    }
+    return out;
 }
 
 } // namespace voxel_imposter
