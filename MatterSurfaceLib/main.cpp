@@ -140,6 +140,28 @@ uint64_t fnv1a64(const char* s) {
     return h;
 }
 
+// Upload helpers for GL 3D textures used by the voxel imposter.
+static unsigned int upload_volume_rgba8(int nx, int ny, int nz, const uint8_t* data) {
+    unsigned int id = 0; glGenTextures(1, &id); glBindTexture(GL_TEXTURE_3D, id);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, nx, ny, nz, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    glBindTexture(GL_TEXTURE_3D, 0); return id;
+}
+static unsigned int upload_volume_rg8(int nx, int ny, int nz, const uint8_t* data) {
+    unsigned int id = 0; glGenTextures(1, &id); glBindTexture(GL_TEXTURE_3D, id);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    glTexImage3D(GL_TEXTURE_3D, 0, GL_RG8, nx, ny, nz, 0, GL_RG, GL_UNSIGNED_BYTE, data);
+    glBindTexture(GL_TEXTURE_3D, 0); return id;
+}
+
 // Populate the default attribute/uniform locations exactly as raylib's
 // LoadShaderFromMemory does, so a binary-restored program draws the fullscreen
 // quad (vertex pos/texcoord/color + mvp + colDiffuse + texture0) correctly.
@@ -662,6 +684,20 @@ private:
             voxel_imposter::save(vpath, voxel_imposter_, vhash);
             printf("[vox_imposter] baked + saved %s\n", vpath.c_str());
         } else { printf("[vox_imposter] loaded %s\n", vpath.c_str()); }
+
+        // Upload voxel volume as GL 3D textures (once, after bake/load).
+        {
+            const voxel_imposter::VoxelImposter& vox = voxel_imposter_;
+            std::vector<uint8_t> rgba((size_t)vox.nx * vox.ny * vox.nz * 4);
+            for (size_t i = 0, n = (size_t)vox.nx * vox.ny * vox.nz; i < n; ++i) {
+                rgba[i*4+0] = vox.albedo[i*3+0];
+                rgba[i*4+1] = vox.albedo[i*3+1];
+                rgba[i*4+2] = vox.albedo[i*3+2];
+                rgba[i*4+3] = vox.coverage[i];
+            }
+            imposter_color_vol_  = upload_volume_rgba8(vox.nx, vox.ny, vox.nz, rgba.data());
+            imposter_normal_vol_ = upload_volume_rg8(vox.nx, vox.ny, vox.nz, vox.normal.data());
+        }
 
         // Unit-cube BLAS: 12 triangles with corners at [0,1]^3.
         std::vector<Tri> cube = make_unit_cube_tris();
@@ -1377,16 +1413,20 @@ private:
             int ao_on = ao_enabled_ ? 1 : 0;
             SetShaderValue(raytracing_shader_, ao_enabled_loc_, &ao_on, SHADER_UNIFORM_INT);
             if (imposter_enabled_) {
-                SetShaderValueTexture(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterColorTex"), imposter_color_tex_);
-                SetShaderValueTexture(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterDispTex"),  imposter_disp_tex_);
-                SetShaderValue(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterTriBase"), &imposter_tri_base_, SHADER_UNIFORM_INT);
-                SetShaderValue(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterMaxDisp"), &imposter_max_disp_, SHADER_UNIFORM_FLOAT);
-                int impDbg = getenv("MSL_IMP_DBG") ? atoi(getenv("MSL_IMP_DBG")) : 0;
-                SetShaderValue(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterDbg"), &impDbg, SHADER_UNIFORM_INT);
-                SetShaderValueTexture(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterTriUvTex"), imposter_triuv_tex_);
-                SetShaderValueTexture(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterCageTriTex"), imposter_cagetri_tex_);
-                SetShaderValueTexture(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterTriIdTex"),  imposter_triid_tex_);
-                SetShaderValue(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterTriCount"), &imposter_tri_count_, SHADER_UNIFORM_INT);
+                int colUnit = 10, nrmUnit = 11;
+                // Bind the 3D textures to explicit texture units (rlActiveTextureSlot
+                // wraps glActiveTexture; glBindTexture for GL_TEXTURE_3D is core GL).
+                rlActiveTextureSlot(colUnit);
+                glBindTexture(GL_TEXTURE_3D, imposter_color_vol_);
+                SetShaderValue(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterColorVolume"), &colUnit, SHADER_UNIFORM_INT);
+                rlActiveTextureSlot(nrmUnit);
+                glBindTexture(GL_TEXTURE_3D, imposter_normal_vol_);
+                SetShaderValue(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterNormalVolume"), &nrmUnit, SHADER_UNIFORM_INT);
+                rlActiveTextureSlot(0);
+                float bmin[3] = {voxel_imposter_.bounds_min[0], voxel_imposter_.bounds_min[1], voxel_imposter_.bounds_min[2]};
+                float bext[3] = {voxel_imposter_.bounds_max[0] - bmin[0], voxel_imposter_.bounds_max[1] - bmin[1], voxel_imposter_.bounds_max[2] - bmin[2]};
+                SetShaderValue(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterBoxMin"), bmin, SHADER_UNIFORM_VEC3);
+                SetShaderValue(raytracing_shader_, GetShaderLocation(raytracing_shader_, "imposterBoxExt"), bext, SHADER_UNIFORM_VEC3);
             }
         }
 
@@ -2176,6 +2216,8 @@ private:
     // Voxel-box imposter: baked volume + unit-cube BLAS for the AABB instance.
     voxel_imposter::VoxelImposter voxel_imposter_;
     BLASHandle imposter_cube_blas_ = 0;
+    unsigned int imposter_color_vol_ = 0;
+    unsigned int imposter_normal_vol_ = 0;
     Texture2D imposter_color_tex_{};
     Texture2D imposter_disp_tex_{};
     int   imposter_tri_base_ = 0;
