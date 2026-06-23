@@ -114,7 +114,21 @@ vec3 octDecode(vec2 e){
 bool voxelMarch(vec3 o, vec3 d, out ivec3 hitVox, out float tBox){
     ivec3 dim = textureSize(imposterColorVolume, 0);
     vec3 fdim = vec3(dim);
-    ivec3 v = clamp(ivec3(floor(o * fdim)), ivec3(0), dim - 1);
+    // Clip the local ray to the unit box [0,1]^3 and advance the origin to the
+    // entry point. The camera origin is always outside the box (the proxy is a
+    // unit-cube BLAS), so starting the DDA at the clamped origin would snap
+    // grazing rays onto a boundary voxel row and produce a false slab.
+    vec3 invD = 1.0 / d;
+    vec3 ta = (vec3(0.0) - o) * invD;
+    vec3 tb = (vec3(1.0) - o) * invD;
+    vec3 tlo = min(ta, tb);
+    vec3 thi = max(ta, tb);
+    float tEnterBox = max(max(tlo.x, tlo.y), tlo.z);
+    float tExitBox  = min(min(thi.x, thi.y), thi.z);
+    if (tExitBox < max(tEnterBox, 0.0)) return false; // ray misses the box
+    float tStart = max(tEnterBox, 0.0);
+    vec3 oStart = o + d * tStart;
+    ivec3 v = clamp(ivec3(floor(oStart * fdim)), ivec3(0), dim - 1);
     vec3 stepV = sign(d);
     vec3 tDelta, tMax;
     for (int a = 0; a < 3; ++a) {
@@ -122,18 +136,18 @@ bool voxelMarch(vec3 o, vec3 d, out ivec3 hitVox, out float tBox){
         else {
             float cs = 1.0 / fdim[a];
             float bnd = (float(v[a]) + (d[a] > 0.0 ? 1.0 : 0.0)) * cs;
-            tMax[a] = (bnd - o[a]) / d[a];
+            tMax[a] = (bnd - oStart[a]) / d[a];
             tDelta[a] = cs / abs(d[a]);
         }
     }
-    // Check starting voxel
-    if (texelFetch(imposterColorVolume, v, 0).a > 0.5) { hitVox = v; tBox = 0.0; return true; }
+    // Check the entry voxel (tBox measured from the original origin o).
+    if (texelFetch(imposterColorVolume, v, 0).a > 0.5) { hitVox = v; tBox = tStart; return true; }
     int budget = (dim.x + dim.y + dim.z) * 2;
     for (int i = 0; i < budget; ++i) {
         int axis = (tMax.x < tMax.y) ? (tMax.x < tMax.z ? 0 : 2) : (tMax.y < tMax.z ? 1 : 2);
         v[axis] += int(stepV[axis]);
         if (v[axis] < 0 || v[axis] >= dim[axis]) return false;
-        float tEnter = tMax[axis];
+        float tEnter = tStart + tMax[axis];
         tMax[axis] += tDelta[axis];
         if (texelFetch(imposterColorVolume, v, 0).a > 0.5) { hitVox = v; tBox = tEnter; return true; }
     }

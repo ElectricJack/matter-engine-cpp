@@ -204,7 +204,24 @@ bool dda_first_hit(const float o[3], const float d[3],
                    int nx,int ny,int nz, const std::vector<uint8_t>& cov,
                    int& hitX,int& hitY,int& hitZ, float& tHit) {
     int dim[3]={nx,ny,nz};
-    float p[3]={o[0],o[1],o[2]};
+    // Clip the ray to the unit box [0,1]^3 and advance the origin to the entry
+    // point so a ray starting outside the box does not snap onto a boundary
+    // voxel row (parity with the shader voxelMarch).
+    float tEnterBox=-1e30f, tExitBox=1e30f;
+    for (int a=0;a<3;++a){
+        if (std::fabs(d[a])<1e-12f){
+            if (o[a]<0.0f||o[a]>1.0f) return false; // parallel and outside slab
+            continue;
+        }
+        float inv=1.0f/d[a];
+        float t0=(0.0f-o[a])*inv, t1=(1.0f-o[a])*inv;
+        if (t0>t1){ float tmp=t0; t0=t1; t1=tmp; }
+        tEnterBox=std::max(tEnterBox,t0);
+        tExitBox=std::min(tExitBox,t1);
+    }
+    if (tExitBox < std::max(tEnterBox,0.0f)) return false;
+    float tStart=std::max(tEnterBox,0.0f);
+    float p[3]={o[0]+d[0]*tStart, o[1]+d[1]*tStart, o[2]+d[2]*tStart};
     int vx[3];
     for (int a=0;a<3;++a){ int c=(int)std::floor(p[a]*dim[a]); vx[a]=std::max(0,std::min(dim[a]-1,c)); }
     int step[3]; float tMax[3], tDelta[3];
@@ -217,12 +234,12 @@ bool dda_first_hit(const float o[3], const float d[3],
         tDelta[a]=cellSize/std::fabs(d[a]);
     }
     auto idx=[&](int x,int y,int z){ return (size_t)((z*ny+y)*nx+x); };
-    if (cov[idx(vx[0],vx[1],vx[2])]>0){ hitX=vx[0];hitY=vx[1];hitZ=vx[2]; tHit=0.0f; return true; }
+    if (cov[idx(vx[0],vx[1],vx[2])]>0){ hitX=vx[0];hitY=vx[1];hitZ=vx[2]; tHit=tStart; return true; }
     for (int guard=0; guard < (nx+ny+nz)*2; ++guard) {
         int axis = (tMax[0]<tMax[1]) ? (tMax[0]<tMax[2]?0:2) : (tMax[1]<tMax[2]?1:2);
         vx[axis]+=step[axis];
         if (vx[axis]<0||vx[axis]>=dim[axis]) return false;
-        float tEnter=tMax[axis];
+        float tEnter=tStart+tMax[axis];
         tMax[axis]+=tDelta[axis];
         if (cov[idx(vx[0],vx[1],vx[2])]>0){ hitX=vx[0];hitY=vx[1];hitZ=vx[2]; tHit=tEnter; return true; }
     }
