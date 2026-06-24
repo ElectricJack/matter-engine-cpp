@@ -1,0 +1,199 @@
+# Procedural Part System — Master Implementation Plan (SP-1 … SP-7)
+
+> **For agentic workers:** This is the **orchestration** plan for the single-player
+> procedural-part foundation. It does **not** restate the per-task TDD steps — each
+> sub-project has its own bite-sized plan (linked below). This document fixes the **build
+> order**, the **cross-plan interface contracts** (so the local mirrors/shims the
+> sub-plans declare get reconciled to their real owners), and the **integration gates**
+> that cross plan boundaries and therefore can't live in any single sub-plan. Steps use
+> checkbox (`- [ ]`) syntax. REQUIRED SUB-SKILL when executing any sub-plan:
+> superpowers:subagent-driven-development (recommended) or superpowers:executing-plans.
+
+**Goal:** Stand up the full single-player procedural-part pipeline — author a part in JS,
+bake it to a content-addressed `.part`, assemble many parts into a sectored, LOD'd world,
+and live-edit it — by executing seven sub-plans in dependency order with verified
+integration seams between them.
+
+**Architecture:** Seven sub-projects layered on the existing MatterSurfaceLib backend
+(`part_asset`, `BLASManager`/`TLASManager`, `Cluster`, `mesh_simplifier`). SP-1 is the
+serialization foundation; SP-2 the JS bake host; SP-3 the graph/install orchestrator; SP-4
+the world composition + LOD; SP-5 the live-edit loop; SP-6 the triangle/variation path;
+SP-7 the shared script library. Each sub-plan is independently testable; this plan wires
+them together at the seams.
+
+**Tech Stack:** C++17, QuickJS-ng (vendored under `Libraries/quickjs-ng/`), FNV-1a content
+hashing, existing Cluster/BLAS/TLAS + mesh_simplifier, Linux inotify, headless GL-free
+tests under `MatterSurfaceLib/tests/`.
+
+---
+
+## Sub-plans (each its own bite-sized TDD plan)
+
+| SP | Plan file | Owns |
+|----|-----------|------|
+| SP-1 | `2026-06-24-part-artifact-v2-plan.md` | `.part` v2: `compute_resolved_hash`, `ChildInstance`, `LodLevels` (+`screen_size_threshold`), `save_v2`/`load_v2`, `cache_path` |
+| SP-2 | `2026-06-24-script-host-plan.md` | `ScriptHost`, `Part` base, DSL state + build buffer, voxel/CSG session, seeded RNG hook, time budget, bake→`.part` |
+| SP-3 | `2026-06-24-part-graph-install-plan.md` | `requires` discovery, resolved-hash assembly, cache-miss bake, topo order, cycle/reachability, install, `ModuleResolver`, `Baker` seam |
+| SP-4 | `2026-06-24-composition-to-world-plan.md` | LOD bake (mesh_simplifier), recursive flatten, sector binning, screen-size LOD selection |
+| SP-5 | `2026-06-24-dev-live-edit-plan.md` | `FileWatcher` (inotify), debounce, upward-cone rebake, affected-subtree re-flatten, fail-closed |
+| SP-6 | `2026-06-24-triangle-path-variations-plan.md` | direct-triangle session → part BLAS (Tri/TriEx), `line` tuber, `instance(child,variation)` |
+| SP-7 | `2026-06-24-shared-script-library-plan.md` | `shared-lib/*.js` helpers, module resolve + source-fold into hash, xoshiro128** RNG |
+
+---
+
+## Build order & rationale
+
+```
+SP-1  (foundation; no deps)
+  └─> SP-2  (needs SP-1 save_v2 + compute_resolved_hash)
+        ├─> SP-3  (needs SP-2 Baker; seam-buildable in parallel, integrates after SP-2)
+        ├─> SP-6  (needs SP-2 build buffer + session API)
+        └─> SP-7  (needs SP-2 host/module loader + SP-1 hash; folds via SP-3 resolve)
+  SP-4  (needs SP-1 LOD format + a populated cache from SP-3)
+  SP-5  (needs SP-2 budget/fail-closed + SP-3 resolve/topo + SP-4 flatten)
+```
+
+Recommended linear execution: **SP-1 → SP-2 → SP-3 → SP-6 → SP-7 → SP-4 → SP-5**.
+SP-3/SP-6/SP-7 each begin against seams/interfaces and only *require* SP-2 merged at their
+integration task, so they can be drafted/executed in parallel by separate workers once SP-2
+lands; SP-4 needs a real populated cache (SP-3) to be end-to-end meaningful; SP-5 is last
+because it composes all of SP-2/3/4.
+
+- [ ] **Decide execution mode** (subagent-driven vs inline) and record the chosen order
+  above. Do not start a sub-plan until its upstream dependency's exit gate (below) is green.
+
+---
+
+## Cross-plan interface contracts (single source of truth)
+
+Each sub-plan was written to be testable before its upstream exists, so several declare a
+**local mirror or shim** of an upstream type. When the upstream lands, the mirror MUST be
+replaced by the real owner. These are the canonical definitions; the reconciliation tasks
+are gated in the Integration Gates section.
+
+### C-1 — Identity & artifact (owner: SP-1)
+```cpp
+// part_asset.h  (the ONLY definitions of these; all other SPs include this header)
+uint64_t compute_resolved_hash(const void* source_bytes, size_t source_len,
+                               const void* params_bytes, size_t params_len,
+                               const uint64_t* child_hashes, size_t child_count);
+struct ChildInstance { uint64_t child_resolved_hash; float transform[16]; };
+struct LodLevel  { float screen_size_threshold; std::vector<uint32_t> blas_indices; };
+using  LodLevels = std::vector<LodLevel>;
+bool save_v2(const std::string& path, const BLASManager&, const TLASManager&,
+             const ChildInstance*, size_t, const LodLevels&, uint64_t resolved_hash);
+bool load_v2(const std::string& path, uint64_t expected,
+             BLASManager&, TLASManager&, std::vector<ChildInstance>&, LodLevels&);
+std::string cache_path(uint64_t resolved_hash);   // parts/<16hex>.part
+```
+- **SP-6** declares a local `ChildInstance` + local `compute_resolved_hash` — replace with
+  this header (layout is byte-identical, so the swap is source-compatible).
+- **SP-4** declares an in-memory `serialize_lods`/`deserialize_lods` shim — replace its LOD
+  round-trip with `save_v2`/`load_v2`.
+- **SP-7** adds `compute_resolved_hash` only if SP-1 hasn't — after SP-1, delete the dup.
+
+### C-2 — Bake host (owner: SP-2)
+- `ScriptHost` exposes: bake one part from `(source, params, child_hashes)` →
+  writes one `.part` via SP-1; a settable **time budget** (≤0 = unbounded); a **seeded
+  Math.random** hook (SP-7 supplies the algorithm); structured **fail-closed** error.
+- The C++-owned **build buffer + session API** that **SP-6** appends triangles into.
+- The **module loader** that **SP-7** resolves shared-lib imports through.
+- **SP-3** calls SP-2 only through its `Baker` seam (`bake(...)` + `eval_requires(...)`);
+  its Task 12 adapter must match SP-2's final public signatures.
+
+### C-3 — Graph resolve (owner: SP-3)
+- `resolve(part, params)` → resolved hash (memoized, leaves-first); `topo_order`,
+  `ancestors`, `parts_for_file`, `roots_over`, cache-miss bake driver.
+- **SP-5** consumes these via its `GraphResolver` seam — wire to the real SP-3.
+- **SP-7**'s source-fold changes what `source_bytes` SP-3 passes to `compute_resolved_hash`
+  (part source + canonically-ordered imported module sources). SP-3's resolve must call
+  SP-7's fold to assemble `source_bytes`.
+
+### C-4 — World compose (owner: SP-4)
+- `flatten(roots)` → per-sector instance lists; `select_lod(sector, camera)`.
+- **SP-5** re-flattens the affected subtree by calling SP-4's flatten over `roots_over(changed)`.
+
+---
+
+## Integration gates (cross-boundary; verify after each sub-plan)
+
+Each gate is an integration test that no single sub-plan can own because it spans two
+subsystems. Add these under `MatterSurfaceLib/tests/` as they become reachable.
+
+- [ ] **Gate M1 — SP-1 done:** `make -C MatterSurfaceLib/tests run-partv2` green. A v2
+  `.part` with children + multi-level LODs round-trips; v1 files rejected.
+
+- [ ] **Gate M2 — SP-2 done (first geometry from a script):**
+  - Reconcile: SP-2 uses real SP-1 `save_v2`/`compute_resolved_hash` (no shim).
+  - Integration test: a hand-written `.js` part with a voxel sphere∖box bakes to a `.part`;
+    `load_v2` restores BLAS geometry; re-baking the same source+params yields identical
+    bytes. `make -C MatterSurfaceLib/tests run-script` green.
+
+- [ ] **Gate M3 — SP-3 done (a world installs):**
+  - Reconcile: SP-3 `Baker` adapter calls the real `ScriptHost`; `ModuleResolver` real.
+  - Integration test: a 3-part graph (root→2 children, one shared) installs to a populated
+    `parts/`; second install bakes 0 (all hits); editing the shared leaf rebakes leaf+root
+    only; a cycle errors. `make -C MatterSurfaceLib/tests run-graph` green.
+
+- [ ] **Gate M4 — SP-6 done (triangles + variations):**
+  - Reconcile: delete SP-6's local `ChildInstance`/`compute_resolved_hash` mirror; include
+    `part_asset.h`.
+  - Integration test: a script mixing a voxel brush + a `beginShape` quad + a skinned
+    `line` bakes a **single** part BLAS holding all three with per-triangle materials;
+    `instance(child, variationParams)` writes the child-instance table; identical variation
+    params dedup to one artifact. `make -C MatterSurfaceLib/tests run-trivar` green.
+
+- [ ] **Gate M5 — SP-7 done (shared lib + fold invalidation):**
+  - Reconcile: SP-3 `resolve` assembles `source_bytes` via SP-7's fold; SP-2 Math.random
+    bound to SP-7 `ScriptRng`; remove any duplicate `compute_resolved_hash`.
+  - Integration test: a part `import`s `shared-lib/lsystem` + `shared-lib/rng`; bake is
+    deterministic from `p.seed`; editing the imported module changes the part's resolved
+    hash (rebakes) while a non-importer is untouched; import-order permutation → same hash.
+    `make -C MatterSurfaceLib/tests run-sharedlib` green.
+
+- [ ] **Gate M6 — SP-4 done (world composes + LODs):**
+  - Reconcile: SP-4 LOD round-trip uses real `save_v2`/`load_v2` (drop the shim).
+  - Integration test: install a small world (SP-3), LOD-bake each part (~3 levels,
+    monotone tri counts, `screen_size_threshold` tagged, written back into the `.part`),
+    flatten roots into per-sector instance lists (composed transforms, dedup preserved,
+    depth/budget guards), and select sector LOD by closest-instance screen size.
+    `make -C MatterSurfaceLib/tests run-compose` green.
+
+- [ ] **Gate M7 — SP-5 done (live edit):**
+  - Reconcile: SP-5 `GraphResolver`→real SP-3; `Baker`→real SP-2 (dev budget set);
+    re-flatten→real SP-4.
+  - Integration test: touch a leaf `.js` in a temp `WorldData/<world>/ObjectSchemas/`; the
+    inotify path debounces, rebakes exactly the upward cone, re-flattens the affected
+    subtree, and a script that throws keeps the last-good artifact + surfaces the error.
+    `make -C MatterSurfaceLib/tests run-liveedit` green.
+
+- [ ] **Final gate — full suite:** `./build-all.sh test` green on Linux; all
+  `run-partv2/script/graph/trivar/sharedlib/compose/liveedit` targets pass.
+
+---
+
+## Risk register (carried from sub-plan reports)
+
+- **QuickJS-ng pin (SP-2):** vendored at v0.10.0, compiling `quickjs.c libregexp.c
+  libunicode.c cutils.c` (+`libbf.c`/`xsum.c` only if the pin needs them). SP-2 Task 1
+  iterates on link errors before any DSL work — treat a clean `1+1`→2 embed as that task's
+  exit bar.
+- **Box-brush lowering (SP-2):** no exact box mesher input exists today; SP-2 lowers `box`
+  to an SDF-sampled stamp at session spacing (no mesher change). If a later need for exact
+  box brushes arises, that's a separate mesher-input task, not a blocker here.
+- **TLAS assembly path (SP-2):** confirm the bake uses the same TLAS build path as
+  `part_asset_tests` (`draw_batch`/`build`) — flagged in SP-2 Task 9 to verify against
+  `tlas_manager.hpp` at execution.
+- **Screen-size metric (SP-4):** `projected_size = bound_radius / distance`; `bound_radius`
+  supplied per-part via a table (GL-free, unit-testable). Deriving radius from the BLAS
+  AABB at bake is a reasonable later refinement, not required.
+- **Windows watcher (SP-5):** `ReadDirectoryChangesW` is a marked deferred stub; the Linux
+  inotify path is fully implemented + tested. Cross-platform parity is a later task.
+
+---
+
+## Out of scope (deferred tranche — not in this plan)
+
+Networking/replication SP-8/9/10, the merged far-proxy implementation and per-frame TLAS
+rebuild + 32-bit/spatial-split TLAS builder fixes (the sector-LOD *runtime* spec), the
+lattice session, `pointsOnSurface` mesh scatter, and any non-Linux file-watch backend.
