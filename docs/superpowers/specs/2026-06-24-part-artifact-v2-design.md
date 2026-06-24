@@ -16,7 +16,9 @@ graph orchestration (SP-3). SP-1 delivers three additions over the v1 format:
 2. **Child-instance table** — a part records references to *other parts* (by resolved
    hash) plus transforms, so world assembly (SP-4) can expand a part into its children.
 3. **Per-part LOD BLAS levels (format only)** — an ordered array of LOD levels the
-   artifact can carry and round-trip; SP-4 fills it using `mesh_simplifier`.
+   artifact can carry and round-trip; SP-4 fills it using `mesh_simplifier`. Each level
+   carries a `screen_size_threshold` (see §LOD) so SP-4 can pick a level by projected
+   screen size.
 
 SP-1 is a **pure serialization + hash-plumbing** task. It depends only on the existing
 backend (`bvh.h`, `blas_manager.hpp`, `tlas_manager.hpp`, `material_registry.h`). It is
@@ -41,6 +43,11 @@ no knowledge of how the source/params bytes were produced.
 - **LOD representation = ordered level array referencing BLAS entries.** Each level lists
   the BLAS-table indices that constitute the whole part at that detail — handles
   multi-BLAS parts (e.g. per-material BLASes) and matches "a part has N levels."
+- **LOD selection is screen-size driven.** Each level carries a `screen_size_threshold`
+  (projected pixel/normalized-screen extent). SP-4 picks the coarsest level whose
+  threshold is satisfied for a sector (the sector decides by its closest instance's
+  projected size — see the SP-4 spec). SP-1 only stores/round-trips the float; it makes
+  no selection.
 - **Clean v2 cutover, no v1 back-compat.** Bump `format_version` to 2; v1 files fail
   validation and regenerate via the existing regenerate-on-mismatch contract. No v1
   reader retained (v1 is throwaway brick-dev cache).
@@ -128,6 +135,7 @@ Child instances    [NEW — references to other parts for world composition]
 LOD levels         [NEW — ordered, may be empty]
   level_count      u32
   per level:
+    screen_size_threshold f32                // projected screen extent for selection (SP-4)
     blas_index_count u32
     blas_index       u32[blas_index_count]   // indices into the BLAS table above
 ```
