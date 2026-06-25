@@ -15,11 +15,26 @@ extern "C" {
 #include "surface.h"                    // consumed prototype (CreateSurfaceScratch; self-guards extern "C")
 #include <cstring>
 #include <cmath>
+#include <chrono>
 #include <map>
 #include <memory>
 #include <regex>
 
 namespace script_host {
+
+// Per-bake interrupt context: a wall-clock deadline the QuickJS-ng VM polls via
+// the interrupt handler. In install-mode (time_budget_ms == 0) the bake is
+// unbounded; in dev-mode a runaway build() (e.g. `while(true){}`) is aborted once
+// the deadline passes so the bake fails-closed instead of hanging the host.
+struct InterruptCtx {
+    std::chrono::steady_clock::time_point deadline;
+    bool bounded = false;
+};
+static int interrupt_cb(JSRuntime*, void* opaque) {
+    InterruptCtx* ic = static_cast<InterruptCtx*>(opaque);
+    if (!ic || !ic->bounded) return 0;
+    return std::chrono::steady_clock::now() >= ic->deadline ? 1 : 0; // 1 => interrupt
+}
 
 // Build a bake JSContext from a RAW context (no default intrinsics) and add ONLY
 // the deterministic subset the authoring DSL needs. Notably NO Date intrinsic, so
@@ -187,7 +202,7 @@ uint64_t ScriptHost::resolve_hash(const std::string& source,
 
 BakeResult ScriptHost::bake_source(const std::string& source,
                                    const std::string& params_json,
-                                   const BakeOptions& /*opts*/,
+                                   const BakeOptions& opts,
                                    const uint64_t* child_hashes,
                                    size_t child_count) {
     BakeResult r;
@@ -207,6 +222,15 @@ BakeResult ScriptHost::bake_source(const std::string& source,
     const std::string merged = last_merged_params_;
 
     JSRuntime* rt = JS_NewRuntime();
+
+    // Install a wall-clock interrupt so a runaway build() fails-closed (dev-mode)
+    // instead of hanging. Unbounded when time_budget_ms == 0 (install-mode).
+    InterruptCtx ic;
+    ic.bounded = opts.time_budget_ms > 0;
+    ic.deadline = std::chrono::steady_clock::now() +
+                  std::chrono::milliseconds(opts.time_budget_ms);
+    JS_SetInterruptHandler(rt, interrupt_cb, &ic);
+
     JSContext* ctx = new_bake_context(rt);
 
     // C++-owned authoring state for this bake; native DSL bindings mutate it.
@@ -256,7 +280,15 @@ BakeResult ScriptHost::bake_source(const std::string& source,
         JSValue bret = JS_Invoke(ctx, inst, buildAtom, 1, &paramsObj);
         JS_FreeAtom(ctx, buildAtom);
         last_build_ran_ = !JS_IsException(bret);
-        if (JS_IsException(bret)) r.error = harvest_exception(ctx);
+        if (JS_IsException(bret)) {
+            r.error = harvest_exception(ctx);
+            // Distinguish a time-budget abort (interrupt) from an authored throw so
+            // callers get a structured, actionable message.
+            if (ic.bounded && std::chrono::steady_clock::now() >= ic.deadline) {
+                r.error.ok = false;
+                r.error.message = "time budget exceeded (interrupt)";
+            }
+        }
         JS_FreeValue(ctx, bret);
         JS_FreeValue(ctx, paramsObj);
         JS_FreeValue(ctx, inst);

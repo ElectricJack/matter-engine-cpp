@@ -309,6 +309,43 @@ static void test_seeded_rng_and_no_ambient() {
           "no Date/require/fetch/os bindings present");
 }
 
+static void test_fail_closed() {
+    // (a) thrown error
+    script_host::ScriptHost h1;
+    const char* thrower =
+        "class T extends Part { static params={};\n"
+        "  build(p){ this.beginVoxels(0.25); throw new Error('boom'); }\n"
+        "}\n";
+    auto r1 = h1.bake_source(thrower, "{}", {});
+    CHECK(!r1.error.ok, "throw => error");
+    CHECK(r1.written_path.empty(), "throw => no file written");
+    CHECK(r1.error.message.find("boom") != std::string::npos, "error message carries throw text");
+
+    // (b) session misuse (begin inside begin)
+    script_host::ScriptHost h2;
+    const char* misuse =
+        "class M extends Part { static params={};\n"
+        "  build(p){ this.beginVoxels(0.25); this.beginVoxels(0.25); this.endVoxels(); }\n"
+        "}\n";
+    auto r2 = h2.bake_source(misuse, "{}", {});
+    CHECK(!r2.error.ok, "session misuse => error");
+    CHECK(r2.written_path.empty(), "session misuse => no file");
+
+    // (c) time-budget overrun
+    script_host::ScriptHost h3;
+    const char* spin =
+        "class S extends Part { static params={};\n"
+        "  build(p){ this.beginVoxels(0.25); while(true){} }\n"
+        "}\n";
+    script_host::BakeOptions budget; budget.time_budget_ms = 50;
+    auto r3 = h3.bake_source(spin, "{}", budget);
+    CHECK(!r3.error.ok, "time-budget overrun => error");
+    CHECK(r3.written_path.empty(), "time-budget overrun => no file");
+    CHECK(r3.error.message.find("budget") != std::string::npos ||
+          r3.error.message.find("interrupt") != std::string::npos,
+          "structured time-budget error");
+}
+
 int main() {
     test_embed_eval_1_plus_1();
     test_fresh_context_runs_empty_class();
@@ -325,6 +362,7 @@ int main() {
     test_determinism_identical_bytes();
     test_fresh_context_no_residue();
     test_seeded_rng_and_no_ambient();
+    test_fail_closed();
     if (failures == 0) printf("ALL PASS\n");
     return failures ? 1 : 0;
 }
