@@ -282,6 +282,32 @@ static void test_real_inotify_temp_dir() {
     CHECK(saw, "inotify observed the real file write");
     std::remove(file.c_str()); rmdir(dir);
 }
+
+static void test_e2e_real_watch_to_rebuild() {
+    std::printf("[test_e2e_real_watch_to_rebuild]\n");
+    char tmpl[] = "/tmp/sp5_e2eXXXXXX";
+    char* dir = mkdtemp(tmpl);
+    if (!dir) { CHECK(false, "temp dir"); return; }
+    std::string file = std::string(dir) + "/leaf.js";
+
+    FakeGraph g;
+    g.file_to_parts[file] = {"leaf"};
+    g.parents["leaf"] = {"root"};
+    g.roots["leaf"] = {"root"};
+    InotifyWatcher iw; iw.add_watch(dir);
+    RecBaker b; RecFlattener f; RecSink s;
+    // debounce 0 so the first tick after the event fires immediately.
+    LiveEditSession sess(iw, g, b, f, s, LiveEditConfig{/*debounce*/0, /*budget*/0});
+
+    { FILE* fp = std::fopen(file.c_str(), "w"); std::fprintf(fp, "class Leaf {}\n"); std::fclose(fp); }
+    RebuildReport r;
+    for (int i = 0; i < 100 && r.rebaked.empty(); ++i) { r = sess.tick(); usleep(2000); }
+
+    std::set<PartId> got(r.rebaked.begin(), r.rebaked.end());
+    CHECK(got.count("leaf") && got.count("root"), "real write rebakes leaf + ancestor");
+    CHECK(f.roots.size() == 1 && f.roots[0] == "root", "real write re-flattens affected root");
+    std::remove(file.c_str()); rmdir(dir);
+}
 #endif
 
 int main() {
@@ -296,6 +322,7 @@ int main() {
     test_budget_abort_fail_closed();
 #ifdef __linux__
     test_real_inotify_temp_dir();
+    test_e2e_real_watch_to_rebuild();
 #endif
     if (g_failures) { std::printf("\n%d FAILURES\n", g_failures); return 1; }
     std::printf("\nALL PASS\n");
