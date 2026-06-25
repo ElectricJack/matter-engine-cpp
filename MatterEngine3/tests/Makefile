@@ -54,7 +54,7 @@ else
     LDLIBS = ../../Libraries/raylib/src/libraylib.a
 endif
 
-.PHONY: clean run-partv2 run-script run-graph run-graph-integration run-trivar run-shlib
+.PHONY: clean run-partv2 run-script run-graph run-graph-integration run-trivar run-shlib run-comp
 
 # Part Artifact v2 round-trip + resolved-hash + format-guard tests (headless, GL-free).
 # NEW impl ../src/part_asset_v2.cpp + consumed MatterSurfaceLib backend sources.
@@ -79,7 +79,7 @@ run-partv2: $(PARTV2_TARGET)
 	./$(PARTV2_TARGET)
 
 clean:
-	rm -f $(PARTV2_TARGET) $(SCRIPT_TARGET) $(GRAPH_TARGET) $(GRAPH_INT_TARGET) $(TRIVAR_TARGET) $(SHLIB_TARGET)
+	rm -f $(PARTV2_TARGET) $(SCRIPT_TARGET) $(GRAPH_TARGET) $(GRAPH_INT_TARGET) $(TRIVAR_TARGET) $(SHLIB_TARGET) $(COMP_TARGET)
 
 # Script host (QuickJS-ng) + DSL/CSG bake tests (headless, GL-free for the host;
 # the BLAS surface path links raylib like the part-asset tests). QuickJS-ng C
@@ -221,3 +221,29 @@ $(SHLIB_TARGET): $(SHLIB_CPP) $(SHLIB_C) $(QJS_C)
 
 run-shlib: $(SHLIB_TARGET)
 	./$(SHLIB_TARGET)
+
+# Composition-to-world (SP-4): LOD bake + flatten + sector grid + LOD select.
+# Headless, GL-free CPU steps. raylib linked only for MemAlloc/MemFree in the
+# Tri<->Mesh bridge. NEW impl ../src/*.cpp + consumed MatterSurfaceLib backend.
+# Includes SP-1's part_asset_v2.cpp for the save_v2/load_v2 LOD round-trip (Task 3);
+# material_registry.c via gcc to keep its extern "C" symbols unmangled.
+COMP_TARGET = composition_tests
+COMP_CPP = composition_tests.cpp ../src/lod_bake.cpp ../src/world_flatten.cpp \
+           ../src/sector_grid.cpp ../src/lod_select.cpp ../src/part_asset_v2.cpp \
+           ../../MatterSurfaceLib/src/mesh_simplifier.cpp \
+           ../../MatterSurfaceLib/src/blas_manager.cpp \
+           ../../MatterSurfaceLib/src/bvh.cpp \
+           ../../MatterSurfaceLib/src/tlas_manager.cpp \
+           ../../MatterSurfaceLib/src/part_asset.cpp \
+           ../../MatterSurfaceLib/src/vertex_ao.cpp \
+           ../../MatterSurfaceLib/src/occupancy.cpp
+COMP_C   = ../../MatterSurfaceLib/src/material_registry.c
+COMP_C_OBJ = material_registry.o
+
+$(COMP_TARGET): $(COMP_CPP) $(COMP_C)
+	gcc -c $(COMP_C) -O2 -DPLATFORM_DESKTOP $(INCLUDE_PATHS)
+	$(CC) $(COMP_CPP) $(COMP_C_OBJ) -o $(COMP_TARGET) $(CFLAGS) $(INCLUDE_PATHS) $(LDFLAGS) $(LDLIBS)
+	rm -f $(COMP_C_OBJ)
+
+run-comp: $(COMP_TARGET)
+	./$(COMP_TARGET)
