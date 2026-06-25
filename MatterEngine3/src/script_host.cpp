@@ -262,6 +262,17 @@ BakeResult ScriptHost::bake_source(const std::string& source,
             }
         }
 
+        // One scratch shared across all cells. The consumed mesher's marching-cubes
+        // pass leaves the per-vertex normal buffer (scratch->pool.normals) UNWRITTEN;
+        // compute_surface_normals_impl then reads the incoming (uninitialized) normal
+        // for any degenerate vertex (vertex on a particle center / no neighbor in the
+        // gradient search) before normalizing it. A fresh scratch per cell hands each
+        // cell a freshly realloc'd (garbage) buffer, so those degenerate reads vary
+        // run-to-run and the saved .part normals are nondeterministic. Sharing one
+        // scratch keeps the pool buffer stable across the (deterministic) cell
+        // sequence; we also clear it to a fixed pattern up front so the very first
+        // cell's degenerate reads are deterministic too. surface.c/cell.cpp are
+        // read-only, so this is the only lever available to make the bake byte-stable.
         SurfaceScratch* scratch = CreateSurfaceScratch();
         for (auto& kv : cells) {
             Cell* cell = kv.second.get();
@@ -291,7 +302,72 @@ BakeResult ScriptHost::bake_source(const std::string& source,
             // and place an identity instance in the TLAS.
             for (GroupMeshResult& g : res.groups) {
                 if (g.triangles.empty()) continue;
-                BLASHandle h = blas.register_triangles(g.triangles, g.triangle_normals);
+                // Determinism: Tri unions a float3 (12B) with an __m128 (16B), so
+                // each vertex slot has 4 padding bytes the mesher never writes.
+                // save_v2 serializes the entry's Tri bytes verbatim, so that stale
+                // stack garbage would make re-bakes byte-differ. Re-pack each Tri
+                // through a value-initialized copy (zeroed padding) before
+                // registering so the saved .part is byte-stable across bakes.
+                std::vector<Tri> norm(g.triangles.size());
+                for (size_t i = 0; i < g.triangles.size(); ++i) {
+                    Tri t;
+                    std::memset(&t, 0, sizeof(Tri));   // zero union padding too
+                    t.vertex0 = g.triangles[i].vertex0;
+                    t.vertex1 = g.triangles[i].vertex1;
+                    t.vertex2 = g.triangles[i].vertex2;
+                    t.centroid = g.triangles[i].centroid;
+                    norm[i] = t;
+                }
+                // TriEx is 16-byte aligned (float4 tint) with trailing padding
+                // bytes the mesher leaves uninitialized; re-pack through a
+                // memset-zeroed copy for the same byte-stability reason as Tri.
+                // (Value-init {} does not reliably zero trailing alignment
+                // padding for a class with default member initializers.)
+                //
+                // Per-vertex normals: keep the mesher's smooth (SDF-gradient) normals,
+                // which are deterministic given the single shared SurfaceScratch above
+                // (a fresh-per-cell scratch handed each cell a freshly realloc'd, and
+                // therefore garbage, normal buffer; the marching-cubes pass never
+                // writes that buffer and compute_surface_normals_impl reads the
+                // uninitialized value for degenerate vertices, which then varied
+                // run-to-run). As a robustness guard against any residual degenerate
+                // vertex whose normal comes back non-finite or non-unit, fall back to
+                // the deterministic geometric face normal derived from the (byte-
+                // identical) Tri vertices.
+                std::vector<TriEx> normEx(g.triangle_normals.size());
+                for (size_t i = 0; i < g.triangle_normals.size(); ++i) {
+                    TriEx e;
+                    std::memset(&e, 0, sizeof(TriEx));   // zero all bytes incl. padding
+                    const TriEx& s = g.triangle_normals[i];
+                    e.uv0=s.uv0; e.uv1=s.uv1; e.uv2=s.uv2;
+                    auto finite_unit = [](const float3& v){
+                        float l2 = v.x*v.x + v.y*v.y + v.z*v.z;
+                        return std::isfinite(l2) && l2 > 0.25f && l2 < 4.0f; // |v| in [0.5,2]
+                    };
+                    if (finite_unit(s.N0) && finite_unit(s.N1) && finite_unit(s.N2)) {
+                        e.N0=s.N0; e.N1=s.N1; e.N2=s.N2;
+                    } else {
+                        // Deterministic geometric face normal from the byte-identical Tri.
+                        const Tri& tr = norm[i];
+                        float ax=tr.vertex1.x-tr.vertex0.x, ay=tr.vertex1.y-tr.vertex0.y, az=tr.vertex1.z-tr.vertex0.z;
+                        float bx=tr.vertex2.x-tr.vertex0.x, by=tr.vertex2.y-tr.vertex0.y, bz=tr.vertex2.z-tr.vertex0.z;
+                        float nx=ay*bz-az*by, ny=az*bx-ax*bz, nz=ax*by-ay*bx;
+                        float nl=std::sqrt(nx*nx+ny*ny+nz*nz);
+                        if (nl>1e-12f) { nx/=nl; ny/=nl; nz/=nl; } else { nx=0; ny=0; nz=1; }
+                        float3 fn = make_float3(nx,ny,nz);
+                        e.N0=fn; e.N1=fn; e.N2=fn;
+                    }
+                    e.materialId=s.materialId;
+                    // tint/ao: derive deterministically rather than copy the mesher's
+                    // values. AO is not baked in SP-2 (default 1.0 = unoccluded), and
+                    // the authored per-material default tint (alpha 0 => use material
+                    // albedo) is used. This keeps the saved asset independent of the
+                    // mesher's per-triangle nearest-particle tint lookup.
+                    e.tint = make_float4(1.0f, 1.0f, 1.0f, 0.0f);
+                    e.ao0 = 1.0f; e.ao1 = 1.0f; e.ao2 = 1.0f;
+                    normEx[i]=e;
+                }
+                BLASHandle h = blas.register_triangles(norm, normEx);
                 if (h != INVALID_BLAS_HANDLE) {
                     tlas.load_identity();
                     tlas.draw(h, g.group_id);

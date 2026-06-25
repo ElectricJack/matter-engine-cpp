@@ -8,8 +8,15 @@ extern "C" {
 #include "../include/dsl_state.h"
 #include "../include/csg_lowering.h"
 #include <sys/stat.h>
+#include <vector>
 
 static bool file_exists(const std::string& p){ struct stat st; return stat(p.c_str(),&st)==0; }
+
+static std::vector<uint8_t> read_all(const std::string& p){
+    std::vector<uint8_t> b; FILE* f=fopen(p.c_str(),"rb"); if(!f) return b;
+    fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET);
+    b.resize(n); if (fread(b.data(),1,n,f)!=(size_t)n) b.clear(); fclose(f); return b;
+}
 
 static int failures = 0;
 #define CHECK(cond, msg) do { if (!(cond)) { printf("FAIL: %s\n", msg); ++failures; } } while (0)
@@ -243,6 +250,40 @@ static void test_sub_min_box_feature_survives() {
     CHECK(!dsl::field_is_solid(s.buffer(), {1.0f,0,0}), "sub-min feature present in field");
 }
 
+static void test_determinism_identical_bytes() {
+    const char* src =
+        "class Ball extends Part { static params={r:1.0};\n"
+        "  build(p){ this.beginVoxels(0.25); this.fill(MAT.stone); this.sphere([0,0,0],p.r); this.endVoxels(); }\n"
+        "}\n";
+    script_host::ScriptHost h1; auto r1 = h1.bake_source(src, "{}", {});
+    std::vector<uint8_t> b1 = read_all(r1.written_path);
+    script_host::ScriptHost h2; auto r2 = h2.bake_source(src, "{}", {});
+    std::vector<uint8_t> b2 = read_all(r2.written_path);
+    CHECK(r1.error.ok && r2.error.ok, "both bakes succeed");
+    CHECK(r1.resolved_hash == r2.resolved_hash, "same source+params => same resolved_hash");
+    CHECK(!b1.empty() && b1 == b2, "re-bake produces byte-identical .part");
+}
+
+static void test_fresh_context_no_residue() {
+    const char* A =
+        "class A extends Part { static params={};\n"
+        "  build(p){ this.beginVoxels(0.25); this.fill(MAT.dirt); this.box([0,0,0],[1,1,1]); this.endVoxels(); }\n"
+        "}\n";
+    const char* B =
+        "class B extends Part { static params={};\n"
+        "  build(p){ this.beginVoxels(0.25); this.fill(MAT.stone); this.sphere([0,0,0],1.0); this.endVoxels(); }\n"
+        "}\n";
+    script_host::ScriptHost h;
+    h.bake_source(A, "{}", {});                  // bake A first (residue test)
+    auto bAfterA = h.bake_source(B, "{}", {});
+    script_host::ScriptHost hClean;
+    auto bAlone = hClean.bake_source(B, "{}", {});
+    CHECK(bAfterA.error.ok && bAlone.error.ok, "both B bakes ok");
+    CHECK(bAfterA.resolved_hash == bAlone.resolved_hash, "B hash independent of prior A bake");
+    CHECK(read_all(bAfterA.written_path) == read_all(bAlone.written_path),
+          "B bytes identical whether or not A ran first (fresh context, no residue)");
+}
+
 int main() {
     test_embed_eval_1_plus_1();
     test_fresh_context_runs_empty_class();
@@ -256,6 +297,8 @@ int main() {
     test_bake_writes_part();
     test_sharp_vs_smooth_seam();
     test_sub_min_box_feature_survives();
+    test_determinism_identical_bytes();
+    test_fresh_context_no_residue();
     if (failures == 0) printf("ALL PASS\n");
     return failures ? 1 : 0;
 }

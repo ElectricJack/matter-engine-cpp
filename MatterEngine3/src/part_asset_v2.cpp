@@ -93,14 +93,35 @@ bool save_v2(const std::string& path, const BLASManager& blas,
         handle_to_index[e->handle] = i;
         const uint32_t tri_count  = static_cast<uint32_t>(e->mesh->triCount);
         const uint32_t nodes_used = e->bvh->nodesUsed;
-        const uint32_t has_triex  = e->mesh->triEx ? 1u : 0u;
+        const TriEx* triex_src = (!e->tri_extra.empty() && e->tri_extra.size() == tri_count)
+                                     ? e->tri_extra.data() : e->mesh->triEx;
+        const uint32_t has_triex  = triex_src ? 1u : 0u;
         put<uint32_t>(body, e->hash);
         put<uint32_t>(body, e->ref_count);
         put<uint32_t>(body, tri_count);
         put<uint32_t>(body, nodes_used);
         put<uint32_t>(body, has_triex);
         put_bytes(body, e->triangles.data(), tri_count * sizeof(Tri));
-        if (has_triex) put_bytes(body, e->mesh->triEx, tri_count * sizeof(TriEx));
+        if (has_triex) {
+            // Serialize TriEx through a staging copy whose trailing alignment
+            // padding (the 4 bytes after ao2, since sizeof(TriEx)==96 but the named
+            // members end at 92) is explicitly zeroed. TriEx is trivially copyable,
+            // but the engine fills mesh->triEx via element-wise copy assignment into
+            // a MALLOC64 buffer; in practice the compiler may copy only the named
+            // members and leave those padding bytes as allocator garbage. Writing
+            // them verbatim made otherwise-identical bakes byte-differ and broke the
+            // content-addressed cache (the resolved-hash path re-bakes and expects
+            // identical bytes). Zeroing the padding here normalizes that without
+            // touching the read-only mesher. Tri has no such gap in its serialized
+            // form, so it is written directly above.
+            constexpr size_t kTriExPad = 92; // bytes occupied by named members
+            for (uint32_t t = 0; t < tri_count; ++t) {
+                TriEx staged;
+                std::memset(&staged, 0, sizeof(TriEx));
+                std::memcpy(&staged, &triex_src[t], kTriExPad);
+                put_bytes(body, &staged, sizeof(TriEx));
+            }
+        }
         put_bytes(body, e->bvh->bvhNode, nodes_used * sizeof(BVHNode));
         put_bytes(body, e->bvh->triIdx,  tri_count  * sizeof(uint));
     }
