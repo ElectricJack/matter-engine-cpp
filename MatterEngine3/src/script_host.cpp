@@ -2,9 +2,24 @@
 extern "C" {
 #include "quickjs.h"
 }
+#include "part_base.js.h"
 #include <cstring>
+#include <regex>
 
 namespace script_host {
+
+// Extract the authored class name from `class <Name> extends Part`. Top-level
+// `class` declarations in GLOBAL eval create LEXICAL bindings (not enumerable
+// globalThis properties), so the host cannot discover them by scanning the
+// global object. Instead the host appends a trampoline that assigns the named
+// class to globalThis.__partClass; this is generic over the class name (no
+// hardcoded "Empty"/"Rock") and deterministic.
+static std::string find_part_class_name(const std::string& source) {
+    std::smatch m;
+    std::regex re("class\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s+extends\\s+Part\\b");
+    if (std::regex_search(source, m, re)) return m[1].str();
+    return std::string();
+}
 
 // Pulls the current exception into a BakeError (best-effort location).
 static BakeError harvest_exception(JSContext* ctx) {
@@ -32,24 +47,45 @@ BakeResult ScriptHost::bake_source(const std::string& source,
     JSRuntime* rt = JS_NewRuntime();
     JSContext* ctx = JS_NewContext(rt);
 
-    // Minimal Part base so `extends Part` resolves (replaced in Task 4).
-    static const char* kBootstrap = "globalThis.Part = class Part { build(p){} };\n";
-    JSValue b = JS_Eval(ctx, kBootstrap, strlen(kBootstrap), "<bootstrap>",
-                        JS_EVAL_TYPE_GLOBAL);
-    if (JS_IsException(b)) { r.error = harvest_exception(ctx); JS_FreeValue(ctx,b); goto done; }
-    JS_FreeValue(ctx, b);
+    last_build_ran_ = false;
+    JSValue base = JS_Eval(ctx, kPartBaseJS, strlen(kPartBaseJS), "<part-base>",
+                           JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(base)) { r.error = harvest_exception(ctx); JS_FreeValue(ctx,base); goto done; }
+    JS_FreeValue(ctx, base);
 
     {
-        // Eval the user source as a module-less global script, then find the
-        // class. For SP-2 we wrap: source defines a class; we instantiate the
-        // LAST defined global class via a trampoline appended to the source.
-        std::string wrapped = source +
-            "\n;globalThis.__partClass = (typeof Empty!=='undefined')?Empty:undefined;";
-        JSValue v = JS_Eval(ctx, wrapped.c_str(), wrapped.size(), "<part>",
-                            JS_EVAL_TYPE_GLOBAL);
+        // Eval user source + a generic trampoline that publishes the authored
+        // class (lexically declared) onto globalThis.__partClass.
+        std::string className = find_part_class_name(source);
+        if (className.empty()) {
+            r.error.ok = false; r.error.message = "no class extending Part found";
+            goto done;
+        }
+        std::string wrapped = source + "\n;globalThis.__partClass = " + className + ";\n";
+        JSValue v = JS_Eval(ctx, wrapped.c_str(), wrapped.size(), "<part>", JS_EVAL_TYPE_GLOBAL);
         if (JS_IsException(v)) { r.error = harvest_exception(ctx); JS_FreeValue(ctx,v); goto done; }
         JS_FreeValue(ctx, v);
-        // (Class discovery + build(p) call generalized in Task 3.)
+
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue authored = JS_GetPropertyStr(ctx, global, "__partClass");
+        JS_FreeValue(ctx, global);
+        if (!JS_IsFunction(ctx, authored)) {
+            JS_FreeValue(ctx, authored);
+            r.error.ok = false; r.error.message = "no class extending Part found";
+            goto done;
+        }
+        JSValue inst = JS_CallConstructor(ctx, authored, 0, nullptr);
+        JS_FreeValue(ctx, authored);
+        if (JS_IsException(inst)) { r.error = harvest_exception(ctx); JS_FreeValue(ctx,inst); goto done; }
+        JSValue paramsObj = JS_NewObject(ctx);  // merged params arrive in Task 5
+        JSAtom buildAtom = JS_NewAtom(ctx, "build");
+        JSValue bret = JS_Invoke(ctx, inst, buildAtom, 1, &paramsObj);
+        JS_FreeAtom(ctx, buildAtom);
+        last_build_ran_ = !JS_IsException(bret);
+        if (JS_IsException(bret)) r.error = harvest_exception(ctx);
+        JS_FreeValue(ctx, bret);
+        JS_FreeValue(ctx, paramsObj);
+        JS_FreeValue(ctx, inst);
     }
 
 done:

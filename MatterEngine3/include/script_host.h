@@ -40,9 +40,11 @@ public:
                            size_t child_count = 0);
 
     std::string last_merged_params() const { return last_merged_params_; }
+    bool last_build_ran() const { return last_build_ran_; }
 
 private:
     std::string last_merged_params_;
+    bool last_build_ran_ = false;
 };
 
 } // namespace script_host

@@ -35,9 +35,22 @@ static void test_fresh_context_runs_empty_class() {
     CHECK(r.error.ok, "empty class bakes without error");
 }
 
+static void test_build_called_on_authored_class() {
+    script_host::ScriptHost host;
+    const char* src =
+        "class Rock extends Part {\n"
+        "  static params = {};\n"
+        "  build(p) { globalThis.__built = 1; }\n"
+        "}\n";
+    script_host::BakeResult r = host.bake_source(src, "{}", {});
+    CHECK(r.error.ok, "authored class bakes");
+    CHECK(host.last_build_ran(), "build(p) was invoked");
+}
+
 int main() {
     test_embed_eval_1_plus_1();
     test_fresh_context_runs_empty_class();
+    test_build_called_on_authored_class();
     if (failures == 0) printf("ALL PASS\n");
     return failures ? 1 : 0;
 }
