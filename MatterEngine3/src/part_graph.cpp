@@ -37,11 +37,107 @@ std::string serialize_params(const Params& params) {
 PartGraph::PartGraph(ModuleResolver& resolver, Baker& baker)
     : resolver_(resolver), baker_(baker) {}
 
-InstallResult PartGraph::install(const std::vector<ChildRequest>&) {
-    InstallResult r;
-    r.ok = false;
-    r.error = "not implemented";   // Task 4+ implements resolve/topo/bake
-    return r;
+namespace {
+
+struct InternalNode {
+    uint64_t              memo_key = 0;       // fnv1a64(source) folded with canonical params
+    uint64_t              resolved_hash = 0;
+    std::string           module;
+    std::string           source;
+    Params                params;
+    std::vector<uint64_t> child_hashes;       // direct children (for SP-1 fold, sorted)
+    std::vector<uint64_t> child_keys;         // direct children memo keys (topo edges)
+};
+
+// Memo key = fnv1a64(source) combined with fnv1a64(canonical_params). Identity is the
+// SOURCE HASH (not the path), per the planning decision, so a renamed identical script
+// is one node.
+uint64_t memo_key_of(const std::string& source, const std::string& canon_params) {
+    uint64_t sh = part_asset::fnv1a64(source.data(), source.size());
+    uint64_t ph = part_asset::fnv1a64(canon_params.data(), canon_params.size());
+    // fold (order matters: distinct (source,params) => distinct key)
+    return part_asset::fnv1a64(&sh, sizeof sh) ^
+           (part_asset::fnv1a64(&ph, sizeof ph) * 1099511628211ull);
+}
+
+} // namespace
+
+InstallResult PartGraph::install(const std::vector<ChildRequest>& roots) {
+    InstallResult result;
+    std::unordered_map<uint64_t, InternalNode> memo;   // memo_key -> node
+    std::string error;
+
+    // Recursive resolve. Returns memo_key (0 sentinel cannot collide in practice; we
+    // also carry a success flag out-of-band via `error`).
+    std::function<bool(const ChildRequest&, uint64_t&)> resolve =
+        [&](const ChildRequest& req, uint64_t& out_key) -> bool {
+            std::string source;
+            if (!resolver_.load_source(req.module, source)) {
+                error = "missing requires target: " + req.module;
+                return false;
+            }
+            std::string canon = serialize_params(req.params);
+            uint64_t key = memo_key_of(source, canon);
+            auto it = memo.find(key);
+            if (it != memo.end()) { out_key = key; return true; }   // memoized
+
+            std::vector<ChildRequest> kids;
+            if (!resolver_.get_requires(req.module, req.params, kids)) {
+                error = "module failed to evaluate requires: " + req.module;
+                return false;
+            }
+
+            std::vector<uint64_t> child_keys;
+            std::vector<uint64_t> child_hashes;
+            child_keys.reserve(kids.size());
+            child_hashes.reserve(kids.size());
+            for (const auto& kid : kids) {
+                uint64_t ck = 0;
+                if (!resolve(kid, ck)) return false;     // leaves-first recursion
+                child_keys.push_back(ck);
+                child_hashes.push_back(memo.at(ck).resolved_hash);
+            }
+
+            InternalNode node;
+            node.memo_key      = key;
+            node.module        = req.module;
+            node.source        = source;
+            node.params        = req.params;
+            node.child_keys    = child_keys;
+            node.child_hashes  = child_hashes;   // SP-1 sorts internally; ok unsorted here
+            // Hash authority is SP-2 (master C-2): ask the baker, never compute here.
+            // The host merges static+override params before folding, so it sees defaults
+            // SP-3 cannot. 0 => resolve failure (fail-closed).
+            node.resolved_hash = baker_.resolve_hash(source, req.params, child_hashes);
+            if (node.resolved_hash == 0) {
+                error = "failed to resolve hash for part: " + req.module;
+                return false;
+            }
+            memo.emplace(key, std::move(node));
+            out_key = key;
+            return true;
+        };
+
+    std::vector<uint64_t> root_keys;
+    for (const auto& r : roots) {
+        uint64_t k = 0;
+        if (!resolve(r, k)) { result.error = error; return result; }
+        root_keys.push_back(k);
+    }
+
+    // Minimal bake: for Task 4 just bake every resolved node whose hash is a cache miss.
+    // (Topo order is enforced in Task 6; here single-leaf graphs already satisfy it.)
+    for (const auto& kv : memo) {
+        const InternalNode& n = kv.second;
+        if (baker_.cached(n.resolved_hash)) { ++result.hits; continue; }
+        if (!baker_.bake(n.source, n.params, n.child_hashes, n.resolved_hash)) {
+            result.error = "bake failed for part: " + n.module;
+            return result;
+        }
+        result.baked.push_back(n.resolved_hash);
+    }
+    result.ok = true;
+    return result;
 }
 
 } // namespace part_graph
