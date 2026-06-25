@@ -2,9 +2,12 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace part_graph {
 
+// A param value the canonical serializer understands. Kept tiny on purpose (YAGNI):
+// scripts pass numbers/bools/strings; nested objects are out of scope for SP-3 v1.
 struct ParamValue {
     enum class Kind { Number, Bool, Str } kind = Kind::Number;
     double      num = 0.0;
@@ -14,8 +17,86 @@ struct ParamValue {
     static ParamValue boolean_(bool v) { ParamValue p; p.kind = Kind::Bool; p.boolean = v; return p; }
     static ParamValue string_(std::string v) { ParamValue p; p.kind = Kind::Str; p.str = std::move(v); return p; }
 };
-using Params = std::map<std::string, ParamValue>;
+using Params = std::map<std::string, ParamValue>;  // std::map => keys already sorted
 
+// One requested instantiation of a child module by a parent.
+struct ChildRequest {
+    std::string module;   // child module name (looked up via ModuleResolver)
+    Params      params;   // effective params the parent passes to the child
+};
+
+// Seam: how SP-3 reads a module's source + its `static requires` WITHOUT calling build().
+// Real impl (Task 12) evaluates the module top level via the SP-2 ScriptHost; tests use a fake.
+struct ModuleResolver {
+    virtual ~ModuleResolver() = default;
+    // Returns false if the module name is unknown (=> install hard-errors).
+    virtual bool load_source(const std::string& module, std::string& source_out) = 0;
+    // `requires` evaluated against `params`. Returns the child instantiations.
+    // false => module failed to evaluate (=> hard error).
+    virtual bool get_requires(const std::string& module, const Params& params,
+                              std::vector<ChildRequest>& children_out) = 0;
+};
+
+// Seam: how SP-3 bakes one part. Real impl (Task 12) delegates to SP-2 ScriptHost
+// (resolve_hash + bake_source -> save_v2); tests use a fake that records bake order
+// and can be told to fail.
+//
+// HASH AUTHORITY (master C-2): SP-3 does NOT compute a part's resolved_hash itself,
+// because the hash folds the MERGED params (class `static params` defaults overlaid
+// with overrides) and only the host (SP-2) can read those defaults. SP-3 obtains the
+// hash through this seam's resolve_hash and memoizes it. The FakeBaker provides a
+// deterministic stand-in fold so logic tests stay host-free.
+struct Baker {
+    virtual ~Baker() = default;
+    // Content hash for one part: merge static+override params, fold child_hashes,
+    // NO bake. Returns 0 on resolve failure (fail-closed => install hard-errors).
+    virtual uint64_t resolve_hash(const std::string& source, const Params& params,
+                                  const std::vector<uint64_t>& child_hashes) = 0;
+    // True if parts/<resolved_hash>.part already exists (cache hit => skip bake).
+    virtual bool cached(uint64_t resolved_hash) = 0;
+    // Bake one part. child_hashes are this part's direct children's resolved hashes
+    // (already baked, present in cache). Returns false on bake failure (fail-closed).
+    // Implementations bake to cache_path_resolved(resolved_hash); resolved_hash is the value
+    // resolve_hash returned for the same inputs (host recomputes it identically).
+    virtual bool bake(const std::string& source, const Params& params,
+                      const std::vector<uint64_t>& child_hashes, uint64_t resolved_hash) = 0;
+};
+
+// Canonical params string (sorted keys, %.17g numbers). Public for unit testing.
 std::string serialize_params(const Params& params);
+
+// Resolved node in the graph (one per unique (source_hash, canonical_params)).
+struct ResolvedNode {
+    uint64_t              resolved_hash = 0;
+    std::string           module;        // representative module name (for diagnostics)
+    std::string           source;        // module source bytes
+    Params                params;        // effective params
+    std::vector<uint64_t> child_hashes;  // direct children's resolved hashes (sorted by SP-1)
+    std::vector<uint64_t> child_keys;    // direct children's memo keys (for topo edges)
+};
+
+struct InstallResult {
+    bool                     ok = false;
+    std::string              error;       // human-readable; names the offending part on failure
+    std::vector<uint64_t>    baked;       // resolved hashes baked this run (cache misses)
+    int                      hits = 0;    // parts skipped because already cached
+};
+
+class PartGraph {
+public:
+    PartGraph(ModuleResolver& resolver, Baker& baker);
+
+    // Resolve + topo-sort + bake the reachable graph for the given roots.
+    InstallResult install(const std::vector<ChildRequest>& roots);
+
+    // Parse WorldData/<world>/world.manifest into root ChildRequests (each root has
+    // empty params unless the manifest carries them; v1: roots take their `static params`
+    // defaults, supplied as empty Params here). Returns false + error on missing manifest.
+    static bool read_manifest(const std::string& world_data_dir, const std::string& world,
+                              std::vector<ChildRequest>& roots_out, std::string& error_out);
+private:
+    ModuleResolver& resolver_;
+    Baker&          baker_;
+};
 
 } // namespace part_graph
