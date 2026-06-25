@@ -54,7 +54,7 @@ else
     LDLIBS = ../../Libraries/raylib/src/libraylib.a
 endif
 
-.PHONY: clean run-partv2 run-script
+.PHONY: clean run-partv2 run-script run-graph
 
 # Part Artifact v2 round-trip + resolved-hash + format-guard tests (headless, GL-free).
 # NEW impl ../src/part_asset_v2.cpp + consumed MatterSurfaceLib backend sources.
@@ -79,7 +79,7 @@ run-partv2: $(PARTV2_TARGET)
 	./$(PARTV2_TARGET)
 
 clean:
-	rm -f $(PARTV2_TARGET) $(SCRIPT_TARGET)
+	rm -f $(PARTV2_TARGET) $(SCRIPT_TARGET) $(GRAPH_TARGET)
 
 # Script host (QuickJS-ng) + DSL/CSG bake tests (headless, GL-free for the host;
 # the BLAS surface path links raylib like the part-asset tests). QuickJS-ng C
@@ -117,3 +117,24 @@ $(SCRIPT_TARGET): $(SCRIPT_CPP) $(SCRIPT_C) $(QJS_C)
 
 run-script: $(SCRIPT_TARGET)
 	./$(SCRIPT_TARGET)
+
+# Part graph resolve/dedup/topo/cycle/reachability/cache-miss tests (headless, GL-free).
+# NEW MatterEngine3 sources ../src/<new>.cpp + consumed MatterSurfaceLib backend.
+GRAPH_TARGET = part_graph_tests
+GRAPH_SOURCES = part_graph_tests.cpp ../src/part_graph.cpp ../src/part_asset_v2.cpp \
+                ../../MatterSurfaceLib/src/part_asset.cpp \
+                ../../MatterSurfaceLib/src/blas_manager.cpp \
+                ../../MatterSurfaceLib/src/bvh.cpp \
+                ../../MatterSurfaceLib/src/tlas_manager.cpp \
+                ../../MatterSurfaceLib/src/vertex_ao.cpp \
+                ../../MatterSurfaceLib/src/occupancy.cpp
+GRAPH_C   = ../../MatterSurfaceLib/src/material_registry.c
+GRAPH_C_OBJ = material_registry.o
+
+$(GRAPH_TARGET): $(GRAPH_SOURCES) $(GRAPH_C)
+	gcc -c $(GRAPH_C) -O2 -DPLATFORM_DESKTOP $(INCLUDE_PATHS)
+	$(CC) $(GRAPH_SOURCES) $(GRAPH_C_OBJ) -o $(GRAPH_TARGET) $(CFLAGS) $(INCLUDE_PATHS) $(LDFLAGS) $(LDLIBS)
+	rm -f $(GRAPH_C_OBJ)
+
+run-graph: $(GRAPH_TARGET)
+	./$(GRAPH_TARGET)
