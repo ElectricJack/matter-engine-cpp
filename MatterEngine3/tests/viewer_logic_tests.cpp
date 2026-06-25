@@ -2,6 +2,7 @@
 // LocalProvider cache behavior). Run via `make run-viewer-logic`.
 #include "../viewer/world_source.h"
 #include "../viewer/sector_resolver.h"
+#include "../viewer/part_store.h"
 #include "lod_select.h"   // PartLodTable, PartLod
 
 #include <cstdio>
@@ -82,9 +83,16 @@ static void test_resolvers() {
     CHECK(far_max_lod >= near_lod, "sectorlod picks coarser-or-equal LOD from far camera");
 }
 
+static void test_part_store_missing() {
+    viewer::PartStore store("/tmp/me3_viewer_test_cache_empty");
+    CHECK(!store.has(0xDEADBEEFULL), "fresh store reports unknown hash as absent");
+    CHECK(store.loaded_count() == 0, "fresh store has nothing loaded");
+}
+
 int main() {
     test_world_state_delta();
     test_resolvers();
+    test_part_store_missing();
     printf("\n%s\n", g_failures == 0 ? "viewer-logic OK" : "viewer-logic FAILED");
     return g_failures == 0 ? 0 : 1;
 }

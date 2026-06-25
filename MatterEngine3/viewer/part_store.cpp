@@ -1,0 +1,94 @@
+#include "part_store.h"
+
+#include "part_asset_v2.h"     // load_v2, cache_path_resolved, ChildInstance, LodLevels
+#include "lod_bake.h"          // lod_bake::bake_lods, BakeTargets
+#include "tlas_manager.hpp"    // TLASManager (load_v2 signature needs one)
+
+#include <cmath>
+#include <cstdio>
+#include <sys/stat.h>
+
+namespace viewer {
+
+PartStore::PartStore(std::string cache_root) : cache_root_(std::move(cache_root)) {}
+
+std::string PartStore::disk_path(uint64_t part_hash) const {
+    // cache_path_resolved returns the RELATIVE "parts/<hash>.part"; prefix cache_root_.
+    return cache_root_ + "/" + part_asset::cache_path_resolved(part_hash);
+}
+
+bool PartStore::has(uint64_t part_hash) const {
+    if (loaded_.count(part_hash)) return true;
+    struct stat st;
+    return ::stat(disk_path(part_hash).c_str(), &st) == 0;
+}
+
+const LoadedPart* PartStore::get_or_load(uint64_t part_hash) {
+    auto cached = loaded_.find(part_hash);
+    if (cached != loaded_.end()) return &cached->second;
+    if (load_failed_.count(part_hash)) return nullptr;
+
+    const std::string path = disk_path(part_hash);
+
+    // load_v2 registers the full-resolution geometry into a SCRATCH BLASManager;
+    // we then re-bake LODs into the shared store BLASManager.
+    BLASManager scratch;
+    TLASManager scratch_tlas(256);
+    std::vector<part_asset::ChildInstance> children;
+    part_asset::LodLevels lods_in;   // .part stores LOD0 only (empty levels)
+    if (!part_asset::load_v2(path, part_hash, scratch, scratch_tlas, children, lods_in)) {
+        printf("PartStore: load_v2 failed for %016llx (%s)\n",
+               (unsigned long long)part_hash, path.c_str());
+        load_failed_[part_hash] = true;
+        return nullptr;
+    }
+
+    // Gather full-res triangles for lod_bake.
+    std::vector<Tri> tris;
+    for (const auto& e : scratch.get_entries())
+        tris.insert(tris.end(), e->triangles.begin(), e->triangles.end());
+
+    // Bound radius = half AABB diagonal (drives projected-size LOD math).
+    float mn[3] = {1e30f,1e30f,1e30f}, mx[3] = {-1e30f,-1e30f,-1e30f};
+    auto acc = [&](const float3& v){
+        mn[0]=std::fmin(mn[0],v.x); mx[0]=std::fmax(mx[0],v.x);
+        mn[1]=std::fmin(mn[1],v.y); mx[1]=std::fmax(mx[1],v.y);
+        mn[2]=std::fmin(mn[2],v.z); mx[2]=std::fmax(mx[2],v.z);
+    };
+    for (const auto& t : tris) { acc(t.vertex0); acc(t.vertex1); acc(t.vertex2); }
+    float radius = 0.0f;
+    if (!tris.empty()) {
+        float dx=mx[0]-mn[0], dy=mx[1]-mn[1], dz=mx[2]-mn[2];
+        radius = 0.5f * std::sqrt(dx*dx+dy*dy+dz*dz);
+    }
+
+    // Re-bake LODs into the SHARED store BLASManager. Map each level's local
+    // blas index to a global handle: get_entries()[before + local].
+    LoadedPart lp;
+    lp.bound_radius = radius;
+    const size_t before = blas_.get_entries().size();
+    lod_bake::LodLevels lods = lod_bake::bake_lods(tris, lod_bake::BakeTargets{}, blas_);
+    for (const auto& L : lods) {
+        lp.thresholds.push_back(L.screen_size_threshold);
+        size_t local = L.blas_indices[0];
+        // The handle for entry index (before + local).
+        lp.lod_blas.push_back(blas_.get_entries()[before + local]->handle);
+    }
+    if (lp.lod_blas.empty()) {
+        // No geometry (empty part) -> log; lookups will see an empty LOD list.
+        printf("PartStore: part %016llx produced no LOD geometry\n",
+               (unsigned long long)part_hash);
+    }
+
+    auto ins = loaded_.emplace(part_hash, std::move(lp));
+    return &ins.first->second;
+}
+
+lod_select::PartLodTable PartStore::part_lod_table() const {
+    lod_select::PartLodTable table;
+    for (const auto& kv : loaded_)
+        table[kv.first] = lod_select::PartLod{ kv.second.bound_radius, kv.second.thresholds };
+    return table;
+}
+
+} // namespace viewer
