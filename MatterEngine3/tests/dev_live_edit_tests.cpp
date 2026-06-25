@@ -71,10 +71,33 @@ static void test_upward_cone() {
     CHECK(cone.size() == 3, "cone is exactly 3 parts");
 }
 
+static void test_changed_parts_single_and_shared() {
+    std::printf("[test_changed_parts_single_and_shared]\n");
+    FakeGraph g;
+    g.file_to_parts["/w/ObjectSchemas/rock.js"] = {"rock"};        // single part
+    g.file_to_parts["/w/lib/noise.js"] = {"rock", "tree", "bush"}; // shared module
+    FakeWatcher w;
+    struct NB : Baker { BakeOutcome bake(const PartId&, const ResolvedHash&, long long) override { return {true,{}}; } } b;
+    struct NF : Flattener { BakeOutcome reflatten(const PartId&) override { return {true,{}}; } } f;
+    struct NS : ErrorSink { void report(const LiveEditError&) override {} } s;
+    LiveEditSession sess(w, g, b, f, s, LiveEditConfig{});
+
+    auto one = sess.changed_parts({"/w/ObjectSchemas/rock.js"});
+    CHECK(one.size() == 1 && one.count("rock"), "single-part file -> one part");
+
+    auto many = sess.changed_parts({"/w/lib/noise.js"});
+    CHECK(many.size() == 3 && many.count("rock") && many.count("tree") && many.count("bush"),
+          "shared module file -> all importers");
+
+    auto both = sess.changed_parts({"/w/ObjectSchemas/rock.js", "/w/lib/noise.js"});
+    CHECK(both.size() == 3, "union dedups overlapping importer (rock counted once)");
+}
+
 int main() {
     std::printf("=== dev_live_edit_tests ===\n");
     test_fake_watcher_roundtrip();
     test_upward_cone();
+    test_changed_parts_single_and_shared();
     if (g_failures) { std::printf("\n%d FAILURES\n", g_failures); return 1; }
     std::printf("\nALL PASS\n");
     return 0;

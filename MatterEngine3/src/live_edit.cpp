@@ -10,6 +10,13 @@ std::set<PartId> LiveEditSession::upward_cone(const std::vector<PartId>& changed
     return cone;
 }
 
+std::set<PartId> LiveEditSession::changed_parts(const std::set<std::string>& paths) const {
+    std::set<PartId> out;
+    for (const auto& path : paths)
+        for (const auto& p : g_.parts_for_file(path)) out.insert(p);
+    return out;
+}
+
 RebuildReport LiveEditSession::run_rebuild(const std::set<std::string>&) {
     return RebuildReport{}; // filled in Task 5
 }

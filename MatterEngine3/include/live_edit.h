@@ -41,6 +41,11 @@ public:
     // ancestors, returned as a set.
     std::set<PartId> upward_cone(const std::vector<PartId>& changed) const;
 
+    // Map a set of changed file paths to the directly-changed parts (SP-3
+    // reverse map). A shared-lib module fans out to all importers; duplicates
+    // across files are de-duplicated.
+    std::set<PartId> changed_parts(const std::set<std::string>& paths) const;
+
 private:
     FileWatcher&  w_;
     GraphResolver& g_;
