@@ -306,6 +306,7 @@ VIEWER_PIPELINE_CPP = $(filter-out example_world.cpp, $(EXAMPLE_CPP))
 #   ../viewer/world_composer.cpp ../viewer/local_provider.cpp
 VIEWER_LOGIC_CPP = viewer_logic_tests.cpp \
               ../viewer/world_state.cpp \
+              ../viewer/resolvers.cpp \
               $(VIEWER_PIPELINE_CPP)
 
 $(VIEWER_LOGIC_TARGET): $(VIEWER_LOGIC_CPP) $(EXAMPLE_C) $(QJS_C)

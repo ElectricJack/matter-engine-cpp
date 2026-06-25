@@ -1,0 +1,70 @@
+#include "sector_resolver.h"
+
+#include "world_flatten.h"     // world_flatten::FlatInstance
+#include <cmath>
+#include <cstring>
+
+namespace viewer {
+
+static ResolvedInstance to_resolved(const WorldManifestEntry& e, int lod) {
+    ResolvedInstance r;
+    r.part_hash = e.part_hash;
+    r.lod_level = lod;
+    std::memcpy(r.transform, e.transform, sizeof(r.transform));
+    return r;
+}
+
+std::vector<ResolvedInstance>
+PassThroughResolver::resolve(const WorldState& state,
+                             const lod_select::PartLodTable&, const float3&) {
+    std::vector<ResolvedInstance> out;
+    out.reserve(state.entries().size());
+    for (const auto& e : state.entries())
+        out.push_back(to_resolved(e, 0));
+    return out;
+}
+
+std::vector<ResolvedInstance>
+SectorLodResolver::resolve(const WorldState& state,
+                           const lod_select::PartLodTable& lods,
+                           const float3& cam_pos) {
+    // 1. Build FlatInstances so we can reuse SP-4 binning + lod-select verbatim.
+    std::vector<world_flatten::FlatInstance> flat;
+    flat.reserve(state.entries().size());
+    for (const auto& e : state.entries()) {
+        world_flatten::FlatInstance fi;
+        fi.resolved_hash = e.part_hash;
+        std::memcpy(fi.world.cell, e.transform, sizeof(fi.world.cell));  // mat4::cell[16]
+        flat.push_back(fi);
+    }
+
+    // 2. Bin into sectors and choose per-sector LOD for this camera.
+    sector_grid::SectorGrid grid(pitch_);
+    sector_grid::Sectors sectors = sector_grid::bin_instances(flat, grid);
+    auto chosen = lod_select::select_sector_lods(sectors, lods, cam_pos);
+
+    // 3. Emit instances only for sectors within the activation sphere.
+    std::vector<ResolvedInstance> out;
+    for (const auto& sk : sectors) {
+        const sector_grid::SectorCoord& c = sk.first;
+        float sx = (c.x + 0.5f) * pitch_;
+        float sy = (c.y + 0.5f) * pitch_;
+        float sz = (c.z + 0.5f) * pitch_;
+        float dx = sx - cam_pos.x, dy = sy - cam_pos.y, dz = sz - cam_pos.z;
+        if (std::sqrt(dx*dx + dy*dy + dz*dz) > active_radius_) continue;
+
+        const auto& lod_for_part = chosen[c];   // map<part_hash,int>
+        for (const auto& inst : sk.second) {
+            int lod = 0;
+            auto it = lod_for_part.find(inst.resolved_hash);
+            if (it != lod_for_part.end()) lod = it->second;
+            WorldManifestEntry tmp;
+            tmp.part_hash = inst.resolved_hash;
+            std::memcpy(tmp.transform, inst.world.cell, sizeof(tmp.transform));  // mat4::cell[16]
+            out.push_back(to_resolved(tmp, lod));
+        }
+    }
+    return out;
+}
+
+} // namespace viewer
