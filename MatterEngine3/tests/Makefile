@@ -93,7 +93,7 @@ QJS_OBJ  = quickjs.o libregexp.o libunicode.o cutils.o xsum.o
 
 SCRIPT_TARGET = script_host_tests
 SCRIPT_CPP = script_host_tests.cpp ../src/script_host.cpp ../src/dsl_state.cpp \
-             ../src/dsl_bindings.cpp \
+             ../src/dsl_bindings.cpp ../src/csg_lowering.cpp \
              ../src/part_asset_v2.cpp \
              ../../MatterSurfaceLib/src/part_asset.cpp \
              ../../MatterSurfaceLib/src/blas_manager.cpp \

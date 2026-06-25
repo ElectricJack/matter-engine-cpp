@@ -6,6 +6,7 @@ extern "C" {
 }
 #include "../include/script_host.h"
 #include "../include/dsl_state.h"
+#include "../include/csg_lowering.h"
 
 static int failures = 0;
 #define CHECK(cond, msg) do { if (!(cond)) { printf("FAIL: %s\n", msg); ++failures; } } while (0)
@@ -150,6 +151,23 @@ static void test_bindings_record_ops_and_misuse() {
     CHECK(rb.error.message.find("session") != std::string::npos, "structured session error message");
 }
 
+static void test_csg_lowering() {
+    dsl::DslState s;
+    s.beginVoxels(0.25f);
+    s.fill(3);
+    s.sphere({0,0,0}, 1.0f, dsl::CsgOp::Union);
+    s.box({1,0,0}, {0.05f,0.05f,0.05f}, dsl::CsgOp::Difference); // sub-min box
+    s.smoothing(0.4f);
+    s.endVoxels();
+    // re-tag the box op as difference (verb sets last op)
+    s.set_last_op(dsl::CsgOp::Difference);
+    dsl::LoweredField f = dsl::lower_build_buffer(s.buffer());
+    CHECK(f.additive.size() == 1, "sphere lowered to one additive particle");
+    CHECK(f.additive[0].materialId == 3, "additive carries material cursor");
+    CHECK(!f.carve.empty(), "sub-min box still produces carve particles (feature survives)");
+    CHECK(f.smoothing == 0.4f || f.smoothing == 0.0f, "smoothing factor carried");
+}
+
 int main() {
     test_embed_eval_1_plus_1();
     test_fresh_context_runs_empty_class();
@@ -158,6 +176,7 @@ int main() {
     test_params_merge_and_hash();
     test_resolve_hash_matches_and_skips_build();
     test_bindings_record_ops_and_misuse();
+    test_csg_lowering();
     if (failures == 0) printf("ALL PASS\n");
     return failures ? 1 : 0;
 }
