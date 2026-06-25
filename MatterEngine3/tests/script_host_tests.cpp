@@ -284,6 +284,31 @@ static void test_fresh_context_no_residue() {
           "B bytes identical whether or not A ran first (fresh context, no residue)");
 }
 
+static void test_seeded_rng_and_no_ambient() {
+    const char* src =
+        "class Noise extends Part { static params={seed:0};\n"
+        "  build(p){ this.beginVoxels(0.5); this.fill(0);\n"
+        "    for(let i=0;i<5;i++){ this.sphere([Math.random()*2,0,0], 0.5); } this.endVoxels(); }\n"
+        "}\n";
+    script_host::ScriptHost a; auto ra1 = a.bake_source(src, "{\"seed\":1}", {});
+    script_host::ScriptHost b; auto rb1 = b.bake_source(src, "{\"seed\":1}", {});
+    CHECK(ra1.resolved_hash == rb1.resolved_hash, "same seed => same resolved_hash");
+    CHECK(read_all(ra1.written_path) == read_all(rb1.written_path), "same seed => same bytes");
+    script_host::ScriptHost c; auto rc2 = c.bake_source(src, "{\"seed\":2}", {});
+    CHECK(read_all(ra1.written_path) != read_all(rc2.written_path), "different seed => different bytes");
+
+    // No ambient nondeterminism: Date/require/fetch must be undefined.
+    script_host::ScriptHost d;
+    const char* probe =
+        "class Probe extends Part { static params={};\n"
+        "  build(p){ globalThis.__amb = (typeof Date)+','+(typeof require)+','+(typeof fetch)+','+(typeof globalThis.os); }\n"
+        "}\n";
+    auto rp = d.bake_source(probe, "{}", {});
+    CHECK(rp.error.ok, "probe bakes");
+    CHECK(d.last_ambient_probe() == "undefined,undefined,undefined,undefined",
+          "no Date/require/fetch/os bindings present");
+}
+
 int main() {
     test_embed_eval_1_plus_1();
     test_fresh_context_runs_empty_class();
@@ -299,6 +324,7 @@ int main() {
     test_sub_min_box_feature_survives();
     test_determinism_identical_bytes();
     test_fresh_context_no_residue();
+    test_seeded_rng_and_no_ambient();
     if (failures == 0) printf("ALL PASS\n");
     return failures ? 1 : 0;
 }

@@ -21,6 +21,57 @@ extern "C" {
 
 namespace script_host {
 
+// Build a bake JSContext from a RAW context (no default intrinsics) and add ONLY
+// the deterministic subset the authoring DSL needs. Notably NO Date intrinsic, so
+// `typeof Date === "undefined"` inside a bake — there is no wall-clock source, and
+// (together with the seeded Math.random + the absence of any require/fetch/os
+// bindings) the bake is process-entropy-free. This is what keeps the resolved-hash
+// <-> serialized-bytes contract intact.
+static JSContext* new_bake_context(JSRuntime* rt) {
+    JSContext* ctx = JS_NewContextRaw(rt);
+    if (!ctx) return nullptr;
+    JS_AddIntrinsicBaseObjects(ctx);   // Object/Array/Math/String/Number/etc.
+    JS_AddIntrinsicEval(ctx);          // required: host evals the class source
+    JS_AddIntrinsicRegExpCompiler(ctx);
+    JS_AddIntrinsicRegExp(ctx);
+    JS_AddIntrinsicJSON(ctx);          // JS_ParseJSON / params merge
+    JS_AddIntrinsicMapSet(ctx);
+    JS_AddIntrinsicTypedArrays(ctx);
+    JS_AddIntrinsicBigInt(ctx);
+    // Intentionally omitted: JS_AddIntrinsicDate (ambient wall-clock), and we
+    // never bind require/fetch/os, so authored code has no entropy source.
+    return ctx;
+}
+
+// Derive a deterministic 64-bit seed from the merged canonical params JSON. If the
+// params contain a numeric "seed" field, honor it (so authors can pick a seed);
+// otherwise fold the whole canonical JSON via FNV-1a so distinct params still draw
+// distinct random streams. Either way the seed depends ONLY on the inputs.
+static uint64_t derive_seed(const std::string& merged_json) {
+    // Cheap, dependency-free scan for a top-level "seed": <number>. The merged
+    // JSON is canonical (sorted keys, no whitespace), so the literal needle holds.
+    const std::string needle = "\"seed\":";
+    size_t pos = merged_json.find(needle);
+    if (pos != std::string::npos) {
+        size_t i = pos + needle.size();
+        // Parse an integer (optionally negative) seed value.
+        bool neg = (i < merged_json.size() && merged_json[i] == '-');
+        if (neg) ++i;
+        bool any = false; unsigned long long v = 0;
+        for (; i < merged_json.size() && merged_json[i] >= '0' && merged_json[i] <= '9'; ++i) {
+            v = v * 10ull + (unsigned)(merged_json[i] - '0'); any = true;
+        }
+        if (any) {
+            uint64_t s = (uint64_t)v;
+            if (neg) s = (uint64_t)(-(int64_t)v);
+            // Mix the chosen seed with the full params so two parts that both pick
+            // seed:1 but differ elsewhere still diverge.
+            return s ^ part_asset::fnv1a64(merged_json.data(), merged_json.size());
+        }
+    }
+    return part_asset::fnv1a64(merged_json.data(), merged_json.size());
+}
+
 // Extract the authored class name from `class <Name> extends Part`. Top-level
 // `class` declarations in GLOBAL eval create LEXICAL bindings (not enumerable
 // globalThis properties), so the host cannot discover them by scanning the
@@ -66,7 +117,7 @@ std::string ScriptHost::merge_params_canonical(const std::string& source,
     }
 
     JSRuntime* rt = JS_NewRuntime();
-    JSContext* ctx = JS_NewContext(rt);
+    JSContext* ctx = new_bake_context(rt);
 
     JSValue base = JS_Eval(ctx, kPartBaseJS, strlen(kPartBaseJS), "<part-base>",
                            JS_EVAL_TYPE_GLOBAL);
@@ -156,14 +207,18 @@ BakeResult ScriptHost::bake_source(const std::string& source,
     const std::string merged = last_merged_params_;
 
     JSRuntime* rt = JS_NewRuntime();
-    JSContext* ctx = JS_NewContext(rt);
+    JSContext* ctx = new_bake_context(rt);
 
     // C++-owned authoring state for this bake; native DSL bindings mutate it.
     dsl::DslState state;
+    // Seed the deterministic RNG (bound to Math.random) from the merged params so
+    // the bake is reproducible and process-entropy-free.
+    state.set_rng(derive_seed(merged));
     JS_SetContextOpaque(ctx, &state);
 
     last_build_ran_ = false;
     last_buffer_.clear();
+    last_ambient_probe_.clear();
     {
     JSValue base = JS_Eval(ctx, kPartBaseJS, strlen(kPartBaseJS), "<part-base>",
                            JS_EVAL_TYPE_GLOBAL);
@@ -205,6 +260,17 @@ BakeResult ScriptHost::bake_source(const std::string& source,
         JS_FreeValue(ctx, bret);
         JS_FreeValue(ctx, paramsObj);
         JS_FreeValue(ctx, inst);
+
+        // Capture globalThis.__amb (a probe authored code may set) so tests can
+        // assert the bake context exposes no ambient Date/require/fetch/os bindings.
+        JSValue g2 = JS_GetGlobalObject(ctx);
+        JSValue amb = JS_GetPropertyStr(ctx, g2, "__amb");
+        if (JS_IsString(amb)) {
+            const char* s = JS_ToCString(ctx, amb);
+            if (s) { last_ambient_probe_ = s; JS_FreeCString(ctx, s); }
+        }
+        JS_FreeValue(ctx, amb);
+        JS_FreeValue(ctx, g2);
     }
     } // close DslState-scope block
 

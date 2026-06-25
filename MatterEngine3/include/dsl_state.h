@@ -1,6 +1,8 @@
 #pragma once
 #include "raylib.h"   // Vector3, Matrix, Vector4
+#include "dsl_rng.h"
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -70,6 +72,12 @@ public:
 
     const BuildBuffer& buffer() const { return buffer_; }
 
+    // Seeded RNG cursor. The host installs a seeded Rng (derived from the part's
+    // params) before build(); the bound Math.random() draws from it. Deterministic
+    // and process-entropy-free so bakes are reproducible.
+    void set_rng(uint64_t seed) { rng_ = std::make_unique<Rng>(seed); }
+    Rng* rng() { return rng_.get(); }
+
     // Structured error sink (fail-closed). First error wins.
     bool has_error() const { return has_error_; }
     const std::string& error() const { return error_; }
@@ -85,6 +93,7 @@ private:
     BuildBuffer buffer_;
     bool        has_error_ = false;
     std::string error_;
+    std::unique_ptr<Rng> rng_;    // seeded by the host before build()
 };
 
 } // namespace dsl
