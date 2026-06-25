@@ -223,6 +223,51 @@ int main() {
         CHECK(baker.bake_order.empty(), "nothing baked when a cycle is present");
     }
 
+    // Task 9: reachability (orphans never baked).
+    {
+        FakeModuleResolver res;
+        res.modules["Leaf"]   = FakeModule{ "src-Leaf", nullptr, false };
+        res.modules["Orphan"] = FakeModule{ "src-Orphan", nullptr, false };  // not in graph
+        res.modules["Root"]   = FakeModule{ "src-Root",
+            [](const Params&){ return std::vector<ChildRequest>{ ChildRequest{"Leaf", Params{}} }; }, false };
+        FakeBaker baker;
+        PartGraph g(res, baker);
+        InstallResult r = g.install({ ChildRequest{"Root", Params{}} });
+        CHECK(r.ok && r.baked.size() == 2, "only Root+Leaf baked");
+        // Orphan's hash must never appear in bake_order. Compute it the same way the
+        // graph would and assert absence.
+        uint64_t orphan_hash = part_asset::compute_resolved_hash(
+            "src-Orphan", 10, "", 0, nullptr, 0);
+        bool found = false;
+        for (uint64_t h : baker.bake_order) if (h == orphan_hash) found = true;
+        CHECK(!found, "orphan part is never baked");
+    }
+
+    // Task 9: transitive invalidation (edit leaf => leaf + ancestor rebake; sibling stays a hit).
+    {
+        // Root -> {Edited(Leaf), Stable}. First install bakes 3. Then "edit" Leaf's
+        // source; re-resolve: Leaf + Root miss, Stable hits.
+        FakeModuleResolver res;
+        res.modules["Leaf"]   = FakeModule{ "leaf-v1", nullptr, false };
+        res.modules["Stable"] = FakeModule{ "stable-v1", nullptr, false };
+        res.modules["Root"]   = FakeModule{ "root-v1",
+            [](const Params&){ return std::vector<ChildRequest>{
+                ChildRequest{"Leaf", Params{}}, ChildRequest{"Stable", Params{}} }; }, false };
+        FakeBaker baker;
+        PartGraph g(res, baker);
+
+        InstallResult r1 = g.install({ ChildRequest{"Root", Params{}} });
+        CHECK(r1.ok && r1.baked.size() == 3, "initial install bakes 3");
+
+        // Edit the leaf source. Stable + Root-edge unchanged, but Root folds Leaf's hash,
+        // so Root's resolved hash changes too -> Root + Leaf miss; Stable still cached.
+        res.modules["Leaf"].source = "leaf-v2";
+        InstallResult r2 = g.install({ ChildRequest{"Root", Params{}} });
+        CHECK(r2.ok, "post-edit install ok");
+        CHECK(r2.baked.size() == 2, "edited leaf + ancestor root rebake");
+        CHECK(r2.hits == 1, "unrelated Stable branch stays a cache hit");
+    }
+
     if (failures == 0) printf("All part_graph tests passed\n");
     return failures == 0 ? 0 : 1;
 }
