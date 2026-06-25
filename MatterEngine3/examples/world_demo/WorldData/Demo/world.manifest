@@ -1,0 +1,6 @@
+# Demo world root parts (one module name per line; '#' starts a comment).
+# The driver installs (bakes) each, then composes them into a world by
+# scattering instances across a terrain grid in C++.
+Terrain
+Tree
+Grass
