@@ -47,7 +47,16 @@ static void test_resolved_hash() {
     CHECK(h7 != h1, "zero children differs from three children");
 }
 
+static void test_cache_path_resolved() {
+    using namespace part_asset;
+    CHECK(cache_path_resolved(0x1ull) == "parts/0000000000000001.part",
+          "cache_path_resolved zero-padded hex");
+    CHECK(cache_path_resolved(0xDEADBEEFCAFEBABEull) == "parts/deadbeefcafebabe.part",
+          "cache_path_resolved full-width hex");
+}
+
 int main() {
+    test_cache_path_resolved();
     test_resolved_hash();
     if (failures == 0) printf("All part_asset_v2 tests passed\n");
     return failures == 0 ? 0 : 1;

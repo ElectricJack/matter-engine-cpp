@@ -28,4 +28,11 @@ uint64_t compute_resolved_hash(const void* source_bytes, size_t source_len,
     return h;
 }
 
+std::string cache_path_resolved(uint64_t resolved_hash) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%016llx",
+                  static_cast<unsigned long long>(resolved_hash));
+    return std::string("parts/") + buf + ".part";
+}
+
 } // namespace part_asset
