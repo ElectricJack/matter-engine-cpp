@@ -1,6 +1,7 @@
 // SP-4 Composition-to-world tests: LOD bake, world flatten, sector grid, LOD select.
 // Harness convention mirrors MatterSurfaceLib/tests/part_asset_tests.cpp.
 #include "../include/lod_bake.h"
+#include "../include/world_flatten.h"
 #include "../include/part_asset_v2.h"
 #include "../../MatterSurfaceLib/include/blas_manager.hpp"
 #include "../../MatterSurfaceLib/include/tlas_manager.hpp"
@@ -90,11 +91,39 @@ static void test_lod_roundtrip_degenerate() {
     CHECK(out.empty(), "empty lods round-trip");
 }
 
+// Identity-ish translate matrix, row-major float[16].
+static void set_translate(float m[16], float x, float y, float z) {
+    for (int i=0;i<16;++i) m[i]=0; m[0]=m[5]=m[10]=m[15]=1; m[3]=x; m[7]=y; m[11]=z;
+}
+
+static void test_flatten_n_times_m() {
+    using namespace world_flatten;
+    // root=1, mid=2 (the N children part), leaf=3 (the M grandchildren part).
+    PartGraph g;
+    ChildInstance c;
+    for (int i = 0; i < 2; ++i) { c.child_resolved_hash = 2; set_translate(c.transform, (float)(i*100),0,0); g[1].push_back(c); }
+    for (int j = 0; j < 3; ++j) { c.child_resolved_hash = 3; set_translate(c.transform, 0,(float)(j*10),0); g[2].push_back(c); }
+    g[3];   // leaf part: present, no children
+
+    FlattenLimits lim; lim.max_depth = 8; lim.max_instances = 100;
+    std::vector<FlatInstance> flat;
+    std::string err;
+    bool ok = flatten(g, /*root=*/1, lim, flat, err);
+    CHECK(ok, "flatten ok");
+    CHECK(flat.size() == 2*3, "N*M = 6 leaf instances");
+    bool found = false;
+    for (auto& f : flat) {
+        if (f.resolved_hash == 3 && f.world.cell[3]==100 && f.world.cell[7]==20 && f.world.cell[11]==0) found = true;
+    }
+    CHECK(found, "composed translate (100,20,0) present");
+}
+
 int main() {
     test_decimate_one_level();
     test_bake_three_levels();
     test_lod_roundtrip_v2();
     test_lod_roundtrip_degenerate();
+    test_flatten_n_times_m();
     printf(failures ? "FAILED (%d)\n" : "OK\n", failures);
     return failures ? 1 : 0;
 }
