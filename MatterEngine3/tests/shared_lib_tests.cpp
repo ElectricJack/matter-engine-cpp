@@ -1,12 +1,31 @@
 #include "../include/module_resolver.h"
+#include "../include/part_asset_v2.h"
 #include <cassert>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <algorithm>
 
 static int failures = 0;
 #define CHECK(cond, msg) do { if (!(cond)) { printf("FAIL: %s\n", msg); ++failures; } } while (0)
+
+// ---- scratch shared-lib helpers (used by Task 4 + Task 6/8) ----------------
+std::string make_scratch_shared_lib(const std::string& src_root) {
+    std::string dir = std::string("scratch_shlib_") + std::to_string((unsigned long)rand());
+    std::string mk = "mkdir -p '" + dir + "'"; (void)system(mk.c_str());
+    std::string cp = "cp '" + src_root + "'/*.js '" + dir + "'/ 2>/dev/null"; (void)system(cp.c_str());
+    return dir;
+}
+void append_to_file(const std::string& path, const std::string& text) {
+    std::ofstream f(path, std::ios::binary | std::ios::app); f << text;
+}
+void remove_scratch_shared_lib(const std::string& dir) {
+    std::string rm = "rm -rf '" + dir + "'"; (void)system(rm.c_str());
+}
 
 // ---- Task 1: import-specifier parsing -------------------------------------
 static void test_parse_imports() {
@@ -82,10 +101,57 @@ static void test_fold_transitive_and_canonical() {
     CHECK(!module_resolver::fold_sources(bad, root, rbad, err), "missing module fails fold");
 }
 
+// ---- Task 4: folded source changes the resolved hash ----------------------
+// Helper: resolved hash of a part = fnv1a64 over its canonical fold + params bytes.
+static uint64_t hash_part(const std::string& part, const std::string& root,
+                          const std::string& params) {
+    std::string err;
+    module_resolver::FoldResult r;
+    bool ok = module_resolver::fold_sources(part, root, r, err);
+    if (!ok) { printf("FAIL: fold for hash_part: %s\n", err.c_str()); return 0; }
+    return part_asset::compute_resolved_hash(r.folded.data(), r.folded.size(),
+                                             params.data(), params.size(),
+                                             /*child_hashes*/nullptr, /*count*/0);
+}
+
+static void test_fold_changes_resolved_hash() {
+    const std::string root = "shared-lib-fixtures";
+    const std::string importer =
+        "import { LEAF } from 'shared-lib/leaf';\n"
+        "class P extends Part { build(p){} }\n";
+    const std::string non_importer =
+        "class Q extends Part { build(p){} }\n";
+    const std::string params = "{\"seed\":0}";
+
+    uint64_t h_imp_before  = hash_part(importer, root, params);
+    uint64_t h_nonimp_before = hash_part(non_importer, root, params);
+
+    // Make a scratch copy of the fixtures, edit leaf.js, re-fold against the copy.
+    std::string scratch = make_scratch_shared_lib(root);
+    append_to_file(scratch + "/leaf.js", "\nexport const EXTRA = 999;\n");
+
+    uint64_t h_imp_after   = hash_part(importer, scratch, params);
+    uint64_t h_nonimp_after = hash_part(non_importer, scratch, params);
+
+    CHECK(h_imp_before != h_imp_after, "editing leaf.js changes importer hash");
+    CHECK(h_nonimp_before == h_nonimp_after, "non-importer hash unchanged by leaf.js edit");
+
+    // Transitive: a part importing top (top->mid->leaf) also changes when leaf edits.
+    const std::string transitive_importer =
+        "import { TOP } from 'shared-lib/top';\n"
+        "class R extends Part { build(p){} }\n";
+    uint64_t h_t_before = hash_part(transitive_importer, root, params);
+    uint64_t h_t_after  = hash_part(transitive_importer, scratch, params);
+    CHECK(h_t_before != h_t_after, "transitive importer (top->mid->leaf) invalidated by leaf edit");
+
+    remove_scratch_shared_lib(scratch);
+}
+
 int main() {
     test_parse_imports();
     test_resolve_specifier();
     test_fold_transitive_and_canonical();
+    test_fold_changes_resolved_hash();
     if (failures == 0) printf("All shared_lib tests passed\n");
     return failures == 0 ? 0 : 1;
 }
