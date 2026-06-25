@@ -1,0 +1,57 @@
+#ifndef VIEWER_WORLD_SOURCE_H
+#define VIEWER_WORLD_SOURCE_H
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace viewer {
+
+class PartStore;   // fwd; defined in part_store.h
+
+// One placed instance in the authoritative world. Transform is row-major
+// float[16] to match part_asset::ChildInstance and TLAS DrawInstance.
+struct WorldManifestEntry {
+    uint32_t instance_id = 0;
+    uint64_t part_hash   = 0;   // resolved hash of the placed part
+    float    transform[16] = {0};
+};
+
+struct WorldManifest {
+    uint64_t world_root_hash = 0;
+    std::vector<WorldManifestEntry> instances;
+};
+
+struct WorldDelta {
+    std::vector<WorldManifestEntry> added;    // new or moved (replace by instance_id)
+    std::vector<uint32_t>           removed;  // instance_ids to drop
+};
+
+// Live, mutable world: the manifest snapshot plus incremental deltas.
+class WorldState {
+public:
+    void reset(const WorldManifest& m);          // replace all entries
+    void apply(const WorldDelta& d);              // add/move/remove by instance_id
+    const std::vector<WorldManifestEntry>& entries() const { return entries_; }
+    const WorldManifestEntry* find(uint32_t instance_id) const;
+
+private:
+    std::vector<WorldManifestEntry> entries_;
+};
+
+// Source of world + part data. Same interface for LocalProvider (in-process)
+// and a future NetworkProvider. See world_source.h docs / the design spec.
+class WorldProvider {
+public:
+    virtual ~WorldProvider() = default;
+    virtual bool connect(WorldManifest& out, std::string& err) = 0;
+    virtual std::vector<uint64_t>
+        reconcile(const WorldManifest& manifest, const PartStore& store) = 0;
+    virtual bool fetch_parts(const std::vector<uint64_t>& want,
+                             PartStore& store, std::string& err) = 0;
+    virtual bool poll_deltas(WorldDelta& out) = 0;
+};
+
+} // namespace viewer
+
+#endif // VIEWER_WORLD_SOURCE_H

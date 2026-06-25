@@ -54,7 +54,7 @@ else
     LDLIBS = ../../Libraries/raylib/src/libraylib.a
 endif
 
-.PHONY: clean run-partv2 run-script run-graph run-graph-integration run-trivar run-shlib run-comp run-dev run-example
+.PHONY: clean run-partv2 run-script run-graph run-graph-integration run-trivar run-shlib run-comp run-dev run-example run-viewer-logic
 
 # Part Artifact v2 round-trip + resolved-hash + format-guard tests (headless, GL-free).
 # NEW impl ../src/part_asset_v2.cpp + consumed MatterSurfaceLib backend sources.
@@ -79,7 +79,7 @@ run-partv2: $(PARTV2_TARGET)
 	./$(PARTV2_TARGET)
 
 clean:
-	rm -f $(PARTV2_TARGET) $(SCRIPT_TARGET) $(GRAPH_TARGET) $(GRAPH_INT_TARGET) $(TRIVAR_TARGET) $(SHLIB_TARGET) $(COMP_TARGET) $(DEV_TARGET) $(EXAMPLE_TARGET)
+	rm -f $(PARTV2_TARGET) $(SCRIPT_TARGET) $(GRAPH_TARGET) $(GRAPH_INT_TARGET) $(TRIVAR_TARGET) $(SHLIB_TARGET) $(COMP_TARGET) $(DEV_TARGET) $(EXAMPLE_TARGET) $(VIEWER_LOGIC_TARGET)
 
 # Script host (QuickJS-ng) + DSL/CSG bake tests (headless, GL-free for the host;
 # the BLAS surface path links raylib like the part-asset tests). QuickJS-ng C
@@ -292,3 +292,38 @@ $(EXAMPLE_TARGET): $(EXAMPLE_CPP) $(EXAMPLE_C) $(QJS_C)
 
 run-example: $(EXAMPLE_TARGET)
 	./$(EXAMPLE_TARGET)
+
+# --- Viewer GL-free logic suite (WorldState, resolvers, PartStore, LocalProvider).
+# Reuses the example_world pipeline source set (SP-2 host + QuickJS + SP-4 compose
+# + MSL backend) and adds the viewer's GL-free units. Same dir depth as tests/, so
+# every ../ / ../../ path resolves identically. NOT a GL build (no renderer/ui/main).
+VIEWER_LOGIC_TARGET = viewer_logic_tests
+# EXAMPLE_CPP without its driver (example_world.cpp), plus the viewer's logic units.
+VIEWER_PIPELINE_CPP = ../src/part_graph.cpp \
+              ../src/script_host.cpp ../src/dsl_state.cpp ../src/dsl_bindings.cpp \
+              ../src/csg_lowering.cpp ../src/module_resolver.cpp ../src/script_rng_binding.cpp \
+              ../src/part_asset_v2.cpp ../src/lod_bake.cpp ../src/world_flatten.cpp \
+              ../src/sector_grid.cpp ../src/lod_select.cpp \
+              ../../MatterSurfaceLib/src/cluster.cpp ../../MatterSurfaceLib/src/cell.cpp ../../MatterSurfaceLib/src/mesh_simplifier.cpp \
+              ../../MatterSurfaceLib/src/blas_manager.cpp ../../MatterSurfaceLib/src/bvh.cpp ../../MatterSurfaceLib/src/bvh_analyzer.cpp \
+              ../../MatterSurfaceLib/src/mesh_worker_pool.cpp ../../MatterSurfaceLib/src/mesh_build_utils.cpp \
+              ../../MatterSurfaceLib/src/meshing_algorithm.cpp ../../MatterSurfaceLib/src/marching_cubes_algorithm.cpp \
+              ../../MatterSurfaceLib/src/oriented_cube_algorithm.cpp ../../MatterSurfaceLib/src/vertex_ao.cpp \
+              ../../MatterSurfaceLib/src/occupancy.cpp ../../MatterSurfaceLib/src/tlas_manager.cpp ../../MatterSurfaceLib/src/part_asset.cpp \
+              ../../MatterSurfaceLib/src/lattice.cpp ../../MatterSurfaceLib/src/particle_culling.cpp
+# Task 1 TRIM: only world_state.cpp exists so far. Later tasks restore the full list:
+#   ../viewer/world_state.cpp ../viewer/part_store.cpp ../viewer/resolvers.cpp
+#   ../viewer/world_composer.cpp ../viewer/local_provider.cpp
+VIEWER_LOGIC_CPP = viewer_logic_tests.cpp \
+              ../viewer/world_state.cpp \
+              $(VIEWER_PIPELINE_CPP)
+
+$(VIEWER_LOGIC_TARGET): $(VIEWER_LOGIC_CPP) $(EXAMPLE_C) $(QJS_C)
+	gcc -c $(QJS_C) -O2 -DCONFIG_VERSION='"0.10.0"' $(QJS_INC)
+	gcc -c $(EXAMPLE_C) -O2 -DPLATFORM_DESKTOP $(INCLUDE_PATHS)
+	$(CC) $(VIEWER_LOGIC_CPP) $(QJS_OBJ) $(EXAMPLE_C_OBJ) -o $(VIEWER_LOGIC_TARGET) \
+	      $(CFLAGS) -DMATTER_HAVE_SCRIPT_HOST $(INCLUDE_PATHS) -I../viewer $(QJS_INC) $(LDFLAGS) $(LDLIBS)
+	rm -f $(QJS_OBJ) $(EXAMPLE_C_OBJ)
+
+run-viewer-logic: $(VIEWER_LOGIC_TARGET)
+	./$(VIEWER_LOGIC_TARGET)
