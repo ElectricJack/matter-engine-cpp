@@ -1,0 +1,197 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>World Viewer Design</title>
+<style>
+:root{color-scheme:dark}
+body{margin:0;background:#0d1117;color:#c9d1d9;font:16px/1.65 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:48px 28px 96px}
+h1,h2,h3{line-height:1.25;color:#e6edf3;font-weight:650}
+h1{font-size:2em;border-bottom:1px solid #30363d;padding-bottom:.3em;margin-top:0}
+h2{font-size:1.45em;border-bottom:1px solid #21262d;padding-bottom:.25em;margin-top:2.2em}
+h3{font-size:1.15em;margin-top:1.8em}
+a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
+hr{border:0;border-top:1px solid #30363d;margin:2.4em 0}
+code{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:.12em .4em;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;overflow:auto}
+pre code{background:none;border:0;padding:0;font-size:13.5px}
+table{border-collapse:collapse;width:100%;margin:1em 0;font-size:14.5px}
+th,td{border:1px solid #30363d;padding:8px 12px;text-align:left}
+th{background:#161b22}tr:nth-child(even){background:#0f141b}
+blockquote{border-left:3px solid #30363d;margin:1em 0;padding:.2em 1em;color:#8b949e}
+ul,ol{padding-left:1.4em}li{margin:.25em 0}
+strong{color:#e6edf3}
+</style></head><body><div class="wrap">
+<h1 id="world-viewer-design">World Viewer Design</h1>
+<p><strong>Goal:</strong> A GL window that renders the baked example world (terrain + trees + grass) through MatterSurfaceLib's existing raytraced TLAS/BLAS pipeline, architected as the foundation for the final game engine's client.</p>
+<p><strong>Status:</strong> Design approved 2026-06-25. Minimal feature scope, growth-minded module boundaries.</p>
+<hr />
+<h2 id="context-and-constraints">Context and constraints</h2>
+<ul>
+<li><strong>MatterSurfaceLib (MSL) is consumed READ-ONLY.</strong> The viewer links MSL's render path (<code>BLASManager</code>, <code>TLASManager</code>, <code>raytrace_tlas_blas_processed.fs</code>, <code>bvh_tlas_common.glsl</code>) and reuses it unchanged. All new code lives under <code>MatterEngine3/viewer/</code>.</li>
+<li><strong>The client is always a pure client.</strong> Per the dedicated-server authority model (see <code>2026-06-24-procedural-part-authoring-design.md</code>), the viewer never owns authoritative world state. It consumes a <code>WorldState</code> + <code>PartStore</code> obtained from a <code>WorldProvider</code>. Single-player wires that provider to a local in-process source; networked play swaps in a network-backed provider with no renderer changes.</li>
+<li><strong>This is the engine's seed, not a throwaway demo.</strong> Feature scope is minimal (one window, free camera, the committed example world) but the module boundaries and extension seams are the real thing: the <code>WorldProvider</code> lifecycle, the <code>PartStore</code> content-addressed cache, and the <code>SectorResolver</code> seam where the spec's future sector-LOD pipeline plugs in.</li>
+</ul>
+<hr />
+<h2 id="architecture">Architecture</h2>
+<p>Six units under <code>MatterEngine3/viewer/</code>, each with one responsibility and a narrow interface:</p>
+<div class="codehilite"><pre><span></span><code><span class="err">┌─</span><span class="w"> </span><span class="n">main</span><span class="w"> </span><span class="err">─────────────────────────────────────────────────────┐</span>
+<span class="err">│</span><span class="w">  </span><span class="n">GL</span><span class="w"> </span><span class="n">window</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">input</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">frame</span><span class="w"> </span><span class="n">loop</span><span class="p">;</span><span class="w"> </span><span class="n">wires</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">units</span><span class="w"> </span><span class="n">together</span><span class="w">   </span><span class="err">│</span>
+<span class="err">├─</span><span class="w"> </span><span class="n">world_source</span><span class="w"> </span><span class="err">─────────────────────────────────────────────┤</span>
+<span class="err">│</span><span class="w">  </span><span class="n">WorldProvider</span><span class="w"> </span><span class="n">interface</span><span class="w"> </span><span class="p">(</span><span class="n">connect</span><span class="o">/</span><span class="n">reconcile</span><span class="o">/</span><span class="n">fetch</span><span class="o">/</span><span class="n">deltas</span><span class="p">)</span><span class="w">   </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="o">+</span><span class="w"> </span><span class="n">LocalProvider</span><span class="w"> </span><span class="n">concrete</span><span class="w"> </span><span class="n">impl</span><span class="w">                              </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="n">owns</span><span class="p">:</span><span class="w"> </span><span class="n">WorldState</span><span class="w"> </span><span class="p">(</span><span class="n">live</span><span class="w"> </span><span class="n">placed</span><span class="o">-</span><span class="n">instance</span><span class="w"> </span><span class="n">set</span><span class="p">)</span><span class="w">                </span><span class="err">│</span>
+<span class="err">├─</span><span class="w"> </span><span class="n">part_library</span><span class="w"> </span><span class="err">─────────────────────────────────────────────┤</span>
+<span class="err">│</span><span class="w">  </span><span class="n">PartStore</span><span class="p">:</span><span class="w"> </span><span class="n">content</span><span class="o">-</span><span class="n">addressed</span><span class="w"> </span><span class="n">cache</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="o">.</span><span class="n">part</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">BLAS</span><span class="w">        </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="p">(</span><span class="n">load_v2</span><span class="w"> </span><span class="n">each</span><span class="w"> </span><span class="n">part</span><span class="w"> </span><span class="nb">hash</span><span class="w"> </span><span class="n">into</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">BLASManager</span><span class="w"> </span><span class="n">once</span><span class="p">)</span><span class="w">           </span><span class="err">│</span>
+<span class="err">├─</span><span class="w"> </span><span class="n">world_composer</span><span class="w"> </span><span class="err">───────────────────────────────────────────┤</span>
+<span class="err">│</span><span class="w">  </span><span class="n">WorldState</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">PartStore</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">TLAS</span><span class="w"> </span><span class="n">instances</span><span class="w"> </span><span class="n">per</span><span class="w"> </span><span class="n">frame</span><span class="w">         </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="n">SectorResolver</span><span class="w"> </span><span class="n">seam</span><span class="p">:</span><span class="w"> </span><span class="n">which</span><span class="w"> </span><span class="n">instances</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">which</span><span class="w"> </span><span class="n">LOD</span><span class="w"> </span><span class="n">this</span><span class="w"> </span><span class="n">frame</span><span class="err">│</span>
+<span class="err">├─</span><span class="w"> </span><span class="n">renderer</span><span class="w"> </span><span class="err">─────────────────────────────────────────────────┤</span>
+<span class="err">│</span><span class="w">  </span><span class="n">reuses</span><span class="w"> </span><span class="n">MSL</span><span class="w"> </span><span class="n">BLASManager</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">TLASManager</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">raytrace</span><span class="w"> </span><span class="n">shader</span><span class="w">     </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="n">camera</span><span class="w"> </span><span class="n">uniforms</span><span class="p">;</span><span class="w"> </span><span class="n">fullscreen</span><span class="w"> </span><span class="n">raytrace</span><span class="w"> </span><span class="n">draw</span><span class="w">                  </span><span class="err">│</span>
+<span class="err">├─</span><span class="w"> </span><span class="n">ui</span><span class="w"> </span><span class="p">(</span><span class="n">Dear</span><span class="w"> </span><span class="n">ImGui</span><span class="p">)</span><span class="w"> </span><span class="err">──────────────────────────────────────────┤</span>
+<span class="err">│</span><span class="w">  </span><span class="n">debug</span><span class="o">/</span><span class="n">HUD</span><span class="w"> </span><span class="n">overlay</span><span class="w"> </span><span class="n">drawn</span><span class="w"> </span><span class="n">after</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">raytrace</span><span class="w"> </span><span class="k">pass</span><span class="w">            </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="n">stats</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">camera</span><span class="o">/</span><span class="n">provider</span><span class="w"> </span><span class="n">state</span><span class="p">;</span><span class="w"> </span><span class="n">seam</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">future</span><span class="w"> </span><span class="n">tools</span><span class="w">       </span><span class="err">│</span>
+<span class="err">└─────────────────────────────────────────────────────────────┘</span>
+</code></pre></div>
+
+<p>Data flows downward each frame: <code>world_source</code> holds the authoritative-from-the-client's-view instance set, <code>part_library</code> supplies the geometry for each part hash, <code>world_composer</code> selects+transforms instances into the TLAS, and <code>renderer</code> traces it. The <code>ui</code> overlay draws last, on top of the traced frame.</p>
+<hr />
+<h2 id="the-worldprovider-lifecycle-approved">The <code>WorldProvider</code> lifecycle (approved)</h2>
+<p>The client never assumes its data is current — it reconciles against the source's hashes on connect. Because parts are content-addressed, "is anything out of date?" is a set-difference of hashes; no versioning or timestamps.</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// world_source.h</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">WorldManifestEntry</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">instance_id</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">part_hash</span><span class="p">;</span><span class="w">       </span><span class="c1">// resolved hash of the placed part</span>
+<span class="w">    </span><span class="n">mat4</span><span class="w">     </span><span class="n">transform</span><span class="p">;</span><span class="w">       </span><span class="c1">// world placement</span>
+<span class="p">};</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">WorldManifest</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">world_root_hash</span><span class="p">;</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">WorldManifestEntry</span><span class="o">&gt;</span><span class="w"> </span><span class="n">instances</span><span class="p">;</span>
+<span class="p">};</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">WorldDelta</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">WorldManifestEntry</span><span class="o">&gt;</span><span class="w"> </span><span class="n">added</span><span class="p">;</span><span class="w">    </span><span class="c1">// new or moved (replace by instance_id)</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w">           </span><span class="n">removed</span><span class="p">;</span><span class="w">  </span><span class="c1">// instance_ids to drop</span>
+<span class="p">};</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">WorldProvider</span><span class="w"> </span><span class="p">{</span>
+<span class="k">public</span><span class="o">:</span>
+<span class="w">    </span><span class="k">virtual</span><span class="w"> </span><span class="o">~</span><span class="n">WorldProvider</span><span class="p">()</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">default</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// Open a session; return the authoritative placed-instance set, hashes only (cheap).</span>
+<span class="w">    </span><span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">connect</span><span class="p">(</span><span class="n">WorldManifest</span><span class="o">&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">err</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// Given the manifest and what the client already has on disk, return the</span>
+<span class="w">    </span><span class="c1">// set of part hashes the client is missing or has stale.</span>
+<span class="w">    </span><span class="k">virtual</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span>
+<span class="w">        </span><span class="n">reconcile</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">WorldManifest</span><span class="o">&amp;</span><span class="w"> </span><span class="n">manifest</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">PartStore</span><span class="o">&amp;</span><span class="w"> </span><span class="n">store</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// Fetch only the missing .part blobs; client writes them into its PartStore.</span>
+<span class="w">    </span><span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">fetch_parts</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">want</span><span class="p">,</span>
+<span class="w">                             </span><span class="n">PartStore</span><span class="o">&amp;</span><span class="w"> </span><span class="n">store</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">err</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// Stream of incremental world changes after the initial snapshot.</span>
+<span class="w">    </span><span class="c1">// Returns false (empty) when no changes are pending.</span>
+<span class="w">    </span><span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">poll_deltas</span><span class="p">(</span><span class="n">WorldDelta</span><span class="o">&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="p">};</span>
+</code></pre></div>
+
+<p><strong>Connect sequence (run once at startup, reusable on reconnect):</strong></p>
+<ol>
+<li><code>connect()</code> → <code>WorldManifest</code> (hashes + transforms only).</li>
+<li><code>reconcile(manifest, store)</code> → walks entries, asks <code>PartStore::has(part_hash)</code>, returns the "want" list.</li>
+<li><code>fetch_parts(want, store)</code> → source returns only the missing blobs; <code>PartStore</code> loads each into its <code>BLASManager</code>.</li>
+<li>Build the initial <code>WorldState</code> from the manifest entries.</li>
+<li>Each frame, <code>poll_deltas()</code> applies <code>added</code>/<code>removed</code> to the live <code>WorldState</code>.</li>
+</ol>
+<p><strong><code>LocalProvider</code> (the only concrete impl in the minimal viewer):</strong>
+Backs <code>connect()</code> with the <code>example_world</code> pipeline output — it runs the same install → bake → flatten path (or reads its committed <code>parts/</code> dir + flattened instance list) and returns a manifest where every <code>part_hash</code> is already present in the local <code>PartStore</code>. So <code>reconcile</code> yields an empty want-list, <code>fetch_parts</code> is a no-op, and <code>poll_deltas</code> returns empty. The network path and the local path are identical code in the renderer.</p>
+<hr />
+<h2 id="module-responsibilities-and-interfaces">Module responsibilities and interfaces</h2>
+<h3 id="world_source-world_sourceh-local_providercpp"><code>world_source</code> (<code>world_source.h</code> / <code>local_provider.cpp</code>)</h3>
+<ul>
+<li>Defines <code>WorldProvider</code>, <code>WorldManifest</code>, <code>WorldDelta</code>, and the live <code>WorldState</code> (a <code>std::vector&lt;WorldManifestEntry&gt;</code> keyed/replaced by <code>instance_id</code>, plus apply-delta helpers).</li>
+<li><code>LocalProvider</code> produces the manifest from the example-world bake.</li>
+<li>Depends on: <code>part_library</code> (for the <code>PartStore&amp;</code> reconcile arg), the SP-3/SP-4 composition path for <code>LocalProvider</code> only.</li>
+</ul>
+<h3 id="part_library-part_storeh-part_storecpp"><code>part_library</code> (<code>part_store.h</code> / <code>part_store.cpp</code>)</h3>
+<ul>
+<li><code>PartStore</code>: maps <code>part_hash -&gt; BLASHandle</code> via an owned <code>BLASManager</code>. <code>has(hash)</code>, <code>get_or_load(hash, dir)</code> (calls <code>part_asset::load_v2</code> → <code>BLASManager::register_triangles</code>), and exposes the <code>BLASManager&amp;</code> for the renderer to bind.</li>
+<li>Content-addressed: a hash loaded once is reused for every instance (terrain/tree/grass dedup is automatic).</li>
+<li>Depends on: SP-1 <code>part_asset_v2</code> (<code>load_v2</code>, <code>cache_path_resolved</code>), MSL <code>BLASManager</code> (read-only).</li>
+</ul>
+<h3 id="world_composer-world_composerh-world_composercpp"><code>world_composer</code> (<code>world_composer.h</code> / <code>world_composer.cpp</code>)</h3>
+<ul>
+<li>Per frame: takes <code>WorldState</code> + <code>PartStore</code> + camera, decides which instances are active and at which LOD, and records them into the <code>TLASManager</code> (<code>tlas.clear()</code> → <code>tlas.draw(blas_handle, material_id)</code> under each instance transform → <code>tlas.build(blas_manager)</code>).</li>
+<li><strong><code>SectorResolver</code> seam</strong> — a strategy object that answers "given the camera, which instances render this frame and at which LOD level?"</li>
+<li>Minimal viewer: <code>PassThroughResolver</code> — all instances active, LOD 0 (finest), no culling.</li>
+<li>Future drop-in: <code>SectorLodResolver</code> backed by <code>sector_grid::bin_instances</code> + <code>lod_select::select_sector_lods</code> + distance-sphere activation + far-proxy (the <code>2026-06-24-sector-lod-instanced-world-design.md</code> pipeline). The composer interface does not change.</li>
+<li>Depends on: MSL <code>TLASManager</code> (read-only), <code>part_library</code>.</li>
+</ul>
+<h3 id="renderer-rendererh-renderercpp"><code>renderer</code> (<code>renderer.h</code> / <code>renderer.cpp</code>)</h3>
+<ul>
+<li>Owns the raytrace shader (<code>LoadShader("shaders/raytrace_tlas_blas_processed.fs")</code>), camera state, and screen-size/camera uniforms.</li>
+<li>Each frame: <code>blas.bind_to_shader(shader)</code>, <code>tlas.bind_to_shader(shader, blas)</code>, set camera + screen uniforms, <code>BeginShaderMode</code> → fullscreen <code>DrawRectangle</code> → <code>EndShaderMode</code> (mirrors MSL <code>main.cpp</code>'s render path).</li>
+<li>One-time shader warm-up at startup (compile via a 1×1 offscreen draw + <code>glFinish</code>), as MSL does, to move the GPU compile stall out of the first real frame.</li>
+<li>Depends on: MSL <code>BLASManager</code>, <code>TLASManager</code>, raylib.</li>
+</ul>
+<h3 id="ui-uih-uicpp-dear-imgui-overlay"><code>ui</code> (<code>ui.h</code> / <code>ui.cpp</code>) — Dear ImGui overlay</h3>
+<ul>
+<li>Mirrors MSL's integration exactly: Dear ImGui core (<code>Libraries/imgui</code>) with the <strong>GLFW + OpenGL3 backends</strong> (<code>imgui_impl_glfw</code>, <code>imgui_impl_opengl3</code>), bound to raylib's GLFW window via <code>glfwGetCurrentContext()</code>. raylib uses GLFW under <code>PLATFORM_DESKTOP</code>, so ImGui shares the same window/GL context.</li>
+<li><code>Ui::setup()</code> — <code>ImGui::CreateContext()</code> → <code>StyleColorsDark()</code> → <code>ImGui_ImplGlfw_InitForOpenGL(glfwGetCurrentContext(), true)</code> → <code>ImGui_ImplOpenGL3_Init("#version 330")</code>. Called once after <code>InitWindow</code>.</li>
+<li><code>Ui::begin_frame()</code> / <code>Ui::end_frame()</code> — wrap <code>ImGui_ImplOpenGL3_NewFrame()</code> + <code>ImGui_ImplGlfw_NewFrame()</code> + <code>ImGui::NewFrame()</code> and <code>ImGui::Render()</code> + <code>ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData())</code>. Called after the raytrace pass so the overlay composites on top.</li>
+<li><code>Ui::draw_debug_panel(const ViewerStats&amp;)</code> — the minimal HUD: FPS/frame time, camera position + facing, instance count (total / active this frame), occupied-sector count and the resolver in use, provider connection state + last reconcile want-count, and a "reload world" button (re-runs the connect sequence). <code>ViewerStats</code> is a plain struct the renderer/composer/provider fill in each frame — the panel reads it, owning no engine state.</li>
+<li><code>Ui::shutdown()</code> — <code>ImGui_ImplOpenGL3_Shutdown()</code> → <code>ImGui_ImplGlfw_Shutdown()</code> → <code>ImGui::DestroyContext()</code>.</li>
+<li>This panel is the seam for future in-engine tools (part placement, material pickers, live-edit controls); minimal viewer ships only the read-only debug panel plus the reload button.</li>
+<li>Depends on: Dear ImGui (<code>Libraries/imgui</code>), raylib's bundled GLFW.</li>
+</ul>
+<h3 id="main-maincpp"><code>main</code> (<code>main.cpp</code>)</h3>
+<ul>
+<li><code>InitWindow</code> → <code>Ui::setup()</code>, construct the units, run the connect sequence, then the frame loop: free-fly camera input → <code>world_composer</code> updates the TLAS → <code>renderer</code> draws the traced frame → <code>Ui::begin_frame()</code> / <code>draw_debug_panel</code> / <code>end_frame()</code> → <code>poll_deltas</code> applies changes. On exit, <code>Ui::shutdown()</code>.</li>
+<li>Camera vs. UI input: start in cursor-enabled (UI) mode like MSL; a key (e.g. right-mouse or Tab) toggles between free-fly camera capture and ImGui interaction so mouse-look and the panel don't fight.</li>
+</ul>
+<hr />
+<h2 id="build">Build</h2>
+<p>A new <code>viewer</code> target in <code>MatterEngine3/</code>'s build (its own Makefile or a target in the tests Makefile, but <strong>NOT</strong> in the headless <code>build-all.sh test</code> sweep — it needs a GL context). Links:
+- MSL render sources: <code>../../MatterSurfaceLib/src/{blas_manager,tlas_manager,bvh,bvh_analyzer,bvh_visualizer}.cpp</code> plus material/tri deps, via <code>-I../../MatterSurfaceLib/include</code>.
+- SP-1/SP-4 sources for <code>LocalProvider</code>: the exact source set the <code>example_world</code> target already links (<code>part_asset_v2</code>, <code>world_flatten</code>, <code>sector_grid</code>, <code>lod_select</code>, <code>lod_bake</code>, plus the script-host/QuickJS set under <code>-DMATTER_HAVE_SCRIPT_HOST</code>) — reuse that recipe verbatim from <code>MatterEngine3/tests/Makefile</code>.
+- Dear ImGui (reuse MSL's wiring exactly): <code>IMGUI_PATH = ../../Libraries/imgui</code>; compile <code>imgui.cpp</code>, <code>imgui_draw.cpp</code>, <code>imgui_tables.cpp</code>, <code>imgui_widgets.cpp</code>, <code>backends/imgui_impl_glfw.cpp</code>, <code>backends/imgui_impl_opengl3.cpp</code>; add <code>-I$(IMGUI_PATH) -I$(IMGUI_PATH)/backends -I$(RAYLIB_PATH)/src/external/glfw/include</code> (the GLFW headers ship inside raylib). <code>imgui_demo.cpp</code> is optional (handy during bring-up).
+- raylib + GL (reuse MSL's <code>WSL_LINUX=1</code> link flags).
+- Copies/symlinks MSL's <code>shaders/</code> dir next to the binary so the shader path resolves.</p>
+<hr />
+<h2 id="error-handling">Error handling</h2>
+<ul>
+<li><strong>Missing shader / GL init failure:</strong> fatal at startup, print and exit non-zero (a viewer with no GL is useless).</li>
+<li><strong><code>connect()</code> / <code>fetch_parts()</code> failure:</strong> surface the provider's error string and exit; for the LocalProvider this means the bake failed (same failure modes as <code>example_world</code>).</li>
+<li><strong><code>load_v2</code> failure for a part hash:</strong> skip that instance, log once per hash; the rest of the world still renders (a single bad part shouldn't black-screen the world).</li>
+<li><strong>TLAS capacity:</strong> size the <code>TLASManager</code> to the instance count from the manifest (the example world is ~153 instances; MSL's default cap is 100, so the viewer constructs <code>TLASManager(manifest.instances.size() + headroom)</code>).</li>
+</ul>
+<hr />
+<h2 id="testing">Testing</h2>
+<ul>
+<li>The composition/provider units are GL-free and unit-testable: a headless test that constructs a <code>LocalProvider</code>, runs <code>connect</code> → <code>reconcile</code> (asserts empty want-list when parts are pre-baked) → builds <code>WorldState</code>, and applies a synthetic <code>WorldDelta</code> (assert add/remove/move semantics). This can join the headless sweep.</li>
+<li>The renderer + <code>main</code> are GL and not in the headless sweep; verified by launching the viewer and confirming the world draws (the user launches GUI apps via <code>!</code> or their own terminal — the harness reaps backgrounded GUI children).</li>
+</ul>
+<hr />
+<h2 id="backlog-future-extension-seams-explicitly-out-of-scope-now">Backlog (future extension seams — explicitly out of scope now)</h2>
+<p>These are the drop-in points the architecture preserves but does not build in the minimal viewer:</p>
+<ul>
+<li><strong>Network <code>WorldProvider</code> drop-in (SP-8 / SP-9).</strong> A <code>NetworkProvider</code> implementing the same <code>WorldProvider</code> interface over a socket: <code>connect()</code> opens the session and streams the server's manifest; <code>reconcile()</code> runs the hash have/want diff client-side; <code>fetch_parts()</code> requests only missing <code>.part</code> blobs from the server (content-addressed dedup); <code>poll_deltas()</code> receives server-broadcast world deltas. <strong>No renderer, composer, or part_store changes</strong> — <code>main</code> selects <code>LocalProvider</code> (single-player / embedded server) vs <code>NetworkProvider</code> (connect to dedicated server) at startup. This is the primary growth seam.</li>
+<li><strong><code>SectorLodResolver</code> drop-in.</strong> Replace <code>PassThroughResolver</code> with the sector-LOD pipeline (<code>bin_instances</code> → <code>select_sector_lods</code>, distance-sphere activation, merged far-proxy) behind the unchanged <code>SectorResolver</code> interface.</li>
+<li><strong>Live edit / hot-reload (SP-5).</strong> The <code>poll_deltas</code> channel already carries instance changes; a future provider can also signal part-hash re-bakes so the <code>PartStore</code> reloads a changed BLAS and the world refreshes without restart.</li>
+<li><strong>Materials / lighting / temporal rendering.</strong> The viewer binds whatever the MSL shader supports today; the temporal-rendering-foundation work is orthogonal and plugs into the renderer later.</li>
+</ul>
+<hr />
+<h2 id="goals-non-goals">Goals / non-goals</h2>
+<p><strong>Goals</strong>
+- One GL window rendering the committed example world via MSL's raytraced TLAS/BLAS path.
+- Free-fly camera.
+- The <code>WorldProvider</code> + <code>PartStore</code> + <code>SectorResolver</code> boundaries, with <code>LocalProvider</code> + <code>PassThroughResolver</code> as the minimal concrete impls.
+- A Dear ImGui debug/HUD overlay (stats + camera/provider state + reload button), wired as the seam for future in-engine tools.
+- A headless unit test for the GL-free provider/composer logic.</p>
+<p><strong>Non-goals (deferred)</strong>
+- Networking (interface is ready; <code>NetworkProvider</code> is backlog).
+- Sector-LOD activation / far-proxy (interface is ready; <code>SectorLodResolver</code> is backlog).
+- Live editing and in-world part placement (the ImGui panel is the seam, but editing tools are backlog).
+- Any modification to MatterSurfaceLib.</p>
+</div></body></html>

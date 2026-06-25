@@ -16,7 +16,7 @@
 
 ## Architecture
 
-Five units under `MatterEngine3/viewer/`, each with one responsibility and a narrow interface:
+Six units under `MatterEngine3/viewer/`, each with one responsibility and a narrow interface:
 
 ```
 ┌─ main ─────────────────────────────────────────────────────┐
@@ -34,10 +34,13 @@ Five units under `MatterEngine3/viewer/`, each with one responsibility and a nar
 ├─ renderer ─────────────────────────────────────────────────┤
 │  reuses MSL BLASManager + TLASManager + raytrace shader     │
 │  camera uniforms; fullscreen raytrace draw                  │
+├─ ui (Dear ImGui) ──────────────────────────────────────────┤
+│  debug/HUD overlay drawn after the raytrace pass            │
+│  stats + camera/provider state; seam for future tools       │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-Data flows downward each frame: `world_source` holds the authoritative-from-the-client's-view instance set, `part_library` supplies the geometry for each part hash, `world_composer` selects+transforms instances into the TLAS, and `renderer` traces it.
+Data flows downward each frame: `world_source` holds the authoritative-from-the-client's-view instance set, `part_library` supplies the geometry for each part hash, `world_composer` selects+transforms instances into the TLAS, and `renderer` traces it. The `ui` overlay draws last, on top of the traced frame.
 
 ---
 
@@ -121,8 +124,18 @@ Backs `connect()` with the `example_world` pipeline output — it runs the same 
 - One-time shader warm-up at startup (compile via a 1×1 offscreen draw + `glFinish`), as MSL does, to move the GPU compile stall out of the first real frame.
 - Depends on: MSL `BLASManager`, `TLASManager`, raylib.
 
+### `ui` (`ui.h` / `ui.cpp`) — Dear ImGui overlay
+- Mirrors MSL's integration exactly: Dear ImGui core (`Libraries/imgui`) with the **GLFW + OpenGL3 backends** (`imgui_impl_glfw`, `imgui_impl_opengl3`), bound to raylib's GLFW window via `glfwGetCurrentContext()`. raylib uses GLFW under `PLATFORM_DESKTOP`, so ImGui shares the same window/GL context.
+- `Ui::setup()` — `ImGui::CreateContext()` → `StyleColorsDark()` → `ImGui_ImplGlfw_InitForOpenGL(glfwGetCurrentContext(), true)` → `ImGui_ImplOpenGL3_Init("#version 330")`. Called once after `InitWindow`.
+- `Ui::begin_frame()` / `Ui::end_frame()` — wrap `ImGui_ImplOpenGL3_NewFrame()` + `ImGui_ImplGlfw_NewFrame()` + `ImGui::NewFrame()` and `ImGui::Render()` + `ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData())`. Called after the raytrace pass so the overlay composites on top.
+- `Ui::draw_debug_panel(const ViewerStats&)` — the minimal HUD: FPS/frame time, camera position + facing, instance count (total / active this frame), occupied-sector count and the resolver in use, provider connection state + last reconcile want-count, and a "reload world" button (re-runs the connect sequence). `ViewerStats` is a plain struct the renderer/composer/provider fill in each frame — the panel reads it, owning no engine state.
+- `Ui::shutdown()` — `ImGui_ImplOpenGL3_Shutdown()` → `ImGui_ImplGlfw_Shutdown()` → `ImGui::DestroyContext()`.
+- This panel is the seam for future in-engine tools (part placement, material pickers, live-edit controls); minimal viewer ships only the read-only debug panel plus the reload button.
+- Depends on: Dear ImGui (`Libraries/imgui`), raylib's bundled GLFW.
+
 ### `main` (`main.cpp`)
-- `InitWindow`, construct the units, run the connect sequence, then the frame loop: free-fly camera input → `world_composer` updates the TLAS → `renderer` draws → `poll_deltas` applies changes.
+- `InitWindow` → `Ui::setup()`, construct the units, run the connect sequence, then the frame loop: free-fly camera input → `world_composer` updates the TLAS → `renderer` draws the traced frame → `Ui::begin_frame()` / `draw_debug_panel` / `end_frame()` → `poll_deltas` applies changes. On exit, `Ui::shutdown()`.
+- Camera vs. UI input: start in cursor-enabled (UI) mode like MSL; a key (e.g. right-mouse or Tab) toggles between free-fly camera capture and ImGui interaction so mouse-look and the panel don't fight.
 
 ---
 
@@ -131,6 +144,7 @@ Backs `connect()` with the `example_world` pipeline output — it runs the same 
 A new `viewer` target in `MatterEngine3/`'s build (its own Makefile or a target in the tests Makefile, but **NOT** in the headless `build-all.sh test` sweep — it needs a GL context). Links:
 - MSL render sources: `../../MatterSurfaceLib/src/{blas_manager,tlas_manager,bvh,bvh_analyzer,bvh_visualizer}.cpp` plus material/tri deps, via `-I../../MatterSurfaceLib/include`.
 - SP-1/SP-4 sources for `LocalProvider`: the exact source set the `example_world` target already links (`part_asset_v2`, `world_flatten`, `sector_grid`, `lod_select`, `lod_bake`, plus the script-host/QuickJS set under `-DMATTER_HAVE_SCRIPT_HOST`) — reuse that recipe verbatim from `MatterEngine3/tests/Makefile`.
+- Dear ImGui (reuse MSL's wiring exactly): `IMGUI_PATH = ../../Libraries/imgui`; compile `imgui.cpp`, `imgui_draw.cpp`, `imgui_tables.cpp`, `imgui_widgets.cpp`, `backends/imgui_impl_glfw.cpp`, `backends/imgui_impl_opengl3.cpp`; add `-I$(IMGUI_PATH) -I$(IMGUI_PATH)/backends -I$(RAYLIB_PATH)/src/external/glfw/include` (the GLFW headers ship inside raylib). `imgui_demo.cpp` is optional (handy during bring-up).
 - raylib + GL (reuse MSL's `WSL_LINUX=1` link flags).
 - Copies/symlinks MSL's `shaders/` dir next to the binary so the shader path resolves.
 
@@ -169,10 +183,11 @@ These are the drop-in points the architecture preserves but does not build in th
 - One GL window rendering the committed example world via MSL's raytraced TLAS/BLAS path.
 - Free-fly camera.
 - The `WorldProvider` + `PartStore` + `SectorResolver` boundaries, with `LocalProvider` + `PassThroughResolver` as the minimal concrete impls.
+- A Dear ImGui debug/HUD overlay (stats + camera/provider state + reload button), wired as the seam for future in-engine tools.
 - A headless unit test for the GL-free provider/composer logic.
 
 **Non-goals (deferred)**
 - Networking (interface is ready; `NetworkProvider` is backlog).
 - Sector-LOD activation / far-proxy (interface is ready; `SectorLodResolver` is backlog).
-- Live editing, in-world part placement, UI/HUD.
+- Live editing and in-world part placement (the ImGui panel is the seam, but editing tools are backlog).
 - Any modification to MatterSurfaceLib.
