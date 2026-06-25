@@ -301,13 +301,11 @@ VIEWER_LOGIC_TARGET = viewer_logic_tests
 # Pipeline sources = EXAMPLE_CPP minus the example_world.cpp driver. Using
 # filter-out keeps this in sync if EXAMPLE_CPP gains/loses a source.
 VIEWER_PIPELINE_CPP = $(filter-out example_world.cpp, $(EXAMPLE_CPP))
-# Task 1 TRIM: only world_state.cpp exists so far. Later tasks restore the full list:
-#   ../viewer/world_state.cpp ../viewer/part_store.cpp ../viewer/resolvers.cpp
-#   ../viewer/world_composer.cpp ../viewer/local_provider.cpp
 VIEWER_LOGIC_CPP = viewer_logic_tests.cpp \
               ../viewer/world_state.cpp \
               ../viewer/resolvers.cpp \
               ../viewer/part_store.cpp \
+              ../viewer/local_provider.cpp \
               $(VIEWER_PIPELINE_CPP)
 
 $(VIEWER_LOGIC_TARGET): $(VIEWER_LOGIC_CPP) $(EXAMPLE_C) $(QJS_C)

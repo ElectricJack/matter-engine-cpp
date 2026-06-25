@@ -3,6 +3,7 @@
 #include "../viewer/world_source.h"
 #include "../viewer/sector_resolver.h"
 #include "../viewer/part_store.h"
+#include "../viewer/local_provider.h"
 #include "lod_select.h"   // PartLodTable, PartLod
 
 #include <cstdio>
@@ -89,10 +90,51 @@ static void test_part_store_missing() {
     CHECK(store.loaded_count() == 0, "fresh store has nothing loaded");
 }
 
+static void test_local_provider_cache() {
+    const std::string cache = "/tmp/me3_viewer_cache_test";
+    system(("rm -rf " + cache).c_str());
+
+    // Resolve committed example assets relative to MatterEngine3/tests (cwd).
+    viewer::LocalProviderConfig cfg;
+    cfg.schemas_dir    = "../examples/world_demo/schemas";
+    cfg.world_data_dir = "../examples/world_demo/WorldData";
+    cfg.world_name     = "Demo";
+    cfg.shared_lib_dir = "../shared-lib";
+    cfg.cache_root     = cache;
+
+    // --- Cold run: bake everything, want everything. ---
+    {
+        viewer::LocalProvider prov(cfg);
+        viewer::WorldManifest m; std::string err;
+        CHECK(prov.connect(m, err), "cold connect succeeds");
+        CHECK(!m.instances.empty(), "cold connect yields placed instances");
+        CHECK(prov.baked_count() > 0, "cold connect bakes parts (cache miss)");
+
+        viewer::PartStore store(cache);
+        auto want = prov.reconcile(m, store);
+        CHECK(!want.empty(), "cold reconcile wants the missing parts");
+        CHECK(prov.fetch_parts(want, store, err), "cold fetch_parts loads wanted parts");
+        CHECK(store.loaded_count() == want.size(), "cold fetch loads every wanted hash");
+    }
+
+    // --- Warm run: same cache, nothing changed -> bake nothing, want nothing. ---
+    {
+        viewer::LocalProvider prov(cfg);
+        viewer::WorldManifest m; std::string err;
+        CHECK(prov.connect(m, err), "warm connect succeeds");
+        CHECK(prov.baked_count() == 0, "warm connect bakes nothing (all cache hits)");
+
+        viewer::PartStore store(cache);
+        auto want = prov.reconcile(m, store);
+        CHECK(want.empty(), "warm reconcile wants nothing (instant reload)");
+    }
+}
+
 int main() {
     test_world_state_delta();
     test_resolvers();
     test_part_store_missing();
+    test_local_provider_cache();
     printf("\n%s\n", g_failures == 0 ? "viewer-logic OK" : "viewer-logic FAILED");
     return g_failures == 0 ? 0 : 1;
 }

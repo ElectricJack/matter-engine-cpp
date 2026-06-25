@@ -63,20 +63,19 @@ const LoadedPart* PartStore::get_or_load(uint64_t part_hash) {
         radius = 0.5f * std::sqrt(dx*dx+dy*dy+dz*dz);
     }
 
-    // Re-bake LODs into the SHARED store BLASManager. Map each level's local
-    // blas index to a global handle: get_entries()[before + local].
+    // Re-bake LODs into the SHARED store BLASManager. lod_bake stores the
+    // ABSOLUTE entries_ index (== get_entries().size() before registration),
+    // so use blas_indices[0] directly as the index — do NOT add 'before'.
     LoadedPart lp;
     lp.bound_radius = radius;
-    const size_t before = blas_.get_entries().size();
     lod_bake::LodLevels lods = lod_bake::bake_lods(tris, lod_bake::BakeTargets{}, blas_);
     for (const auto& L : lods) {
         lp.thresholds.push_back(L.screen_size_threshold);
         // bake_lods registers exactly one BLAS per level; guard the assumption
         // since the LodLevel type can carry multiple indices.
         assert(L.blas_indices.size() == 1);
-        size_t local = L.blas_indices[0];
-        // The handle for entry index (before + local).
-        lp.lod_blas.push_back(blas_.get_entries()[before + local]->handle);
+        size_t abs_idx = L.blas_indices[0];   // absolute index into blas_.get_entries()
+        lp.lod_blas.push_back(blas_.get_entries()[abs_idx]->handle);
     }
     if (lp.lod_blas.empty()) {
         // No geometry (empty part) -> log; lookups will see an empty LOD list.

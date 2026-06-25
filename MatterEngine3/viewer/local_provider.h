@@ -1,0 +1,48 @@
+#ifndef VIEWER_LOCAL_PROVIDER_H
+#define VIEWER_LOCAL_PROVIDER_H
+
+#include "world_source.h"
+#include "part_store.h"
+
+#include <cstdint>
+#include <map>
+#include <set>
+#include <string>
+
+namespace viewer {
+
+struct LocalProviderConfig {
+    std::string schemas_dir;      // ../examples/world_demo/schemas
+    std::string world_data_dir;   // ../examples/world_demo/WorldData
+    std::string world_name;       // "Demo"
+    std::string shared_lib_dir;   // ../shared-lib
+    std::string cache_root;       // persistent parts/ cache (NOT a /tmp throwaway)
+};
+
+// Drives the SP-3 install path over a persistent content-addressed cache and
+// scatters the example world (terrain/trees/grass) into a WorldManifest. Same
+// interface as a future NetworkProvider.
+class LocalProvider : public WorldProvider {
+public:
+    explicit LocalProvider(LocalProviderConfig cfg);
+
+    bool connect(WorldManifest& out, std::string& err) override;
+    std::vector<uint64_t> reconcile(const WorldManifest& manifest,
+                                    const PartStore& store) override;
+    bool fetch_parts(const std::vector<uint64_t>& want,
+                     PartStore& store, std::string& err) override;
+    bool poll_deltas(WorldDelta& out) override;   // LocalProvider: always false (static world)
+
+    int baked_count() const { return baked_count_; }
+    int hit_count()   const { return hit_count_; }
+
+private:
+    LocalProviderConfig  cfg_;
+    int                  baked_count_ = 0;
+    int                  hit_count_   = 0;
+    std::set<uint64_t>   baked_hashes_;  // hashes freshly baked by last connect()
+};
+
+} // namespace viewer
+
+#endif // VIEWER_LOCAL_PROVIDER_H
