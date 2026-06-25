@@ -15,7 +15,6 @@ static viewer::WorldManifestEntry mk_entry(uint32_t id, uint64_t hash, float x) 
     viewer::WorldManifestEntry e{};
     e.instance_id = id;
     e.part_hash   = hash;
-    for (int i = 0; i < 16; ++i) e.transform[i] = 0.0f;
     e.transform[0] = e.transform[5] = e.transform[10] = e.transform[15] = 1.0f;
     e.transform[3] = x;   // translate-x
     return e;

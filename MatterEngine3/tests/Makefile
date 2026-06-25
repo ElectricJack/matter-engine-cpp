@@ -298,19 +298,9 @@ run-example: $(EXAMPLE_TARGET)
 # + MSL backend) and adds the viewer's GL-free units. Same dir depth as tests/, so
 # every ../ / ../../ path resolves identically. NOT a GL build (no renderer/ui/main).
 VIEWER_LOGIC_TARGET = viewer_logic_tests
-# EXAMPLE_CPP without its driver (example_world.cpp), plus the viewer's logic units.
-VIEWER_PIPELINE_CPP = ../src/part_graph.cpp \
-              ../src/script_host.cpp ../src/dsl_state.cpp ../src/dsl_bindings.cpp \
-              ../src/csg_lowering.cpp ../src/module_resolver.cpp ../src/script_rng_binding.cpp \
-              ../src/part_asset_v2.cpp ../src/lod_bake.cpp ../src/world_flatten.cpp \
-              ../src/sector_grid.cpp ../src/lod_select.cpp \
-              ../../MatterSurfaceLib/src/cluster.cpp ../../MatterSurfaceLib/src/cell.cpp ../../MatterSurfaceLib/src/mesh_simplifier.cpp \
-              ../../MatterSurfaceLib/src/blas_manager.cpp ../../MatterSurfaceLib/src/bvh.cpp ../../MatterSurfaceLib/src/bvh_analyzer.cpp \
-              ../../MatterSurfaceLib/src/mesh_worker_pool.cpp ../../MatterSurfaceLib/src/mesh_build_utils.cpp \
-              ../../MatterSurfaceLib/src/meshing_algorithm.cpp ../../MatterSurfaceLib/src/marching_cubes_algorithm.cpp \
-              ../../MatterSurfaceLib/src/oriented_cube_algorithm.cpp ../../MatterSurfaceLib/src/vertex_ao.cpp \
-              ../../MatterSurfaceLib/src/occupancy.cpp ../../MatterSurfaceLib/src/tlas_manager.cpp ../../MatterSurfaceLib/src/part_asset.cpp \
-              ../../MatterSurfaceLib/src/lattice.cpp ../../MatterSurfaceLib/src/particle_culling.cpp
+# Pipeline sources = EXAMPLE_CPP minus the example_world.cpp driver. Using
+# filter-out keeps this in sync if EXAMPLE_CPP gains/loses a source.
+VIEWER_PIPELINE_CPP = $(filter-out example_world.cpp, $(EXAMPLE_CPP))
 # Task 1 TRIM: only world_state.cpp exists so far. Later tasks restore the full list:
 #   ../viewer/world_state.cpp ../viewer/part_store.cpp ../viewer/resolvers.cpp
 #   ../viewer/world_composer.cpp ../viewer/local_provider.cpp

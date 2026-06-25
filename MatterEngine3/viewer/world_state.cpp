@@ -1,7 +1,5 @@
 #include "world_source.h"
 
-#include <cstring>
-
 namespace viewer {
 
 void WorldState::reset(const WorldManifest& m) {
