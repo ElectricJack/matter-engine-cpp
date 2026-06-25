@@ -268,12 +268,46 @@ static void test_round_trip_degenerate_lod() {
     }
 }
 
+static void test_round_trip_no_children() {
+    using namespace part_asset;
+    BLASManager blasA; TLASManager tlasA(64);
+    BLASHandle hA, hB; build_scene(blasA, tlasA, hA, hB);
+    auto lods = sample_lods();
+
+    std::vector<Tri> triA; blasA.generate_triangle_data(triA);
+    std::vector<LegacyBVHNode> nodeA; blasA.generate_node_data(nodeA);
+
+    const char* path = "test_v2_nokids.part";
+    remove(path);
+    CHECK(save_v2(path, blasA, tlasA, nullptr, 0, lods, 0x20u),
+          "no-children save ok");
+
+    BLASManager blasB; TLASManager tlasB(64);
+    std::vector<ChildInstance> ko; LodLevels lo;
+    CHECK(load_v2(path, 0x20u, blasB, tlasB, ko, lo), "no-children load ok");
+    CHECK(ko.empty(), "empty child table round-trips empty");
+
+    // prebuilt-vs-built parity: geometry restored via register_prebuilt is
+    // byte-identical to the source built BVH.
+    std::vector<Tri> triB; blasB.generate_triangle_data(triB);
+    std::vector<LegacyBVHNode> nodeB; blasB.generate_node_data(nodeB);
+    CHECK(triA.size() == triB.size() &&
+          memcmp(triA.data(), triB.data(), triA.size()*sizeof(Tri)) == 0,
+          "prebuilt-vs-built triangle parity through v2");
+    CHECK(nodeA.size() == nodeB.size() &&
+          memcmp(nodeA.data(), nodeB.data(), nodeA.size()*sizeof(LegacyBVHNode)) == 0,
+          "prebuilt-vs-built node parity through v2");
+
+    remove(path);
+}
+
 int main() {
     test_cache_path_resolved();
     test_resolved_hash();
     test_save_v2_header();
     test_round_trip_full();
     test_round_trip_degenerate_lod();
+    test_round_trip_no_children();
     if (failures == 0) printf("All part_asset_v2 tests passed\n");
     return failures == 0 ? 0 : 1;
 }
