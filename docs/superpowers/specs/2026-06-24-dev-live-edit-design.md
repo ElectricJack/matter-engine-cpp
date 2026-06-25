@@ -1,7 +1,7 @@
 # SP-5 — Dev / Creative Live-Edit — Design
 
 **Status:** Approved for planning (2026-06-24)
-**Project:** MatterSurfaceLib
+**Project:** MatterEngine3
 **Parent:** `2026-06-24-procedural-part-authoring-design.md` (sub-project SP-5)
 **Consumes:** SP-2 (`ScriptHost` bake), SP-3 (resolve/cache-miss), SP-4 (flatten +
 sector composition).

@@ -4,15 +4,17 @@
 
 **Goal:** Add a v1 JS helper library plus an explicit ES-module import + source-folding mechanism so part scripts can reuse deterministic helpers while a content-addressed cache key correctly invalidates every (transitive) importer when a shared module changes.
 
-**Architecture:** A standalone, QuickJS-free C++ unit (`ModuleResolver`) parses static `import` specifiers out of a part's source, resolves them to files under a fixed `shared-lib/` root, transitively gathers all imported module sources, and emits a single canonical folded byte buffer (part source first, then imported modules ordered by resolved specifier, lexicographically sorted). That folded buffer is the `source_bytes` input to SP-1's `compute_resolved_hash` (FNV-1a64), so editing any imported module changes the importer's hash. The JS helpers (L-system, Bézier, vec/mat math, geometry, seeded xoshiro128** RNG) are pure ES modules; the RNG module backs SP-2's `Math.random` hook via a small C++ binding that seeds a stream from `p.seed`.
+**Architecture:** All SP-7 work is built in the **new `MatterEngine3/` project**, a sibling of `MatterSurfaceLib/` that consumes the prototype read-only (see the master plan's relocation contract). A standalone, QuickJS-free C++ unit (`ModuleResolver`) parses static `import` specifiers out of a part's source, resolves them to files under a fixed `shared-lib/` root (`MatterEngine3/shared-lib/`), transitively gathers all imported module sources, and emits a single canonical folded byte buffer (part source first, then imported modules ordered by resolved specifier, lexicographically sorted). That folded buffer is the `source_bytes` input to SP-1's `compute_resolved_hash` (FNV-1a64, from the new `part_asset_v2`), so editing any imported module changes the importer's hash. The JS helpers (L-system, Bézier, vec/mat math, geometry, seeded xoshiro128** RNG) are pure ES modules; the RNG module backs SP-2's `Math.random` hook via a small C++ binding that seeds a stream from `p.seed`.
 
-**Tech Stack:** C++17 + QuickJS-ng module loading (SP-2), JS helper modules, FNV-1a source folding, headless tests under MatterSurfaceLib/tests/.
+**Tech Stack:** C++17 + QuickJS-ng module loading (SP-2), JS helper modules, FNV-1a source folding, headless tests under `MatterEngine3/tests/`.
+
+> **Relocation note (from the master plan):** This sub-plan obeys the `MatterEngine3` relocation contract in `2026-06-24-procedural-part-system-master-plan.md`. All NEW files (the JS helpers under `MatterEngine3/shared-lib/`, the C++ `module_resolver`/`script_rng_binding` units, and the tests) live under `MatterEngine3/`. SP-1's `compute_resolved_hash` lives in the new `part_asset_v2.{h,cpp}` (consumed via `-I../include` + `../src/part_asset_v2.cpp`); the consumed prototype backend (`part_asset.cpp` v1, `blas_manager.cpp`, `bvh.cpp`, `tlas_manager.cpp`, `vertex_ao.cpp`, `occupancy.cpp`, `material_registry.c`) is referenced read-only as `../../MatterSurfaceLib/src/<dep>` with `-I../../MatterSurfaceLib/include`. raylib paths are unchanged (`MatterEngine3/tests` is the same depth as `MatterSurfaceLib/tests`).
 
 ---
 
 ## Resolved open questions (decisions for this plan)
 
-- **Shared-lib folder location:** `MatterSurfaceLib/shared-lib/` (sibling of `src/`, `include/`, `tests/`); a known root outside any per-world `ObjectSchemas/` tree.
+- **Shared-lib folder location:** `MatterEngine3/shared-lib/` (sibling of the new project's `src/`, `include/`, `tests/`); a known root outside any per-world `ObjectSchemas/` tree.
 - **Import-specifier scheme:** **bare specifiers rooted at the library** — `import { x } from 'shared-lib/lsystem'`. The resolver maps `shared-lib/<name>` → `<root>/<name>.js` (a trailing `.js` in the specifier is accepted and stripped). No relative (`./`, `../`) specifiers are resolved by the library resolver (a part may only import the library, and library modules may only import other library modules via the same `shared-lib/<name>` form). Non-`shared-lib/` specifiers are an error.
 - **Canonical fold ordering:** the part source is folded **first**, then every transitively-imported module is folded in order of its **resolved specifier path, lexicographically (byte) sorted** — NOT load/discovery order. This makes the fold independent of import statement order and of filesystem enumeration order.
 - **Purity:** shared modules are **strictly pure helper code** — they declare no parts and use no `requires`/`static requires`. Parts live only in `ObjectSchemas/`. The resolver treats any `shared-lib/<name>` that resolves to a missing file as an error (fail-closed), and does not recurse into anything outside the library root.
@@ -23,7 +25,7 @@
 ## File Structure
 
 ```
-MatterSurfaceLib/
+MatterEngine3/
   shared-lib/                         # v1 JS helper library (source-of-truth, hashed by content)
     rng.js                            # xoshiro128** seeded PRNG (backs Math.random + SP-6 variations)
     vecmath.js                        # vec2/3/4, mat4, lerp/slerp, transforms
@@ -32,15 +34,15 @@ MatterSurfaceLib/
     lsystem.js                        # axiom/rule string-rewriting expansion (imports rng.js)
   include/
     module_resolver.h                 # ModuleResolver: parse imports, resolve, fold (QuickJS-free)
+    script_rng_binding.h
   src/
     module_resolver.cpp               # implementation
     script_rng_binding.cpp            # C++ glue: seed install + Math.random thunk (SP-2 facing)
-  include/
-    script_rng_binding.h
   tests/
     shared_lib_tests.cpp              # all headless SP-7 tests (C++ fold unit + JS helper bakes)
     shared-lib-fixtures/              # tiny part fixtures + scratch shared-lib copies for tests
 ```
+(Consumed prototype backend stays under `MatterSurfaceLib/` and is referenced read-only.)
 
 The C++ **module-resolution + source-fold** unit (`module_resolver.{h,cpp}`) is the standalone, unit-testable piece: it parses `import` specifiers and resolves files itself, requiring **no running QuickJS**. The JS helper modules are pure JS, tested by baking a tiny part that uses them (those bake-driven tests depend on SP-2's host and are guarded so they no-op/skip cleanly if SP-2's `ScriptHost` is not yet linked — see Task 8).
 
@@ -49,20 +51,22 @@ The C++ **module-resolution + source-fold** unit (`module_resolver.{h,cpp}`) is 
 ## Task 1 — `ModuleResolver`: parse import specifiers (QuickJS-free)
 
 **Files:**
-- `MatterSurfaceLib/include/module_resolver.h` (new)
-- `MatterSurfaceLib/src/module_resolver.cpp` (new)
-- `MatterSurfaceLib/tests/shared_lib_tests.cpp` (new)
-- `MatterSurfaceLib/tests/Makefile` (edit)
+- `MatterEngine3/include/module_resolver.h` (new)
+- `MatterEngine3/src/module_resolver.cpp` (new)
+- `MatterEngine3/tests/shared_lib_tests.cpp` (new)
+- `MatterEngine3/tests/Makefile` (edit — append SP-7 target)
 
-- [ ] **Add the test target to the Makefile.** Append to `MatterSurfaceLib/tests/Makefile`:
+- [ ] **Add the test target to the Makefile.** Append to the existing `MatterEngine3/tests/Makefile` (SP-1 created it; do not recreate it):
   ```make
   # Shared script library: module-resolution + source-fold unit + JS-helper bake tests
   # (headless, GL-free; ModuleResolver requires no QuickJS).
   SHLIB_TARGET = shared_lib_tests
-  SHLIB_CPP = shared_lib_tests.cpp ../src/module_resolver.cpp ../src/part_asset.cpp \
-              ../src/blas_manager.cpp ../src/bvh.cpp ../src/tlas_manager.cpp \
-              ../src/vertex_ao.cpp ../src/occupancy.cpp
-  SHLIB_C   = ../src/material_registry.c
+  SHLIB_CPP = shared_lib_tests.cpp ../src/module_resolver.cpp ../src/part_asset_v2.cpp \
+              ../../MatterSurfaceLib/src/part_asset.cpp \
+              ../../MatterSurfaceLib/src/blas_manager.cpp ../../MatterSurfaceLib/src/bvh.cpp \
+              ../../MatterSurfaceLib/src/tlas_manager.cpp \
+              ../../MatterSurfaceLib/src/vertex_ao.cpp ../../MatterSurfaceLib/src/occupancy.cpp
+  SHLIB_C   = ../../MatterSurfaceLib/src/material_registry.c
   SHLIB_C_OBJ = material_registry.o
 
   $(SHLIB_TARGET): $(SHLIB_CPP) $(SHLIB_C)
@@ -74,9 +78,9 @@ The C++ **module-resolution + source-fold** unit (`module_resolver.{h,cpp}`) is 
   	./$(SHLIB_TARGET)
   ```
   Also add `run-shlib` to the `.PHONY` line and `$(SHLIB_TARGET)` to the `clean` rule.
-  (`part_asset.cpp` is linked because later tasks call `part_asset::fnv1a64`; `compute_resolved_hash` lands in `part_asset` in Task 4 — including the deps now avoids re-editing the Makefile.)
+  (`part_asset_v2.cpp` is linked because later tasks call `part_asset::compute_resolved_hash` from SP-1's v2 unit, which itself consumes the v1 `part_asset.cpp` for `fnv1a64`; including the deps now avoids re-editing the Makefile.)
 
-- [ ] **Write the failing test.** Create `MatterSurfaceLib/tests/shared_lib_tests.cpp` with the harness + first test:
+- [ ] **Write the failing test.** Create `MatterEngine3/tests/shared_lib_tests.cpp` with the harness + first test:
   ```cpp
   #include "../include/module_resolver.h"
   #include <cassert>
@@ -111,8 +115,8 @@ The C++ **module-resolution + source-fold** unit (`module_resolver.{h,cpp}`) is 
       return failures == 0 ? 0 : 1;
   }
   ```
-- [ ] **Run + expect FAIL:** `cd "MatterSurfaceLib/tests" && make run-shlib` → fails to compile (`module_resolver.h` not found).
-- [ ] **Minimal impl — header.** Create `MatterSurfaceLib/include/module_resolver.h`:
+- [ ] **Run + expect FAIL:** `make -C MatterEngine3/tests run-shlib` → fails to compile (`module_resolver.h` not found).
+- [ ] **Minimal impl — header.** Create `MatterEngine3/include/module_resolver.h`:
   ```cpp
   #pragma once
   #include <string>
@@ -132,7 +136,7 @@ The C++ **module-resolution + source-fold** unit (`module_resolver.{h,cpp}`) is 
 
   } // namespace module_resolver
   ```
-- [ ] **Minimal impl — parser.** Create `MatterSurfaceLib/src/module_resolver.cpp`:
+- [ ] **Minimal impl — parser.** Create `MatterEngine3/src/module_resolver.cpp`:
   ```cpp
   #include "../include/module_resolver.h"
   #include <cctype>
@@ -219,11 +223,11 @@ The C++ **module-resolution + source-fold** unit (`module_resolver.{h,cpp}`) is 
 
   } // namespace module_resolver
   ```
-- [ ] **Run + expect PASS:** `cd "MatterSurfaceLib/tests" && make run-shlib` → `All shared_lib tests passed`.
+- [ ] **Run + expect PASS:** `make -C MatterEngine3/tests run-shlib` → `All shared_lib tests passed`.
 - [ ] **Commit:**
   ```bash
-  git add MatterSurfaceLib/include/module_resolver.h MatterSurfaceLib/src/module_resolver.cpp \
-          MatterSurfaceLib/tests/shared_lib_tests.cpp MatterSurfaceLib/tests/Makefile
+  git add MatterEngine3/include/module_resolver.h MatterEngine3/src/module_resolver.cpp \
+          MatterEngine3/tests/shared_lib_tests.cpp MatterEngine3/tests/Makefile
   git commit -m "$(cat <<'EOF'
   feat(SP-7): add QuickJS-free import-specifier parser for shared-lib
 
@@ -237,16 +241,16 @@ The C++ **module-resolution + source-fold** unit (`module_resolver.{h,cpp}`) is 
 ## Task 2 — `ModuleResolver`: resolve `shared-lib/<name>` specifiers to files
 
 **Files:**
-- `MatterSurfaceLib/include/module_resolver.h` (edit)
-- `MatterSurfaceLib/src/module_resolver.cpp` (edit)
-- `MatterSurfaceLib/tests/shared_lib_tests.cpp` (edit)
-- `MatterSurfaceLib/tests/shared-lib-fixtures/aaa.js`, `bbb.js` (new fixtures)
+- `MatterEngine3/include/module_resolver.h` (edit)
+- `MatterEngine3/src/module_resolver.cpp` (edit)
+- `MatterEngine3/tests/shared_lib_tests.cpp` (edit)
+- `MatterEngine3/tests/shared-lib-fixtures/aaa.js`, `bbb.js` (new fixtures)
 
-- [ ] **Create resolver fixtures.** `MatterSurfaceLib/tests/shared-lib-fixtures/aaa.js`:
+- [ ] **Create resolver fixtures.** `MatterEngine3/tests/shared-lib-fixtures/aaa.js`:
   ```js
   export const AAA = 1;
   ```
-  `MatterSurfaceLib/tests/shared-lib-fixtures/bbb.js`:
+  `MatterEngine3/tests/shared-lib-fixtures/bbb.js`:
   ```js
   export const BBB = 2;
   ```
@@ -271,7 +275,7 @@ The C++ **module-resolution + source-fold** unit (`module_resolver.{h,cpp}`) is 
             "path traversal rejected");
   }
   ```
-- [ ] **Run + expect FAIL:** `make run-shlib` → compile error (`resolve_specifier` undeclared).
+- [ ] **Run + expect FAIL:** `make -C MatterEngine3/tests run-shlib` → compile error (`resolve_specifier` undeclared).
 - [ ] **Minimal impl — header.** Add to `module_resolver.h` inside the namespace:
   ```cpp
   // Maps a bare "shared-lib/<name>" specifier to "<root>/<name>.js". A trailing
@@ -300,11 +304,11 @@ The C++ **module-resolution + source-fold** unit (`module_resolver.{h,cpp}`) is 
       return true;
   }
   ```
-- [ ] **Run + expect PASS:** `make run-shlib` → `All shared_lib tests passed`.
+- [ ] **Run + expect PASS:** `make -C MatterEngine3/tests run-shlib` → `All shared_lib tests passed`.
 - [ ] **Commit:**
   ```bash
-  git add MatterSurfaceLib/include/module_resolver.h MatterSurfaceLib/src/module_resolver.cpp \
-          MatterSurfaceLib/tests/shared_lib_tests.cpp MatterSurfaceLib/tests/shared-lib-fixtures/
+  git add MatterEngine3/include/module_resolver.h MatterEngine3/src/module_resolver.cpp \
+          MatterEngine3/tests/shared_lib_tests.cpp MatterEngine3/tests/shared-lib-fixtures/
   git commit -m "$(cat <<'EOF'
   feat(SP-7): resolve shared-lib specifiers to files, fail-closed
 
@@ -318,10 +322,10 @@ The C++ **module-resolution + source-fold** unit (`module_resolver.{h,cpp}`) is 
 ## Task 3 — `ModuleResolver`: transitive gather + canonical fold buffer
 
 **Files:**
-- `MatterSurfaceLib/include/module_resolver.h` (edit)
-- `MatterSurfaceLib/src/module_resolver.cpp` (edit)
-- `MatterSurfaceLib/tests/shared_lib_tests.cpp` (edit)
-- `MatterSurfaceLib/tests/shared-lib-fixtures/{leaf,mid,top}.js` (new fixtures)
+- `MatterEngine3/include/module_resolver.h` (edit)
+- `MatterEngine3/src/module_resolver.cpp` (edit)
+- `MatterEngine3/tests/shared_lib_tests.cpp` (edit)
+- `MatterEngine3/tests/shared-lib-fixtures/{leaf,mid,top}.js` (new fixtures)
 
 - [ ] **Create transitive fixtures.** `leaf.js`:
   ```js
@@ -376,7 +380,7 @@ The C++ **module-resolution + source-fold** unit (`module_resolver.{h,cpp}`) is 
   }
   ```
   Add `#include <algorithm>` if not already present.
-- [ ] **Run + expect FAIL:** `make run-shlib` → compile error (`fold_sources`/`FoldResult` undeclared).
+- [ ] **Run + expect FAIL:** `make -C MatterEngine3/tests run-shlib` → compile error (`fold_sources`/`FoldResult` undeclared).
 - [ ] **Minimal impl — header.** Add to `module_resolver.h`:
   ```cpp
   #include <cstdint>
@@ -451,11 +455,11 @@ The C++ **module-resolution + source-fold** unit (`module_resolver.{h,cpp}`) is 
       return true;
   }
   ```
-- [ ] **Run + expect PASS:** `make run-shlib` → all pass.
+- [ ] **Run + expect PASS:** `make -C MatterEngine3/tests run-shlib` → all pass.
 - [ ] **Commit:**
   ```bash
-  git add MatterSurfaceLib/include/module_resolver.h MatterSurfaceLib/src/module_resolver.cpp \
-          MatterSurfaceLib/tests/shared_lib_tests.cpp MatterSurfaceLib/tests/shared-lib-fixtures/
+  git add MatterEngine3/include/module_resolver.h MatterEngine3/src/module_resolver.cpp \
+          MatterEngine3/tests/shared_lib_tests.cpp MatterEngine3/tests/shared-lib-fixtures/
   git commit -m "$(cat <<'EOF'
   feat(SP-7): transitive module gather + canonical NUL-separated source fold
 
@@ -469,13 +473,13 @@ The C++ **module-resolution + source-fold** unit (`module_resolver.{h,cpp}`) is 
 ## Task 4 — Folded source changes the resolved hash (importer vs non-importer; transitive A→B)
 
 **Files:**
-- `MatterSurfaceLib/include/part_asset.h` (edit — add `compute_resolved_hash`)
-- `MatterSurfaceLib/src/part_asset.cpp` (edit)
-- `MatterSurfaceLib/tests/shared_lib_tests.cpp` (edit)
+- `MatterEngine3/include/part_asset_v2.h` (edit — add `compute_resolved_hash` only if SP-1 has not)
+- `MatterEngine3/src/part_asset_v2.cpp` (edit)
+- `MatterEngine3/tests/shared_lib_tests.cpp` (edit)
 
-This task wires the canonical fold (Task 3) into SP-1's hash and proves the SP-7 invalidation guarantee. SP-1's `compute_resolved_hash` may not exist yet at execution time; if absent, add it here per the SP-1 signature (folding into `part_asset::fnv1a64`). If SP-1 already added it, skip the impl sub-step and only add the test.
+This task wires the canonical fold (Task 3) into SP-1's hash and proves the SP-7 invalidation guarantee. SP-1's `compute_resolved_hash` lives in the new `part_asset_v2` unit and should already exist at execution time; if absent, add it here per the SP-1 signature (folding into `part_asset::fnv1a64`, reused from the consumed v1 `part_asset.cpp`). If SP-1 already added it, skip the impl sub-step and only add the test.
 
-- [ ] **Write the failing test.** Append + call from `main` (include `"../include/part_asset.h"`):
+- [ ] **Write the failing test.** Append + call from `main` (include `"../include/part_asset_v2.h"`):
   ```cpp
   // Helper: resolved hash of a part = fnv1a64 over its canonical fold + params bytes.
   static uint64_t hash_part(const std::string& part, const std::string& root,
@@ -533,8 +537,8 @@ This task wires the canonical fold (Task 3) into SP-1's hash and proves the SP-7
   void remove_scratch_shared_lib(const std::string& dir);
   ```
   (If you prefer strict task isolation, implement Task 6's RNG + helpers before Task 4 — both orderings are valid since the helpers are test-only.)
-- [ ] **Run + expect FAIL:** `make run-shlib` → either `compute_resolved_hash` undeclared (impl needed) or link error.
-- [ ] **Minimal impl — `compute_resolved_hash` (only if SP-1 has not landed it).** Add to `part_asset.h` (inside `namespace part_asset`):
+- [ ] **Run + expect FAIL:** `make -C MatterEngine3/tests run-shlib` → either `compute_resolved_hash` undeclared (impl needed) or link error.
+- [ ] **Minimal impl — `compute_resolved_hash` (only if SP-1 has not landed it).** Add to `part_asset_v2.h` (inside `namespace part_asset`):
   ```cpp
   // Content-addressed identity (SP-1). All three inputs are opaque byte ranges.
   // child_hashes need NOT be pre-sorted; the helper sorts internally so the result
@@ -544,7 +548,7 @@ This task wires the canonical fold (Task 3) into SP-1's hash and proves the SP-7
                                  const void* params_bytes, size_t params_len,
                                  const uint64_t* child_hashes, size_t child_count);
   ```
-  Add to `part_asset.cpp` (include `<algorithm>`, `<vector>`, `<cstring>`):
+  Add to `part_asset_v2.cpp` (include `<algorithm>`, `<vector>`, `<cstring>`):
   ```cpp
   uint64_t compute_resolved_hash(const void* source_bytes, size_t source_len,
                                  const void* params_bytes, size_t params_len,
@@ -566,11 +570,11 @@ This task wires the canonical fold (Task 3) into SP-1's hash and proves the SP-7
   }
   ```
   (If SP-1 already shipped this exactly, do not duplicate — just confirm the signature matches and run the test.)
-- [ ] **Run + expect PASS:** `make run-shlib` → all pass.
+- [ ] **Run + expect PASS:** `make -C MatterEngine3/tests run-shlib` → all pass.
 - [ ] **Commit:**
   ```bash
-  git add MatterSurfaceLib/include/part_asset.h MatterSurfaceLib/src/part_asset.cpp \
-          MatterSurfaceLib/tests/shared_lib_tests.cpp
+  git add MatterEngine3/include/part_asset_v2.h MatterEngine3/src/part_asset_v2.cpp \
+          MatterEngine3/tests/shared_lib_tests.cpp
   git commit -m "$(cat <<'EOF'
   feat(SP-7): fold imported module source into resolved hash (transitive invalidation)
 
@@ -584,7 +588,7 @@ This task wires the canonical fold (Task 3) into SP-1's hash and proves the SP-7
 ## Task 5 — Ordering-stability of the fold (explicit canonical-order test)
 
 **Files:**
-- `MatterSurfaceLib/tests/shared_lib_tests.cpp` (edit)
+- `MatterEngine3/tests/shared_lib_tests.cpp` (edit)
 
 Task 3 covered import-order independence; this task pins **enumeration/filesystem-order independence** and that two distinct module sets ordered differently still hash identically when content is identical.
 
@@ -614,10 +618,10 @@ Task 3 covered import-order independence; this task pins **enumeration/filesyste
             "specifiers sorted lexicographically (aaa before bbb)");
   }
   ```
-- [ ] **Run + expect PASS** (Task 3 already implements canonical ordering, so this should pass on first run; if it FAILs, the sort in `fold_sources` is the bug to fix): `make run-shlib`.
+- [ ] **Run + expect PASS** (Task 3 already implements canonical ordering, so this should pass on first run; if it FAILs, the sort in `fold_sources` is the bug to fix): `make -C MatterEngine3/tests run-shlib`.
 - [ ] **Commit:**
   ```bash
-  git add MatterSurfaceLib/tests/shared_lib_tests.cpp
+  git add MatterEngine3/tests/shared_lib_tests.cpp
   git commit -m "$(cat <<'EOF'
   test(SP-7): pin canonical fold-ordering stability across import permutations
 
@@ -631,13 +635,13 @@ Task 3 covered import-order independence; this task pins **enumeration/filesyste
 ## Task 6 — Seeded RNG module (`rng.js`) + scratch-root test helpers + pure-output determinism
 
 **Files:**
-- `MatterSurfaceLib/shared-lib/rng.js` (new)
-- `MatterSurfaceLib/tests/shared-lib-fixtures/rng_probe.js` (new — a tiny harness that exercises rng.js without QuickJS-host bindings, run via node if available; otherwise the C++ reference test below is authoritative)
-- `MatterSurfaceLib/tests/shared_lib_tests.cpp` (edit — add scratch helpers + a C++ reference impl of xoshiro128** to assert the JS stream values)
+- `MatterEngine3/shared-lib/rng.js` (new)
+- `MatterEngine3/tests/shared-lib-fixtures/rng_probe.js` (new — a tiny harness that exercises rng.js without QuickJS-host bindings, run via node if available; otherwise the C++ reference test below is authoritative)
+- `MatterEngine3/tests/shared_lib_tests.cpp` (edit — add scratch helpers + a C++ reference impl of xoshiro128** to assert the JS stream values)
 
 The RNG must be deterministic with **no real entropy**. We pin exact output values: the C++ test contains a reference xoshiro128**/SplitMix32 and asserts the first N outputs for a known seed; `rng.js` must reproduce the same numbers (validated by the end-to-end bake in Task 8 and, if `node` is present, by `rng_probe.js`).
 
-- [ ] **Write `rng.js`** at `MatterSurfaceLib/shared-lib/rng.js`:
+- [ ] **Write `rng.js`** at `MatterEngine3/shared-lib/rng.js`:
   ```js
   // Deterministic seeded PRNG for the shared script library (SP-7).
   // Algorithm: xoshiro128** with state seeded by SplitMix32 from a 32-bit seed.
@@ -746,22 +750,22 @@ The RNG must be deterministic with **no real entropy**. We pin exact output valu
              e.next(), e.next(), e.next(), e.next());
   }
   ```
-  Also write `MatterSurfaceLib/tests/shared-lib-fixtures/rng_probe.js` (optional node cross-check):
+  Also write `MatterEngine3/tests/shared-lib-fixtures/rng_probe.js` (optional node cross-check):
   ```js
   import { rng } from '../../shared-lib/rng.js';
   const r = rng(42);
   console.log([r.next(), r.next(), r.next(), r.next()].join(' '));
   ```
-- [ ] **Run + expect PASS** (C++ reference test is self-contained): `make run-shlib`. Record the printed `seed=42 first4` values.
+- [ ] **Run + expect PASS** (C++ reference test is self-contained): `make -C MatterEngine3/tests run-shlib`. Record the printed `seed=42 first4` values.
 - [ ] **Cross-check JS against the reference (if `node` available).** Run:
   ```bash
-  cd "MatterSurfaceLib" && node tests/shared-lib-fixtures/rng_probe.js
+  cd "MatterEngine3" && node tests/shared-lib-fixtures/rng_probe.js
   ```
   Expected: the four integers printed must equal the C++ `seed=42 first4` line. If `node` is not installed, skip — Task 8's bake test is the authoritative JS check.
 - [ ] **Commit:**
   ```bash
-  git add MatterSurfaceLib/shared-lib/rng.js MatterSurfaceLib/tests/shared-lib-fixtures/rng_probe.js \
-          MatterSurfaceLib/tests/shared_lib_tests.cpp
+  git add MatterEngine3/shared-lib/rng.js MatterEngine3/tests/shared-lib-fixtures/rng_probe.js \
+          MatterEngine3/tests/shared_lib_tests.cpp
   git commit -m "$(cat <<'EOF'
   feat(SP-7): add seeded xoshiro128** rng.js + C++ reference stream test
 
@@ -775,9 +779,9 @@ The RNG must be deterministic with **no real entropy**. We pin exact output valu
 ## Task 7 — C++ `Math.random` binding that seeds from params (SP-2 facing)
 
 **Files:**
-- `MatterSurfaceLib/include/script_rng_binding.h` (new)
-- `MatterSurfaceLib/src/script_rng_binding.cpp` (new)
-- `MatterSurfaceLib/tests/shared_lib_tests.cpp` (edit)
+- `MatterEngine3/include/script_rng_binding.h` (new)
+- `MatterEngine3/src/script_rng_binding.cpp` (new)
+- `MatterEngine3/tests/shared_lib_tests.cpp` (edit)
 
 SP-2 owns the `ScriptHost`/QuickJS lifecycle; SP-7 provides the seed-derivation contract and the C++ helper that produces the seeded stream backing `Math.random`. To keep this unit-testable **without QuickJS**, the binding exposes a pure C++ `ScriptRng` (same xoshiro128**/SplitMix32) plus a `seed_from_params_json(json, key)` helper. SP-2's host wires `ScriptRng::random()` to the JS `Math.random` symbol; that wiring is one line in the host and is exercised in Task 8.
 
@@ -801,13 +805,15 @@ SP-2 owns the `ScriptHost`/QuickJS lifecycle; SP-7 provides the seed-derivation 
       for (int i = 0; i < 100; ++i) { double v = r5.random(); CHECK(v >= 0.0 && v < 1.0, "random in [0,1)"); }
   }
   ```
-- [ ] **Run + expect FAIL:** `make run-shlib` → `script_rng_binding.h` not found. First add the source to the Makefile `SHLIB_CPP` list:
+- [ ] **Run + expect FAIL:** `make -C MatterEngine3/tests run-shlib` → `script_rng_binding.h` not found. First add the source to the Makefile `SHLIB_CPP` list:
   ```make
   SHLIB_CPP = shared_lib_tests.cpp ../src/module_resolver.cpp ../src/script_rng_binding.cpp \
-              ../src/part_asset.cpp ../src/blas_manager.cpp ../src/bvh.cpp ../src/tlas_manager.cpp \
-              ../src/vertex_ao.cpp ../src/occupancy.cpp
+              ../src/part_asset_v2.cpp ../../MatterSurfaceLib/src/part_asset.cpp \
+              ../../MatterSurfaceLib/src/blas_manager.cpp ../../MatterSurfaceLib/src/bvh.cpp \
+              ../../MatterSurfaceLib/src/tlas_manager.cpp \
+              ../../MatterSurfaceLib/src/vertex_ao.cpp ../../MatterSurfaceLib/src/occupancy.cpp
   ```
-- [ ] **Minimal impl — header.** Create `MatterSurfaceLib/include/script_rng_binding.h`:
+- [ ] **Minimal impl — header.** Create `MatterEngine3/include/script_rng_binding.h`:
   ```cpp
   #pragma once
   #include <cstdint>
@@ -833,7 +839,7 @@ SP-2 owns the `ScriptHost`/QuickJS lifecycle; SP-7 provides the seed-derivation 
 
   } // namespace script_rng
   ```
-- [ ] **Minimal impl — source.** Create `MatterSurfaceLib/src/script_rng_binding.cpp`:
+- [ ] **Minimal impl — source.** Create `MatterEngine3/src/script_rng_binding.cpp`:
   ```cpp
   #include "../include/script_rng_binding.h"
   #include <cctype>
@@ -883,11 +889,11 @@ SP-2 owns the `ScriptHost`/QuickJS lifecycle; SP-7 provides the seed-derivation 
 
   } // namespace script_rng
   ```
-- [ ] **Run + expect PASS:** `make run-shlib` → all pass.
+- [ ] **Run + expect PASS:** `make -C MatterEngine3/tests run-shlib` → all pass.
 - [ ] **Commit:**
   ```bash
-  git add MatterSurfaceLib/include/script_rng_binding.h MatterSurfaceLib/src/script_rng_binding.cpp \
-          MatterSurfaceLib/tests/shared_lib_tests.cpp MatterSurfaceLib/tests/Makefile
+  git add MatterEngine3/include/script_rng_binding.h MatterEngine3/src/script_rng_binding.cpp \
+          MatterEngine3/tests/shared_lib_tests.cpp MatterEngine3/tests/Makefile
   git commit -m "$(cat <<'EOF'
   feat(SP-7): C++ seeded-RNG contract for Math.random, seed-from-params helper
 
@@ -901,16 +907,16 @@ SP-2 owns the `ScriptHost`/QuickJS lifecycle; SP-7 provides the seed-derivation 
 ## Task 8 — Helper modules (vecmath, bezier, geometry, lsystem) + pure-output tests + end-to-end bake
 
 **Files:**
-- `MatterSurfaceLib/shared-lib/vecmath.js` (new)
-- `MatterSurfaceLib/shared-lib/bezier.js` (new)
-- `MatterSurfaceLib/shared-lib/geometry.js` (new)
-- `MatterSurfaceLib/shared-lib/lsystem.js` (new)
-- `MatterSurfaceLib/tests/shared-lib-fixtures/*.probe.js` (node cross-checks, optional)
-- `MatterSurfaceLib/tests/shared_lib_tests.cpp` (edit — C++ reference assertions for pure math + an SP-2-guarded bake test)
+- `MatterEngine3/shared-lib/vecmath.js` (new)
+- `MatterEngine3/shared-lib/bezier.js` (new)
+- `MatterEngine3/shared-lib/geometry.js` (new)
+- `MatterEngine3/shared-lib/lsystem.js` (new)
+- `MatterEngine3/tests/shared-lib-fixtures/*.probe.js` (node cross-checks, optional)
+- `MatterEngine3/tests/shared_lib_tests.cpp` (edit — C++ reference assertions for pure math + an SP-2-guarded bake test)
 
 The four pure helpers are validated two ways: (1) C++ reference assertions in `shared_lib_tests.cpp` pin the expected numeric outputs (authoritative, no JS engine required); (2) an end-to-end bake test that, **if SP-2's `ScriptHost` is linked**, bakes a tiny part importing the helpers and asserts the helper's behavior is reflected in the geometry — guarded by `#ifdef SP2_SCRIPT_HOST` so the suite still builds/passes before SP-2 lands.
 
-- [ ] **Write `vecmath.js`** at `MatterSurfaceLib/shared-lib/vecmath.js`:
+- [ ] **Write `vecmath.js`** at `MatterEngine3/shared-lib/vecmath.js`:
   ```js
   // vec2/3/4 + mat4 helpers, lerp/slerp. Pure, deterministic.
   export const add = (a, b) => a.map((x, i) => x + b[i]);
@@ -930,7 +936,7 @@ The four pure helpers are validated two ways: (1) C++ reference assertions in `s
     return [1,0,0,0, 0,1,0,0, 0,0,1,0, x,y,z,1];
   }
   ```
-- [ ] **Write `bezier.js`** at `MatterSurfaceLib/shared-lib/bezier.js`:
+- [ ] **Write `bezier.js`** at `MatterEngine3/shared-lib/bezier.js`:
   ```js
   // Cubic Bézier evaluation + uniform sampling. Pure, deterministic.
   // p0..p3 are arrays (vecN). t in [0,1].
@@ -945,7 +951,7 @@ The four pure helpers are validated two ways: (1) C++ reference assertions in `s
     return out;
   }
   ```
-- [ ] **Write `geometry.js`** at `MatterSurfaceLib/shared-lib/geometry.js`:
+- [ ] **Write `geometry.js`** at `MatterEngine3/shared-lib/geometry.js`:
   ```js
   // Primitive point/shape utilities. Pure, deterministic.
   // Ring of n points of given radius in the XZ plane at height y.
@@ -968,7 +974,7 @@ The four pure helpers are validated two ways: (1) C++ reference assertions in `s
     return out;
   }
   ```
-- [ ] **Write `lsystem.js`** at `MatterSurfaceLib/shared-lib/lsystem.js` (imports rng for optional stochastic rules — keeps the transitive-fold path real in the library):
+- [ ] **Write `lsystem.js`** at `MatterEngine3/shared-lib/lsystem.js` (imports rng for optional stochastic rules — keeps the transitive-fold path real in the library):
   ```js
   // L-system string rewriting. Pure given (axiom, rules, iterations). Stochastic
   // rules (value = array of {to, weight}) draw from a seeded rng for determinism.
@@ -1022,7 +1028,7 @@ The four pure helpers are validated two ways: (1) C++ reference assertions in `s
       CHECK(s == "ABB", "lsystem A->AB twice = ABB reference");
   }
   ```
-- [ ] **Run + expect PASS** (C++ reference is self-contained): `make run-shlib`.
+- [ ] **Run + expect PASS** (C++ reference is self-contained): `make -C MatterEngine3/tests run-shlib`.
 - [ ] **Optional node cross-checks.** If `node` is available, add `shared-lib-fixtures/helpers.probe.js`:
   ```js
   import { cross, lerp } from '../../shared-lib/vecmath.js';
@@ -1034,7 +1040,7 @@ The four pure helpers are validated two ways: (1) C++ reference assertions in `s
   console.log(JSON.stringify(ring(4,1,0).map(p=>p.map(v=>+v.toFixed(6)))));
   console.log(expand('A', {A:'AB'}, 2));                       // ABB
   ```
-  Run `cd "MatterSurfaceLib" && node tests/shared-lib-fixtures/helpers.probe.js` and confirm outputs match the C++ reference values. Skip if no node.
+  Run `cd "MatterEngine3" && node tests/shared-lib-fixtures/helpers.probe.js` and confirm outputs match the C++ reference values. Skip if no node.
 - [ ] **Add the SP-2-guarded end-to-end bake test.** Append to `shared_lib_tests.cpp`:
   ```cpp
   #ifdef SP2_SCRIPT_HOST
@@ -1078,12 +1084,12 @@ The four pure helpers are validated two ways: (1) C++ reference assertions in `s
   #endif
   ```
   Call `test_import_resolves_end_to_end();` from `main`.
-- [ ] **Run + expect PASS:** `make run-shlib` (the bake test prints the skip notice until SP-2 lands).
+- [ ] **Run + expect PASS:** `make -C MatterEngine3/tests run-shlib` (the bake test prints the skip notice until SP-2 lands).
 - [ ] **Commit:**
   ```bash
-  git add MatterSurfaceLib/shared-lib/vecmath.js MatterSurfaceLib/shared-lib/bezier.js \
-          MatterSurfaceLib/shared-lib/geometry.js MatterSurfaceLib/shared-lib/lsystem.js \
-          MatterSurfaceLib/tests/shared-lib-fixtures/ MatterSurfaceLib/tests/shared_lib_tests.cpp
+  git add MatterEngine3/shared-lib/vecmath.js MatterEngine3/shared-lib/bezier.js \
+          MatterEngine3/shared-lib/geometry.js MatterEngine3/shared-lib/lsystem.js \
+          MatterEngine3/tests/shared-lib-fixtures/ MatterEngine3/tests/shared_lib_tests.cpp
   git commit -m "$(cat <<'EOF'
   feat(SP-7): v1 helper modules (vecmath/bezier/geometry/lsystem) + pure-output + bake tests
 

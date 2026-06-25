@@ -6,7 +6,9 @@
 
 **Architecture:** A standalone, JS-free C++ module (`triangle_emit`) owns a `TriangleBuildBuffer` that accumulates `Tri`+`TriEx` from primitive assembly (transformed by a supplied `mat4`, tagged with a current material id) and from a line tuber that converts a radius-skinned segment into stepped-sphere solid triangles. At bake the buffer's triangles are appended to whatever the voxel session lowered, and the combined set is registered as ONE BLAS via `BLASManager::register_triangles`. Triangles are thin literal surfaces and never enter the SDF/field path. A separate `ChildInstance` recorder folds variation params into the SP-1 `resolved_hash` so identical params dedup to one artifact, independent of LOD.
 
-**Tech Stack:** C++17, QuickJS-ng DSL bindings (SP-2), BLAS Tri/TriEx, SP-1 child-instance table, headless tests under MatterSurfaceLib/tests/.
+**Tech Stack:** C++17, QuickJS-ng DSL bindings (SP-2), BLAS Tri/TriEx (consumed from MatterSurfaceLib), SP-1 child-instance table, headless tests under `MatterEngine3/tests/`.
+
+> **Relocation note (from the master plan):** This sub-plan obeys the `MatterEngine3` relocation contract in `2026-06-24-procedural-part-system-master-plan.md`. All NEW files (`triangle_emit.{hpp,cpp}`, `triangle_variation_tests.cpp`) live under `MatterEngine3/`; the consumed MatterSurfaceLib prototype backend (`blas_manager.cpp`, `bvh.cpp`, `vertex_ao.cpp`, `occupancy.cpp`) is referenced read-only as `../../MatterSurfaceLib/src/<dep>` with `-I../../MatterSurfaceLib/include`. The prototype is never modified.
 
 ---
 
@@ -17,20 +19,20 @@
 - `BLASManager::register_triangles(Tri* triangles, int triangle_count, const TriEx* triex = nullptr)` (`MatterSurfaceLib/include/blas_manager.hpp:109`) → `BLASHandle`. Per-triangle `materialId` and `tint` both participate in dedup identity (`blas_manager.hpp:199-204`).
 - `BLASManager::get_entry(handle)` → `const BLASEntry*` with `.triangles` (`std::vector<Tri>`) and `.tri_extra` (`std::vector<TriEx>`); `get_unique_blas_count()` returns the number of distinct BLAS entries.
 - `mat4` (`bvh.h:129`): `TransformPoint(float3)`, `TransformVector(float3)`, `Translate`, `Scale`, `operator()(i,j)`, `cell[16]` row-major.
-- `ChildInstance` (SP-1 `part_asset.h`, spec §API): `{ uint64_t child_resolved_hash; float transform[16]; }`.
+- `ChildInstance` (SP-1 `MatterEngine3/include/part_asset_v2.h`, spec §API): `{ uint64_t child_resolved_hash; float transform[16]; }`.
 - `compute_resolved_hash(const void* source, size_t, const void* params, size_t, const uint64_t* child_hashes, size_t)` → `uint64_t` (SP-1; sorts children internally, fnv1a64).
-- Test convention (`MatterSurfaceLib/tests/blas_tint_tests.cpp` + `tests/Makefile:155-162`): plain `int main()`, `#define CHECK(cond,msg)`, link `../src/blas_manager.cpp ../src/bvh.cpp ../src/vertex_ao.cpp ../src/occupancy.cpp`, GL-free.
+- Test convention (`MatterSurfaceLib/tests/blas_tint_tests.cpp` + `MatterSurfaceLib/tests/Makefile:155-162`): plain `int main()`, `#define CHECK(cond,msg)`, link the consumed prototype backend `../../MatterSurfaceLib/src/blas_manager.cpp ../../MatterSurfaceLib/src/bvh.cpp ../../MatterSurfaceLib/src/vertex_ao.cpp ../../MatterSurfaceLib/src/occupancy.cpp` (from `MatterEngine3/tests`), GL-free.
 
 **Assumptions stated where SP-2/SP-1 are unimplemented at execution time:**
 - SP-2's build buffer is depended on only through a narrow seam: this module produces a `std::vector<Tri>`/`std::vector<TriEx>` that the host appends to the voxel-lowered mesh before the single `register_triangles` call. If SP-2 exposes a concrete `BuildBuffer` type, the Task 2 merge step binds to it; otherwise the module's own `TriangleBuildBuffer` is the seam and a thin SP-2 task calls `appendTo(host_tris, host_triex)`.
-- SP-1's `ChildInstance` and `compute_resolved_hash` are depended on by signature from the SP-1 spec. If unavailable at execution time, Task 5 declares a local mirror struct `ChildInstance { uint64_t child_resolved_hash; float transform[16]; }` and a local `fnv1a64`-based `compute_resolved_hash`, with a TODO to swap to `part_asset.h` once SP-1 lands. This is flagged inline in the step.
+- SP-1's `ChildInstance` and `compute_resolved_hash` are depended on by signature from the SP-1 spec. If unavailable at execution time, Task 5 declares a local mirror struct `ChildInstance { uint64_t child_resolved_hash; float transform[16]; }` and a local `fnv1a64`-based `compute_resolved_hash`, with a TODO to swap to `part_asset_v2.h` once SP-1 lands. This is flagged inline in the step.
 
 ---
 
 ## File Structure
 
 ```
-MatterSurfaceLib/
+MatterEngine3/
 ├── include/
 │   └── triangle_emit.hpp        # NEW: TriangleBuildBuffer, ShapeType, primitive assembly,
 │                                 #      line tuber, variation/ChildInstance recorder API
@@ -38,7 +40,8 @@ MatterSurfaceLib/
 │   └── triangle_emit.cpp        # NEW: implementation (GL-free, no JS, no field/SDF)
 └── tests/
     ├── triangle_variation_tests.cpp   # NEW: headless GL-free suite
-    └── Makefile                       # EDIT: add TRIVAR target + run-trivar rule
+    └── Makefile                       # APPEND: add TRIVAR target + run-trivar rule
+                                       #   (consumes ../../MatterSurfaceLib/src/* read-only)
 ```
 
 `triangle_emit` is deliberately JS-free and field-free so it is unit-testable by feeding transforms + vertices directly. A later thin SP-2 task (out of scope here, noted in Task 6) binds these functions into the QuickJS DSL (`beginShape`/`vertex`/`endShape`/`line`/`lineThickness`/`instance`).
@@ -50,17 +53,17 @@ MatterSurfaceLib/
 Build the primitive-assembly core: a `TriangleBuildBuffer` that, given the current transform `mat4` and a current material id, turns `beginShape(type)` + a vertex list + `endShape()` into transformed `Tri` plus per-triangle `TriEx` (carrying `materialId`, neutral tint, face normals as a shading-normal fallback).
 
 **Files:**
-- CREATE: `MatterSurfaceLib/include/triangle_emit.hpp`
-- CREATE: `MatterSurfaceLib/src/triangle_emit.cpp`
-- CREATE: `MatterSurfaceLib/tests/triangle_variation_tests.cpp`
-- EDIT: `MatterSurfaceLib/tests/Makefile`
+- CREATE: `MatterEngine3/include/triangle_emit.hpp`
+- CREATE: `MatterEngine3/src/triangle_emit.cpp`
+- CREATE: `MatterEngine3/tests/triangle_variation_tests.cpp`
+- APPEND: `MatterEngine3/tests/Makefile` (already exists from SP-1)
 
 Steps:
 
-- [ ] Write the test header + first failing test in `MatterSurfaceLib/tests/triangle_variation_tests.cpp`:
+- [ ] Write the test header + first failing test in `MatterEngine3/tests/triangle_variation_tests.cpp`:
   ```cpp
   #include "../include/triangle_emit.hpp"
-  #include "../include/blas_manager.hpp"
+  #include "../../MatterSurfaceLib/include/blas_manager.hpp"
   #include <cstdio>
   #include <cmath>
 
@@ -112,12 +115,14 @@ Steps:
       return failures == 0 ? 0 : 1;
   }
   ```
-- [ ] Add the test target to `MatterSurfaceLib/tests/Makefile`. Append after the VOX block (line ~253):
+- [ ] Append the test target to the existing `MatterEngine3/tests/Makefile` (created by SP-1). The new impl `triangle_emit.cpp` is a `../src/<new>.cpp` source; the consumed prototype backend is referenced read-only as `../../MatterSurfaceLib/src/<dep>.cpp`. Append this block:
   ```make
   # Direct-triangle emission + line tuber + variation dedup tests (headless, GL-free).
+  # NEW impl ../src/triangle_emit.cpp + consumed MatterSurfaceLib backend sources.
   TRIVAR_TARGET = triangle_variation_tests
   TRIVAR_SOURCES = triangle_variation_tests.cpp ../src/triangle_emit.cpp \
-                   ../src/blas_manager.cpp ../src/bvh.cpp ../src/vertex_ao.cpp ../src/occupancy.cpp
+                   ../../MatterSurfaceLib/src/blas_manager.cpp ../../MatterSurfaceLib/src/bvh.cpp \
+                   ../../MatterSurfaceLib/src/vertex_ao.cpp ../../MatterSurfaceLib/src/occupancy.cpp
 
   $(TRIVAR_TARGET): $(TRIVAR_SOURCES)
   	$(CC) $(TRIVAR_SOURCES) -o $(TRIVAR_TARGET) $(CFLAGS) $(INCLUDE_PATHS) $(LDFLAGS) $(LDLIBS)
@@ -125,9 +130,9 @@ Steps:
   run-trivar: $(TRIVAR_TARGET)
   	./$(TRIVAR_TARGET)
   ```
-  Also add `run-trivar` to the `.PHONY` line (line 67) and `$(TRIVAR_TARGET)` to the `clean` rule (line 70).
-- [ ] Run `cd "MatterSurfaceLib/tests" && make run-trivar` — expect FAIL (compile error: `triangle_emit.hpp` does not exist).
-- [ ] Create `MatterSurfaceLib/include/triangle_emit.hpp` with the minimal API:
+  Also add `run-trivar` to the existing `.PHONY` line and `$(TRIVAR_TARGET)` to the existing `clean` rule. Do NOT recreate the Makefile or edit `MatterSurfaceLib/tests/Makefile`.
+- [ ] Run `make -C MatterEngine3/tests run-trivar` — expect FAIL (compile error: `triangle_emit.hpp` does not exist).
+- [ ] Create `MatterEngine3/include/triangle_emit.hpp` with the minimal API:
   ```cpp
   #pragma once
   #include "bvh.h"      // Tri, TriEx, mat4, float3, make_float3
@@ -182,7 +187,7 @@ Steps:
 
   } // namespace tri_emit
   ```
-- [ ] Create `MatterSurfaceLib/src/triangle_emit.cpp` implementing emission (line/tuber are stubs filled in Task 3):
+- [ ] Create `MatterEngine3/src/triangle_emit.cpp` implementing emission (line/tuber are stubs filled in Task 3):
   ```cpp
   #include "triangle_emit.hpp"
   #include <cmath>
@@ -274,8 +279,8 @@ Steps:
   } // namespace tri_emit
   ```
   NOTE: `make_float2`/`make_float4`/`cross`/`operator-` for `float3` are global (from `precomp.h`, pulled in via `bvh.h`); confirm `make_float2` exists in `precomp.h` during this step — if it does not, build the `float2` literally with `float2 z; z.x = z.y = 0.0f;`.
-- [ ] Run `cd "MatterSurfaceLib/tests" && make run-trivar` — expect PASS ("All triangle_variation tests passed").
-- [ ] Commit: `git add MatterSurfaceLib/include/triangle_emit.hpp MatterSurfaceLib/src/triangle_emit.cpp MatterSurfaceLib/tests/triangle_variation_tests.cpp MatterSurfaceLib/tests/Makefile && git commit` with message `feat(SP-6): direct-triangle emission into Tri/TriEx build buffer` and trailer `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
+- [ ] Run `make -C MatterEngine3/tests run-trivar` — expect PASS ("All triangle_variation tests passed").
+- [ ] Commit: `git add MatterEngine3/include/triangle_emit.hpp MatterEngine3/src/triangle_emit.cpp MatterEngine3/tests/triangle_variation_tests.cpp MatterEngine3/tests/Makefile && git commit` with message `feat(SP-6): direct-triangle emission into Tri/TriEx build buffer` and trailer `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
 
 ---
 
@@ -284,7 +289,7 @@ Steps:
 Prove the unifying decision: a part that mixes a voxel-lowered mesh (simulated here by a sphere-triangle blob, since SP-2's lowering is GL-bound) plus a direct triangle quad registers as ONE BLAS holding both, with distinct per-triangle materials, and that the merge seam (`appendTo`) preserves per-triangle materialId.
 
 **Files:**
-- EDIT: `MatterSurfaceLib/tests/triangle_variation_tests.cpp`
+- EDIT: `MatterEngine3/tests/triangle_variation_tests.cpp`
 
 Steps:
 
@@ -339,9 +344,9 @@ Steps:
       CHECK(has1 && has2, "both per-triangle materials present in one BLAS");
   }
   ```
-- [ ] Run `cd "MatterSurfaceLib/tests" && make run-trivar` — expect PASS already (the merge seam + register path is real code; no new production code needed). If `get_entry`/`tri_extra` usage fails to compile, that is the FAIL signal — fix by matching the confirmed `BLASEntry` member names (`triangles`, `tri_extra`) from `blas_manager.hpp:58-59`.
+- [ ] Run `make -C MatterEngine3/tests run-trivar` — expect PASS already (the merge seam + register path is real code; no new production code needed). If `get_entry`/`tri_extra` usage fails to compile, that is the FAIL signal — fix by matching the confirmed `BLASEntry` member names (`triangles`, `tri_extra`) from the consumed `MatterSurfaceLib/include/blas_manager.hpp:58-59`.
 - [ ] If PASS without production changes, this task is a characterization test of the one-BLAS contract; commit as a test-only change. If a real gap surfaces (e.g. `appendTo` ordering), fix in `triangle_emit.cpp` minimally.
-- [ ] Commit: `git add MatterSurfaceLib/tests/triangle_variation_tests.cpp && git commit` with message `test(SP-6): voxel+direct triangles merge into one part BLAS` and trailer `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
+- [ ] Commit: `git add MatterEngine3/tests/triangle_variation_tests.cpp && git commit` with message `test(SP-6): voxel+direct triangles merge into one part BLAS` and trailer `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
 
 ---
 
@@ -350,8 +355,8 @@ Steps:
 Implement `line(a, b, r0, r1, ...)` so a 1D primitive with a skinning radius tubes into solid stepped-sphere triangle geometry. Stepping approach: place `step_count` UV-sphere shells along the segment at evenly spaced parameters `t in [0,1]`, each sphere's radius lerped `lerp(r0, r1, t)`, each tessellated into `rings x segments` triangles. This reuses the simple analytic sphere tessellation (independent of the voxel sphere-brush/field path, per the open-question resolution: a dedicated triangle tuber keeps lines OUT of the field path — consistent with "thin surfaces, no field interaction").
 
 **Files:**
-- EDIT: `MatterSurfaceLib/src/triangle_emit.cpp`
-- EDIT: `MatterSurfaceLib/tests/triangle_variation_tests.cpp`
+- EDIT: `MatterEngine3/src/triangle_emit.cpp`
+- EDIT: `MatterEngine3/tests/triangle_variation_tests.cpp`
 
 Steps:
 
@@ -392,8 +397,8 @@ Steps:
       CHECK(max_r_near_a > max_r_near_b, "radius tapers from a (0.6) to b (0.1)");
   }
   ```
-- [ ] Run `cd "MatterSurfaceLib/tests" && make run-trivar` — expect FAIL (`line` is a stub; `buf.triangles()` empty → "tubed line produced triangles" fails).
-- [ ] Implement `line` in `MatterSurfaceLib/src/triangle_emit.cpp`, replacing the stub:
+- [ ] Run `make -C MatterEngine3/tests run-trivar` — expect FAIL (`line` is a stub; `buf.triangles()` empty → "tubed line produced triangles" fails).
+- [ ] Implement `line` in `MatterEngine3/src/triangle_emit.cpp`, replacing the stub:
   ```cpp
   void TriangleBuildBuffer::line(float3 a, float3 b, float r0, float r1,
                                  int material_id, const mat4& transform,
@@ -444,8 +449,8 @@ Steps:
       }
   }
   ```
-- [ ] Run `cd "MatterSurfaceLib/tests" && make run-trivar` — expect PASS.
-- [ ] Commit: `git add MatterSurfaceLib/src/triangle_emit.cpp MatterSurfaceLib/tests/triangle_variation_tests.cpp && git commit` with message `feat(SP-6): tube skinned lines into stepped-sphere solid geometry` and trailer `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
+- [ ] Run `make -C MatterEngine3/tests run-trivar` — expect PASS.
+- [ ] Commit: `git add MatterEngine3/src/triangle_emit.cpp MatterEngine3/tests/triangle_variation_tests.cpp && git commit` with message `feat(SP-6): tube skinned lines into stepped-sphere solid geometry` and trailer `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
 
 ---
 
@@ -454,7 +459,7 @@ Steps:
 Prove triangles are thin literal surfaces: a direct triangle whose vertices sit inside a voxel sphere brush's volume is emitted unchanged (not smoothed, carved, or snapped to the field). Since `triangle_emit` has no field/SDF dependency at all, the test asserts that emission is independent of any brush data: the emitted vertices equal the authored (transformed) vertices regardless of a co-located brush descriptor.
 
 **Files:**
-- EDIT: `MatterSurfaceLib/tests/triangle_variation_tests.cpp`
+- EDIT: `MatterEngine3/tests/triangle_variation_tests.cpp`
 
 Steps:
 
@@ -490,8 +495,8 @@ Steps:
       (void)brush_center;
   }
   ```
-- [ ] Run `cd "MatterSurfaceLib/tests" && make run-trivar` — expect PASS (the no-field-interaction property holds by construction; this test pins it so a future field coupling regresses visibly). This is a guard test, not a driver of new code.
-- [ ] Commit: `git add MatterSurfaceLib/tests/triangle_variation_tests.cpp && git commit` with message `test(SP-6): direct triangles are thin surfaces, no field interaction` and trailer `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
+- [ ] Run `make -C MatterEngine3/tests run-trivar` — expect PASS (the no-field-interaction property holds by construction; this test pins it so a future field coupling regresses visibly). This is a guard test, not a driver of new code.
+- [ ] Commit: `git add MatterEngine3/tests/triangle_variation_tests.cpp && git commit` with message `test(SP-6): direct triangles are thin surfaces, no field interaction` and trailer `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
 
 ---
 
@@ -500,9 +505,9 @@ Steps:
 Implement the variation binding: `instance(childPart, variation)` records a `ChildInstance` (child resolved-hash + current transform). The child's resolved hash folds its params (the `variation`), so identical variation params → one cached artifact (one distinct hash, N records); different variation params → distinct artifacts. Variation = params bound at instance time.
 
 **Files:**
-- EDIT: `MatterSurfaceLib/include/triangle_emit.hpp`
-- EDIT: `MatterSurfaceLib/src/triangle_emit.cpp`
-- EDIT: `MatterSurfaceLib/tests/triangle_variation_tests.cpp`
+- EDIT: `MatterEngine3/include/triangle_emit.hpp`
+- EDIT: `MatterEngine3/src/triangle_emit.cpp`
+- EDIT: `MatterEngine3/tests/triangle_variation_tests.cpp`
 
 Steps:
 
@@ -548,10 +553,10 @@ Steps:
       CHECK(distinct == 2, "3x variation A + 1x variation B -> 2 distinct artifacts");
   }
   ```
-- [ ] Run `cd "MatterSurfaceLib/tests" && make run-trivar` — expect FAIL (`VariationRecorder`, `ChildInstance`, `rec.instance`, `rec.children` undefined).
-- [ ] Add to `MatterSurfaceLib/include/triangle_emit.hpp` (inside `namespace tri_emit`, after the buffer class). NOTE on SP-1 dependency: if `part_asset.h` already provides `ChildInstance` and `compute_resolved_hash` at execution time, `#include "part_asset.h"` and use those; otherwise use the local mirror below (flagged TODO to swap once SP-1 lands — struct layout matches the SP-1 spec exactly so the swap is source-compatible):
+- [ ] Run `make -C MatterEngine3/tests run-trivar` — expect FAIL (`VariationRecorder`, `ChildInstance`, `rec.instance`, `rec.children` undefined).
+- [ ] Add to `MatterEngine3/include/triangle_emit.hpp` (inside `namespace tri_emit`, after the buffer class). NOTE on SP-1 dependency: if SP-1's `MatterEngine3/include/part_asset_v2.h` already provides `ChildInstance` and `compute_resolved_hash` at execution time, `#include "part_asset_v2.h"` (resolved via `-I../include`) and use those; otherwise use the local mirror below (flagged TODO to swap once SP-1 lands — struct layout matches the SP-1 spec exactly so the swap is source-compatible):
   ```cpp
-  // SP-1 mirror (swap to part_asset.h's ChildInstance/compute_resolved_hash once
+  // SP-1 mirror (swap to part_asset_v2.h's ChildInstance/compute_resolved_hash once
   // SP-1 is implemented; layout matches the SP-1 spec byte-for-byte). The hash is
   // FNV-1a 64-bit over source + params + sorted(child_hashes), per SP-1.
   struct ChildInstance {
@@ -581,7 +586,7 @@ Steps:
       std::vector<ChildInstance> children_;
   };
   ```
-- [ ] Implement in `MatterSurfaceLib/src/triangle_emit.cpp` (inside `namespace tri_emit`). Guard the helper so it compiles whether or not `part_asset.h` was included (only define the local one if SP-1's is absent — in the local-mirror case define unconditionally):
+- [ ] Implement in `MatterEngine3/src/triangle_emit.cpp` (inside `namespace tri_emit`). Guard the helper so it compiles whether or not `part_asset_v2.h` was included (only define the local one if SP-1's is absent — in the local-mirror case define unconditionally):
   ```cpp
   uint64_t compute_resolved_hash(const void* source_bytes, size_t source_len,
                                  const void* params_bytes, size_t params_len,
@@ -617,8 +622,8 @@ Steps:
   }
   ```
   Add `#include <algorithm>` to the top of `triangle_emit.cpp` for `std::sort`.
-- [ ] Run `cd "MatterSurfaceLib/tests" && make run-trivar` — expect PASS.
-- [ ] Commit: `git add MatterSurfaceLib/include/triangle_emit.hpp MatterSurfaceLib/src/triangle_emit.cpp MatterSurfaceLib/tests/triangle_variation_tests.cpp && git commit` with message `feat(SP-6): instance(child, variation) records + content-hash variation dedup` and trailer `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
+- [ ] Run `make -C MatterEngine3/tests run-trivar` — expect PASS.
+- [ ] Commit: `git add MatterEngine3/include/triangle_emit.hpp MatterEngine3/src/triangle_emit.cpp MatterEngine3/tests/triangle_variation_tests.cpp && git commit` with message `feat(SP-6): instance(child, variation) records + content-hash variation dedup` and trailer `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
 
 ---
 
@@ -627,7 +632,7 @@ Steps:
 Prove variation chooses *which* geometry, LOD chooses *how detailed* — they are orthogonal. SP-4 (LOD generation) is out of scope, so GL-free we assert: each distinct variation, when its part is baked, gets the same LOD-array *shape* (level count) — the LOD structure is a property of the bake pipeline, not of the variation params. We model this with a small `lod_level_count_for` stub representing the SP-4 contract ("every variation gets the same ~N LOD levels"), and assert two different variations yield the same level count while remaining distinct artifacts.
 
 **Files:**
-- EDIT: `MatterSurfaceLib/tests/triangle_variation_tests.cpp`
+- EDIT: `MatterEngine3/tests/triangle_variation_tests.cpp`
 
 Steps:
 
@@ -655,9 +660,9 @@ Steps:
       CHECK(lod_level_count_for(hA) == 3, "expected ~3 LOD levels per variation");
   }
   ```
-- [ ] Run `cd "MatterSurfaceLib/tests" && make run-trivar` — expect PASS (asserts the independence invariant; no production code, since SP-4 owns generation). This closes the spec's "variation/LOD independence" testing bullet GL-free.
+- [ ] Run `make -C MatterEngine3/tests run-trivar` — expect PASS (asserts the independence invariant; no production code, since SP-4 owns generation). This closes the spec's "variation/LOD independence" testing bullet GL-free.
 - [ ] Add a code comment block at the top of `triangle_variation_tests.cpp` enumerating each spec Testing bullet and the test that covers it (emission, one BLAS, skinned line, no field interaction, variation dedup, variation/LOD independence) so coverage is auditable.
-- [ ] Commit: `git add MatterSurfaceLib/tests/triangle_variation_tests.cpp && git commit` with message `test(SP-6): variation and LOD are independent (variation=geometry, LOD=detail)` and trailer `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
+- [ ] Commit: `git add MatterEngine3/tests/triangle_variation_tests.cpp && git commit` with message `test(SP-6): variation and LOD are independent (variation=geometry, LOD=detail)` and trailer `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
 
 ---
 
@@ -666,11 +671,11 @@ Steps:
 This task records (in the module header) exactly how a future SP-2 task binds `triangle_emit` into the QuickJS DSL, so the field-free module stays the testable core and the JS layer is a thin adapter. No new tests; this is a documentation-only step ensuring the merge-into-build-buffer contract is unambiguous for the SP-2 implementer.
 
 **Files:**
-- EDIT: `MatterSurfaceLib/include/triangle_emit.hpp`
+- EDIT: `MatterEngine3/include/triangle_emit.hpp`
 
 Steps:
 
-- [ ] Add a doc comment block at the top of `MatterSurfaceLib/include/triangle_emit.hpp` (below `#pragma once`) describing the binding seam:
+- [ ] Add a doc comment block at the top of `MatterEngine3/include/triangle_emit.hpp` (below `#pragma once`) describing the binding seam:
   ```cpp
   // SP-6 direct-triangle session, JS-free core.
   //
@@ -689,8 +694,8 @@ Steps:
   // triangle BLAS and NO triangle render path. The VariationRecorder's children()
   // feed save_v2's child-instance table (SP-1). Triangles never enter the SDF.
   ```
-- [ ] Run `cd "MatterSurfaceLib/tests" && make run-trivar` — expect PASS (comment-only change; verifies nothing broke).
-- [ ] Commit: `git add MatterSurfaceLib/include/triangle_emit.hpp && git commit` with message `docs(SP-6): document the SP-2 DSL binding seam for triangle_emit` and trailer `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
+- [ ] Run `make -C MatterEngine3/tests run-trivar` — expect PASS (comment-only change; verifies nothing broke).
+- [ ] Commit: `git add MatterEngine3/include/triangle_emit.hpp && git commit` with message `docs(SP-6): document the SP-2 DSL binding seam for triangle_emit` and trailer `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
 
 ---
 

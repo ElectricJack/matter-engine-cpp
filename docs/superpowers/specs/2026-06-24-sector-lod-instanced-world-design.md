@@ -46,7 +46,7 @@ count** small enough to build and trace each frame, regardless of how large the 
 
 C++17, raylib/rlgl + OpenGL 3.3, GLSL fragment-shader ray tracer (TLAS/BLAS in
 `bvh_tlas_common.glsl`). Existing `BLASManager`, `TLASManager`, and `mesh_simplifier`.
-GL-free CPU build steps unit-tested under `MatterSurfaceLib/tests/`.
+GL-free CPU build steps unit-tested under `MatterEngine3/tests/`.
 
 ---
 

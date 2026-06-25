@@ -2,20 +2,22 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Embed QuickJS-ng into MatterSurfaceLib and expose a Processing-style `Part` DSL so one isolated script deterministically bakes a single standalone `.part` via SP-1's `save_v2`, through analytic voxel/SDF-CSG brushes lowered to Cluster particles + carve particles.
+**Goal:** Embed QuickJS-ng into the **new `MatterEngine3/` project** (consuming the MatterSurfaceLib prototype READ-ONLY) and expose a Processing-style `Part` DSL so one isolated script deterministically bakes a single standalone `.part` via SP-1's `save_v2`, through analytic voxel/SDF-CSG brushes lowered to Cluster particles + carve particles.
 
 **Architecture:** A C++ `ScriptHost` owns the QuickJS-ng `JSRuntime`/`JSContext` lifecycle (one fresh context per bake), owns all authoring state (transform stack, material cursor, active-session enum, build buffer), and binds DSL functions that mutate that C++ state. On script completion the host lowers the CSG build buffer to `StaticParticle`s + carve `Particle`s, drives `Cluster::force_rebuild_all_cells()` to surface per-cell BLAS, then computes the resolved hash and calls `save_v2`. Any error (throw, session misuse, time-budget overrun) is fail-closed: no file is written and a structured error is returned.
 
-**Tech Stack:** C++17, QuickJS-ng (vendored), existing Cluster/BLASManager, SP-1 part_asset v2, headless tests under MatterSurfaceLib/tests/ matching the existing assert/style there.
+**Tech Stack:** C++17, QuickJS-ng (vendored under repo-root `Libraries/quickjs-ng/`), existing Cluster/BLASManager (consumed from MatterSurfaceLib), SP-1 `part_asset_v2`, headless tests under `MatterEngine3/tests/` matching the prototype's assert/style.
+
+> **Relocation note (from the master plan):** This sub-plan obeys the `MatterEngine3` relocation contract in `2026-06-24-procedural-part-system-master-plan.md`. All NEW files (`script_host.{h,cpp}`, `dsl_state.{h,cpp}`, `csg_lowering.{h,cpp}`, `dsl_rng.h`, `dsl_bindings.cpp`, `part_base.js.h`, tests) live under `MatterEngine3/{include,src,tests}/`; the consumed prototype backend (cluster/cell/mesher/blas/tlas/part_asset/vertex_ao/occupancy + the C SurfaceLib sources) is referenced read-only as `../../MatterSurfaceLib/src/<dep>` with `-I../../MatterSurfaceLib/include`. SP-1's v2 symbols come from `part_asset_v2.h` (`-I../include`). `Libraries/quickjs-ng/` and raylib paths are unchanged (`MatterEngine3/tests` is the same depth as `MatterSurfaceLib/tests`).
 
 ---
 
 ## Dependencies & assumptions
 
-- **SP-1 must land first.** This plan calls `part_asset::compute_resolved_hash(...)`, `part_asset::save_v2(...)`, `part_asset::cache_path(...)`, `part_asset::ChildInstance`, and `part_asset::LodLevels`. As of writing, `MatterSurfaceLib/include/part_asset.h` still exposes only v1 (`save`/`load`/`compute_param_hash`). **Assumption:** SP-1's v2 API is implemented per `docs/superpowers/specs/2026-06-24-part-artifact-v2-design.md` before SP-2 Task 9. SP-2 passes `children=nullptr, child_count=0` and an empty `LodLevels`.
+- **SP-1 must land first.** This plan calls `part_asset::compute_resolved_hash(...)`, `part_asset::save_v2(...)`, `part_asset::cache_path(...)`, `part_asset::ChildInstance`, and `part_asset::LodLevels` — all declared in SP-1's NEW `MatterEngine3/include/part_asset_v2.h` (consumers `#include "part_asset_v2.h"`, resolved via `-I../include`). SP-1 does NOT modify the prototype's v1 `MatterSurfaceLib/include/part_asset.h`. **Assumption:** SP-1's v2 API is implemented per `docs/superpowers/specs/2026-06-24-part-artifact-v2-design.md` before SP-2 Task 9. SP-2 passes `children=nullptr, child_count=0` and an empty `LodLevels`.
 - **QuickJS-ng version pin (assumption):** **quickjs-ng v0.10.0** (release tarball `quickjs-ng-0.10.0`). Vendored as a flat source drop under `Libraries/quickjs-ng/` (no submodule, no network fetch at build), mirroring the existing `Libraries/raylib`, `Libraries/imgui`, `Libraries/ode` convention. If the pinned tarball's file set differs, adjust the `QUICKJS_C` source list in Task 1 to match the actual `.c` files shipped; the rest of the plan is layout-independent.
 - **QuickJS-ng source subset (assumption):** the amalgam-ish core is `quickjs.c`, `libregexp.c`, `libunicode.c`, `cutils.c`, `quickjs-libc.c` (we do NOT compile `quickjs-libc.c` — it provides Date/file/network/`std`/`os` we deliberately omit), plus the dtoa helper `xsum.c`/`libbf.c` only if the pinned build requires bignum. Plan compiles: `quickjs.c libregexp.c libunicode.c cutils.c`. If v0.10.0 needs `libbf.c`/`xsum.c` to link, add them in the Task 1 link-error step (the failing link will name the missing symbols).
-- **Cluster API confirmed** against `MatterSurfaceLib/include/cluster.h`: `add_particle(pos, radius, materialId, tint, detail_size)`, `set_carve_particles(std::vector<Particle>)`, `set_base_detail_size`, `set_simplification_ratio`, `force_rebuild_all_cells`, `clear_particles`. `StaticParticle`/`Particle` fields confirmed. **Guessed:** there is no existing "exact box brush" mesher input — `cluster.h` only accepts spheres (`StaticParticle`/`Particle` are point+radius). SP-2 therefore lowers a `box` brush by **sampling its analytic SDF into a dense pack of small spheres** at the session spacing (a box "stamp"), preserving crisp corners down to spacing. This is the spec's "control the input, don't rewrite the mesher" path and resolves the spec's open question ("whether `box` needs a mesher-input addition") with **no mesher change**.
+- **Cluster API confirmed** against `MatterSurfaceLib/include/cluster.h` (consumed prototype, via `-I../../MatterSurfaceLib/include`): `add_particle(pos, radius, materialId, tint, detail_size)`, `set_carve_particles(std::vector<Particle>)`, `set_base_detail_size`, `set_simplification_ratio`, `force_rebuild_all_cells`, `clear_particles`. `StaticParticle`/`Particle` fields confirmed. **Guessed:** there is no existing "exact box brush" mesher input — `cluster.h` only accepts spheres (`StaticParticle`/`Particle` are point+radius). SP-2 therefore lowers a `box` brush by **sampling its analytic SDF into a dense pack of small spheres** at the session spacing (a box "stamp"), preserving crisp corners down to spacing. This is the spec's "control the input, don't rewrite the mesher" path and resolves the spec's open question ("whether `box` needs a mesher-input addition") with **no mesher change**.
 - **Smooth-min lowering (resolves spec open question):** the build buffer is a **flat op list** (brush + op + smoothing-cursor snapshot per op). `smoothing(k)` is applied **whole-expression** as the `Cluster` smooth-min factor for the dominant `k` recorded; per-op `k` differences beyond the final union set are out of scope for SP-2 (single session, single `k` cursor at lowering). Documented in Task 7.
 
 ## File Structure
@@ -23,18 +25,18 @@
 | File | Status | Responsibility |
 |------|--------|----------------|
 | `Libraries/quickjs-ng/` | NEW (vendored) | quickjs-ng v0.10.0 source drop (`quickjs.c`, `quickjs.h`, `libregexp.c/.h`, `libunicode.c/.h`, `cutils.c/.h`, `quickjs-atom.h`, `quickjs-opcode.h`, `libregexp-opcode.h`, `LICENSE`, `VERSION`). |
-| `MatterSurfaceLib/include/script_host.h` | NEW | Public `ScriptHost` API: `BakeResult`, `BakeError`, `BakeOptions` (time budget), `bake_source(source, params_json, opts)`. |
-| `MatterSurfaceLib/src/script_host.cpp` | NEW | Context lifecycle, `Part` bootstrap eval, `build(p)` dispatch, error harvesting, time-budget interrupt, final lower→Cluster→BLAS→save_v2 orchestration. |
-| `MatterSurfaceLib/include/dsl_state.h` | NEW | C++-owned DSL state: transform stack (`Matrix`), material cursor (`uint32_t`), `Session` enum, `BuildBuffer` (flat CSG op list), structured error sink. |
-| `MatterSurfaceLib/src/dsl_state.cpp` | NEW | Transform-stack math, session-misuse checks, build-buffer accumulation. |
-| `MatterSurfaceLib/include/csg_lowering.h` | NEW | `lower_build_buffer(const BuildBuffer&, ...) -> {vector<StaticParticle> additive, vector<Particle> carve, float smoothing}`. |
-| `MatterSurfaceLib/src/csg_lowering.cpp` | NEW | Analytic brush→particle/carve lowering (sphere = 1 particle; box = SDF-sampled sphere stamp); union/difference/intersection routing. |
-| `MatterSurfaceLib/include/dsl_rng.h` | NEW | Seeded PRNG (SplitMix64/xorshift) backing `Math.random`; seed derived from params. |
-| `MatterSurfaceLib/src/dsl_bindings.cpp` | NEW | QuickJS-ng C bindings for `Part` base methods (`pushMatrix`/`translate`/`rotate*`/`scale`/`applyMatrix`/`fill`/`beginVoxels`/`endVoxels`/`box`/`sphere`/`union`/`difference`/`intersection`/`smoothing`) + `MAT` constant + seeded `Math.random`. |
-| `MatterSurfaceLib/src/part_base.js.h` | NEW | C string literal: the `Part` ES base-class bootstrap JS evaluated into every fresh context. |
-| `MatterSurfaceLib/tests/script_host_tests.cpp` | NEW | Headless tests: embed sanity, params, primitives, CSG, smoothing, sub-min box, fail-closed, determinism, seeded RNG. |
-| `MatterSurfaceLib/tests/Makefile` | MODIFIED | Add `SCRIPT_TARGET`/`SCRIPT_SOURCES`/`run-script` wiring; compile quickjs-ng `.c` via gcc (C, unmangled). |
-| `MatterSurfaceLib/Makefile` | MODIFIED | Compile vendored quickjs-ng `.c` into the MatterSurfaceLib build so the app can bake. |
+| `MatterEngine3/include/script_host.h` | NEW | Public `ScriptHost` API: `BakeResult`, `BakeError`, `BakeOptions` (time budget), `bake_source(source, params_json, opts)`. |
+| `MatterEngine3/src/script_host.cpp` | NEW | Context lifecycle, `Part` bootstrap eval, `build(p)` dispatch, error harvesting, time-budget interrupt, final lower→Cluster→BLAS→save_v2 orchestration. |
+| `MatterEngine3/include/dsl_state.h` | NEW | C++-owned DSL state: transform stack (`Matrix`), material cursor (`uint32_t`), `Session` enum, `BuildBuffer` (flat CSG op list), structured error sink. |
+| `MatterEngine3/src/dsl_state.cpp` | NEW | Transform-stack math, session-misuse checks, build-buffer accumulation. |
+| `MatterEngine3/include/csg_lowering.h` | NEW | `lower_build_buffer(const BuildBuffer&, ...) -> {vector<StaticParticle> additive, vector<Particle> carve, float smoothing}`. |
+| `MatterEngine3/src/csg_lowering.cpp` | NEW | Analytic brush→particle/carve lowering (sphere = 1 particle; box = SDF-sampled sphere stamp); union/difference/intersection routing. |
+| `MatterEngine3/include/dsl_rng.h` | NEW | Seeded PRNG (SplitMix64/xorshift) backing `Math.random`; seed derived from params. |
+| `MatterEngine3/src/dsl_bindings.cpp` | NEW | QuickJS-ng C bindings for `Part` base methods (`pushMatrix`/`translate`/`rotate*`/`scale`/`applyMatrix`/`fill`/`beginVoxels`/`endVoxels`/`box`/`sphere`/`union`/`difference`/`intersection`/`smoothing`) + `MAT` constant + seeded `Math.random`. |
+| `MatterEngine3/src/part_base.js.h` | NEW | C string literal: the `Part` ES base-class bootstrap JS evaluated into every fresh context. |
+| `MatterEngine3/tests/script_host_tests.cpp` | NEW | Headless tests: embed sanity, params, primitives, CSG, smoothing, sub-min box, fail-closed, determinism, seeded RNG. |
+| `MatterEngine3/tests/Makefile` | MODIFIED (append) | Append `SCRIPT_TARGET`/`SCRIPT_SOURCES`/`run-script` wiring to the existing SP-1 Makefile; compile quickjs-ng `.c` via gcc (C, unmangled). |
+| `MatterEngine3/Makefile` | MODIFIED | Compile vendored quickjs-ng `.c` into the MatterEngine3 build so the app can bake. |
 
 ---
 
@@ -43,12 +45,12 @@
 ### Task 1: Vendor QuickJS-ng and prove the embed (`1+1` → 2)
 
 **Files:**
-- `Libraries/quickjs-ng/` (NEW vendored source)
-- `MatterSurfaceLib/tests/script_host_tests.cpp` (NEW)
-- `MatterSurfaceLib/tests/Makefile` (MODIFIED)
+- `Libraries/quickjs-ng/` (NEW vendored source — repo-root, shared)
+- `MatterEngine3/tests/script_host_tests.cpp` (NEW)
+- `MatterEngine3/tests/Makefile` (MODIFIED — append to the existing SP-1 Makefile)
 
 - [ ] Download the quickjs-ng **v0.10.0** release tarball and place its core sources at `Libraries/quickjs-ng/`. Required files: `quickjs.c`, `quickjs.h`, `quickjs-atom.h`, `quickjs-opcode.h`, `libregexp.c`, `libregexp.h`, `libregexp-opcode.h`, `libunicode.c`, `libunicode.h`, `cutils.c`, `cutils.h`, `list.h`, `quickjs-c-atomics.h` (if present), `xsum.h` (if present), `LICENSE`, `VERSION`. Do NOT include `quickjs-libc.c`, `qjs.c`, `qjsc.c`, `repl.js`, tests, or CMake files. Verify with `ls Libraries/quickjs-ng/quickjs.c Libraries/quickjs-ng/quickjs.h`.
-- [ ] Create `MatterSurfaceLib/tests/script_host_tests.cpp` with a failing embed-sanity test that calls quickjs-ng directly (this also proves the headers/link work before any host code exists):
+- [ ] Create `MatterEngine3/tests/script_host_tests.cpp` with a failing embed-sanity test that calls quickjs-ng directly (this also proves the headers/link work before any host code exists):
 ```cpp
 #include <cstdio>
 #include <cstdint>
@@ -81,7 +83,7 @@ int main() {
     return failures ? 1 : 0;
 }
 ```
-- [ ] Add to `MatterSurfaceLib/tests/Makefile` near the other targets — a quickjs include path and the script-host target. Append a quickjs include to `INCLUDE_PATHS` is NOT needed globally; instead define a local var and target block:
+- [ ] Append to the existing `MatterEngine3/tests/Makefile` (created by SP-1) — a quickjs include path and the script-host target. Do NOT recreate the Makefile or edit `MatterSurfaceLib/tests/Makefile`. Appending a quickjs include to `INCLUDE_PATHS` is NOT needed globally; instead define a local var and target block (the QuickJS-ng `../../Libraries/quickjs-ng` and consumed-prototype `../../MatterSurfaceLib/src` paths are at the same depth as SP-1's existing references):
 ```makefile
 # Script host (QuickJS-ng) + DSL/CSG bake tests (headless, GL-free for the host;
 # the BLAS surface path links raylib like the part-asset tests). QuickJS-ng C
@@ -94,7 +96,7 @@ QJS_OBJ  = quickjs.o libregexp.o libunicode.o cutils.o
 
 SCRIPT_TARGET = script_host_tests
 SCRIPT_CPP = script_host_tests.cpp
-SCRIPT_C   = ../src/material_registry.c
+SCRIPT_C   = ../../MatterSurfaceLib/src/material_registry.c
 
 $(SCRIPT_TARGET): $(SCRIPT_CPP) $(SCRIPT_C) $(QJS_C)
 	gcc -c $(QJS_C) -O2 -DCONFIG_VERSION='"0.10.0"' $(QJS_INC)
@@ -106,12 +108,12 @@ $(SCRIPT_TARGET): $(SCRIPT_CPP) $(SCRIPT_C) $(QJS_C)
 run-script: $(SCRIPT_TARGET)
 	./$(SCRIPT_TARGET)
 ```
-  Also add `run-script` to the `.PHONY` line and `$(SCRIPT_TARGET)` to the `clean` rule.
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected FAIL/link-error first time** (e.g. unresolved symbols if `libbf.c`/`xsum.c` are required by v0.10.0). If link errors name missing symbols, add the corresponding `.c` files to `QJS_C`/`QJS_OBJ` and rerun. Iterate until it builds.
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected PASS**: `ALL PASS`. The embed works.
+  Also extend the existing `.PHONY` line with `run-script` and extend the `clean` rule with `$(SCRIPT_TARGET)` (do not recreate either; append to what SP-1 wrote).
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected FAIL/link-error first time** (e.g. unresolved symbols if `libbf.c`/`xsum.c` are required by v0.10.0). If link errors name missing symbols, add the corresponding `.c` files to `QJS_C`/`QJS_OBJ` and rerun. Iterate until it builds.
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected PASS**: `ALL PASS`. The embed works.
 - [ ] Commit:
 ```
-git add Libraries/quickjs-ng MatterSurfaceLib/tests/script_host_tests.cpp MatterSurfaceLib/tests/Makefile && git commit -m "$(cat <<'EOF'
+git add Libraries/quickjs-ng MatterEngine3/tests/script_host_tests.cpp MatterEngine3/tests/Makefile && git commit -m "$(cat <<'EOF'
 feat(sp2): vendor quickjs-ng v0.10.0 and prove embed eval
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -124,12 +126,12 @@ EOF
 ### Task 2: ScriptHost skeleton + fresh-context-per-bake lifecycle
 
 **Files:**
-- `MatterSurfaceLib/include/script_host.h` (NEW)
-- `MatterSurfaceLib/src/script_host.cpp` (NEW)
-- `MatterSurfaceLib/tests/script_host_tests.cpp` (MODIFIED)
-- `MatterSurfaceLib/tests/Makefile` (MODIFIED)
+- `MatterEngine3/include/script_host.h` (NEW)
+- `MatterEngine3/src/script_host.cpp` (NEW)
+- `MatterEngine3/tests/script_host_tests.cpp` (MODIFIED)
+- `MatterEngine3/tests/Makefile` (MODIFIED)
 
-- [ ] Create `MatterSurfaceLib/include/script_host.h`:
+- [ ] Create `MatterEngine3/include/script_host.h`:
 ```cpp
 #pragma once
 #include <cstdint>
@@ -220,8 +222,8 @@ static void test_fresh_context_runs_empty_class() {
     CHECK(r.error.ok, "empty class bakes without error");
 }
 ```
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` after adding `../src/script_host.cpp` to `SCRIPT_CPP` and updating the link line — **expected FAIL**: undefined reference / link error (no `script_host.cpp` yet).
-- [ ] Create `MatterSurfaceLib/src/script_host.cpp` with the minimal lifecycle: create runtime+context, define the `Part` base + a no-op binding placeholder, eval source, instantiate the class, call `build({})`, harvest exceptions, tear down. Minimal real code:
+- [ ] Run `cd MatterEngine3/tests && make run-script` after adding `../src/script_host.cpp` to `SCRIPT_CPP` and updating the link line — **expected FAIL**: undefined reference / link error (no `script_host.cpp` yet).
+- [ ] Create `MatterEngine3/src/script_host.cpp` with the minimal lifecycle: create runtime+context, define the `Part` base + a no-op binding placeholder, eval source, instantiate the class, call `build({})`, harvest exceptions, tear down. Minimal real code:
 ```cpp
 #include "../include/script_host.h"
 extern "C" {
@@ -286,10 +288,10 @@ done:
 } // namespace script_host
 ```
   NOTE: the hardcoded `Empty` trampoline is a deliberate Task-2 stepping stone; Task 3 replaces it with generic class discovery. Keep the test class named `Empty`.
-- [ ] Update `MatterSurfaceLib/tests/Makefile`: set `SCRIPT_CPP = script_host_tests.cpp ../src/script_host.cpp` and ensure the link line compiles both. Run `cd MatterSurfaceLib/tests && make run-script` — **expected PASS**: `ALL PASS`.
+- [ ] Update the appended block in `MatterEngine3/tests/Makefile`: set `SCRIPT_CPP = script_host_tests.cpp ../src/script_host.cpp` and ensure the link line compiles both. Run `cd MatterEngine3/tests && make run-script` — **expected PASS**: `ALL PASS`.
 - [ ] Commit:
 ```
-git add MatterSurfaceLib/include/script_host.h MatterSurfaceLib/src/script_host.cpp MatterSurfaceLib/tests/script_host_tests.cpp MatterSurfaceLib/tests/Makefile && git commit -m "$(cat <<'EOF'
+git add MatterEngine3/include/script_host.h MatterEngine3/src/script_host.cpp MatterEngine3/tests/script_host_tests.cpp MatterEngine3/tests/Makefile && git commit -m "$(cat <<'EOF'
 feat(sp2): ScriptHost skeleton with fresh-context-per-bake lifecycle
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -302,11 +304,11 @@ EOF
 ### Task 3: Generic Part class discovery + `build(p)` dispatch
 
 **Files:**
-- `MatterSurfaceLib/src/part_base.js.h` (NEW)
-- `MatterSurfaceLib/src/script_host.cpp` (MODIFIED)
-- `MatterSurfaceLib/tests/script_host_tests.cpp` (MODIFIED)
+- `MatterEngine3/src/part_base.js.h` (NEW)
+- `MatterEngine3/src/script_host.cpp` (MODIFIED)
+- `MatterEngine3/tests/script_host_tests.cpp` (MODIFIED)
 
-- [ ] Create `MatterSurfaceLib/src/part_base.js.h` with the bootstrap base class as a C string. The base tracks subclasses via a registry so the host can find the authored class generically (no hardcoded name):
+- [ ] Create `MatterEngine3/src/part_base.js.h` with the bootstrap base class as a C string. The base tracks subclasses via a registry so the host can find the authored class generically (no hardcoded name):
 ```cpp
 #pragma once
 // Evaluated into every fresh context before user source. Defines the Part base
@@ -337,7 +339,7 @@ static void test_build_called_on_authored_class() {
 }
 ```
   Add `bool last_build_ran() const { return last_build_ran_; }` + `bool last_build_ran_ = false;` to `ScriptHost` in `script_host.h` (test-observable hook).
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected FAIL**: `last_build_ran` false / member missing.
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected FAIL**: `last_build_ran` false / member missing.
 - [ ] Replace the Task-2 trampoline in `script_host.cpp` with generic discovery: eval `kPartBaseJS`, eval user source, then scan `globalThis` own-property values for a function whose prototype chain includes `Part`, instantiate it, and call `build`. Minimal real code (replace the `{ ... }` block and add the member set):
 ```cpp
 #include "part_base.js.h"
@@ -401,10 +403,10 @@ JS_FreeValue(ctx, base);
     JS_FreeValue(ctx, inst);
 }
 ```
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected PASS**: `ALL PASS`.
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected PASS**: `ALL PASS`.
 - [ ] Commit:
 ```
-git add MatterSurfaceLib/src/part_base.js.h MatterSurfaceLib/src/script_host.cpp MatterSurfaceLib/include/script_host.h MatterSurfaceLib/tests/script_host_tests.cpp && git commit -m "$(cat <<'EOF'
+git add MatterEngine3/src/part_base.js.h MatterEngine3/src/script_host.cpp MatterEngine3/include/script_host.h MatterEngine3/tests/script_host_tests.cpp && git commit -m "$(cat <<'EOF'
 feat(sp2): generic Part subclass discovery and build(p) dispatch
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -417,12 +419,12 @@ EOF
 ### Task 4: C++-owned DSL state (transform stack, material cursor, session enum, build buffer)
 
 **Files:**
-- `MatterSurfaceLib/include/dsl_state.h` (NEW)
-- `MatterSurfaceLib/src/dsl_state.cpp` (NEW)
-- `MatterSurfaceLib/tests/script_host_tests.cpp` (MODIFIED)
-- `MatterSurfaceLib/tests/Makefile` (MODIFIED)
+- `MatterEngine3/include/dsl_state.h` (NEW)
+- `MatterEngine3/src/dsl_state.cpp` (NEW)
+- `MatterEngine3/tests/script_host_tests.cpp` (MODIFIED)
+- `MatterEngine3/tests/Makefile` (MODIFIED)
 
-- [ ] Create `MatterSurfaceLib/include/dsl_state.h` (pure C++, no JS) with the authoritative state the spec requires the host to own:
+- [ ] Create `MatterEngine3/include/dsl_state.h` (pure C++, no JS) with the authoritative state the spec requires the host to own:
 ```cpp
 #pragma once
 #include "raylib.h"   // Vector3, Matrix, Vector4
@@ -541,8 +543,8 @@ static void test_dsl_state_rules() {
     CHECK(s5.buffer().ops[0].spacing == 0.25f, "session spacing captured");
 }
 ```
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` (after adding `../src/dsl_state.cpp` to `SCRIPT_CPP`) — **expected FAIL**: link error / asserts fail.
-- [ ] Create `MatterSurfaceLib/src/dsl_state.cpp` implementing the rules with raymath. Minimal real code:
+- [ ] Run `cd MatterEngine3/tests && make run-script` (after adding `../src/dsl_state.cpp` to `SCRIPT_CPP`) — **expected FAIL**: link error / asserts fail.
+- [ ] Create `MatterEngine3/src/dsl_state.cpp` implementing the rules with raymath. Minimal real code:
 ```cpp
 #include "../include/dsl_state.h"
 #define RAYMATH_IMPLEMENTATION
@@ -595,10 +597,10 @@ void DslState::box(const Vector3& c, const Vector3& h, CsgOp op) {
 } // namespace dsl
 ```
   NOTE: emitting a brush records it with `op` = how it combines. The op accessor verbs (`union`/`difference`/`intersection`) set the op applied to the **most recent** brush(es); Task 6 wires the binding verbs. For Task 4 the test calls `sphere(...,Union)` directly.
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected PASS**: `ALL PASS`.
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected PASS**: `ALL PASS`.
 - [ ] Commit:
 ```
-git add MatterSurfaceLib/include/dsl_state.h MatterSurfaceLib/src/dsl_state.cpp MatterSurfaceLib/tests/script_host_tests.cpp MatterSurfaceLib/tests/Makefile && git commit -m "$(cat <<'EOF'
+git add MatterEngine3/include/dsl_state.h MatterEngine3/src/dsl_state.cpp MatterEngine3/tests/script_host_tests.cpp MatterEngine3/tests/Makefile && git commit -m "$(cat <<'EOF'
 feat(sp2): C++-owned DSL state (transform/material/session/build buffer)
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -611,9 +613,9 @@ EOF
 ### Task 5: `static params` merge + `compute_resolved_hash` plumbing
 
 **Files:**
-- `MatterSurfaceLib/src/script_host.cpp` (MODIFIED)
-- `MatterSurfaceLib/include/script_host.h` (MODIFIED)
-- `MatterSurfaceLib/tests/script_host_tests.cpp` (MODIFIED)
+- `MatterEngine3/src/script_host.cpp` (MODIFIED)
+- `MatterEngine3/include/script_host.h` (MODIFIED)
+- `MatterEngine3/tests/script_host_tests.cpp` (MODIFIED)
 
 - [ ] Add a failing test asserting (a) defaults reach `build(p)`, (b) caller overrides reach `build(p)`, (c) override changes `resolved_hash`. Use a test hook: have the host stash the merged-params JSON it passed to `build`. Add `std::string last_merged_params() const;` + member to `ScriptHost`. Append:
 ```cpp
@@ -641,10 +643,10 @@ static void test_params_merge_and_hash() {
           "override changes resolved_hash");
 }
 ```
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected FAIL**: member missing / hashes equal (no merge yet).
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected FAIL**: member missing / hashes equal (no merge yet).
 - [ ] In `script_host.cpp`, before calling `build`, read the class's `static params`, overlay the caller's `params_json`, serialize the merged object to canonical JSON (stable key order via `JSON.stringify` with sorted keys helper evaluated in-context), pass it as the `build` argument, and compute the resolved hash over `(source, merged_params_json, /*children*/none)`. Minimal real code (replace the `JS_NewObject` params stub from Task 3):
 ```cpp
-#include "part_asset.h"   // SP-1 v2 helper
+#include "part_asset_v2.h"   // SP-1 v2 helper (MatterEngine3/include via -I../include)
 // ... after instantiating `authored`, before invoking build:
 // 1. read static params from the class ctor
 JSValue staticParams = JS_GetPropertyStr(ctx, authored, "params");
@@ -679,7 +681,7 @@ JSValue bret = JS_Invoke(ctx, inst, JS_NewAtom(ctx, "build"), 1, &paramsObj);
 // ... (rest as Task 3)
 ```
   Add `std::string last_merged_params_;` + accessor to `script_host.h`.
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected PASS**: `ALL PASS`. (Requires SP-1's `compute_resolved_hash`; if SP-1 is not yet merged, this is the gating dependency — see Dependencies.)
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected PASS**: `ALL PASS`. (Requires SP-1's `compute_resolved_hash`; if SP-1 is not yet merged, this is the gating dependency — see Dependencies.)
 - [ ] **Factor the merge+hash into a shared helper and add `resolve_hash` (hash-only, no `build()`).** Add a failing test asserting (a) `resolve_hash` equals the `resolved_hash` `bake_source` returns for identical `(source, params, children)`, and (b) `resolve_hash` does **not** run `build()` (a side-effecting `build` leaves no global). Append:
 ```cpp
 static void test_resolve_hash_matches_and_skips_build() {
@@ -705,7 +707,7 @@ static void test_resolve_hash_matches_and_skips_build() {
           "resolve_hash did not run build()");
 }
 ```
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected FAIL**: `resolve_hash` undefined.
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected FAIL**: `resolve_hash` undefined.
 - [ ] In `script_host.cpp`, extract the params-merge + canonicalization from `bake_source` (Task-5 steps 1-3 above) into a private helper, then implement `resolve_hash` on top of it. The helper builds a fresh runtime/context, evals the source enough to read the class's `static params`, merges overrides, canonicalizes, and returns the merged JSON — **without** instantiating or calling `build`:
 ```cpp
 // Private helper: returns canonical merged-params JSON; fills err on failure.
@@ -739,7 +741,7 @@ uint64_t ScriptHost::resolve_hash(const std::string& source,
   > **Source-fold seam (SP-7, master C-3):** here `resolve_hash`/`bake_source` hash the part's own `source` bytes directly. When SP-7's shared-lib import support lands, the **host** (not SP-3) replaces those `source.data()/size()` bytes with the canonical **folded** buffer — part source + transitively-imported module sources in SP-7's canonical order (via `module_resolver::fold`) — so editing an imported module reinvalidates the importer. Until SP-7, the unfolded source is correct for childless/import-free parts. Keep the hash-input as a single `source_bytes` value so the swap is local to one call site.
 - [ ] Commit:
 ```
-git add MatterSurfaceLib/src/script_host.cpp MatterSurfaceLib/include/script_host.h MatterSurfaceLib/tests/script_host_tests.cpp && git commit -m "$(cat <<'EOF'
+git add MatterEngine3/src/script_host.cpp MatterEngine3/include/script_host.h MatterEngine3/tests/script_host_tests.cpp && git commit -m "$(cat <<'EOF'
 feat(sp2): merge static params with caller overrides into resolved hash
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -752,12 +754,12 @@ EOF
 ### Task 6: Bind `Part` DSL methods to `DslState` (+ MAT, + session-misuse → structured error)
 
 **Files:**
-- `MatterSurfaceLib/src/part_base.js.h` (MODIFIED)
-- `MatterSurfaceLib/src/dsl_bindings.cpp` (NEW)
-- `MatterSurfaceLib/include/script_host.h` (MODIFIED — expose DslState ptr for tests)
-- `MatterSurfaceLib/src/script_host.cpp` (MODIFIED — install bindings, attach DslState as opaque, check error after build)
-- `MatterSurfaceLib/tests/script_host_tests.cpp` (MODIFIED)
-- `MatterSurfaceLib/tests/Makefile` (MODIFIED — add `../src/dsl_bindings.cpp`)
+- `MatterEngine3/src/part_base.js.h` (MODIFIED)
+- `MatterEngine3/src/dsl_bindings.cpp` (NEW)
+- `MatterEngine3/include/script_host.h` (MODIFIED — expose DslState ptr for tests)
+- `MatterEngine3/src/script_host.cpp` (MODIFIED — install bindings, attach DslState as opaque, check error after build)
+- `MatterEngine3/tests/script_host_tests.cpp` (MODIFIED)
+- `MatterEngine3/tests/Makefile` (MODIFIED — add `../src/dsl_bindings.cpp`)
 
 - [ ] Extend `part_base.js.h` so the `Part` base forwards every DSL method to a host-installed native (`globalThis.__dsl_*`). Real code (replace the file body):
 ```cpp
@@ -787,7 +789,7 @@ globalThis.Part = class Part {
 )JS";
 ```
   Convention: `sphere`/`box` default to `Union` at emit; `union()`/`difference()`/`intersection()` set the op on the **last-emitted** brush (Processing-style postfix CSG, matching the spec's `sphere(...); box(...); difference();`).
-- [ ] Create `MatterSurfaceLib/src/dsl_bindings.cpp` declaring native functions that recover the `DslState*` from the context opaque and forward calls. Real code:
+- [ ] Create `MatterEngine3/src/dsl_bindings.cpp` declaring native functions that recover the `DslState*` from the context opaque and forward calls. Real code:
 ```cpp
 #include "../include/dsl_state.h"
 extern "C" {
@@ -867,10 +869,10 @@ static void test_bindings_record_ops_and_misuse() {
     CHECK(rb.error.message.find("session") != std::string::npos, "structured session error message");
 }
 ```
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` (after adding `../src/dsl_bindings.cpp` to `SCRIPT_CPP`) — **expected FAIL**, then implement, then **expected PASS**: `ALL PASS`.
+- [ ] Run `cd MatterEngine3/tests && make run-script` (after adding `../src/dsl_bindings.cpp` to `SCRIPT_CPP`) — **expected FAIL**, then implement, then **expected PASS**: `ALL PASS`.
 - [ ] Commit:
 ```
-git add MatterSurfaceLib/src/part_base.js.h MatterSurfaceLib/src/dsl_bindings.cpp MatterSurfaceLib/include/script_host.h MatterSurfaceLib/include/dsl_state.h MatterSurfaceLib/src/script_host.cpp MatterSurfaceLib/tests/script_host_tests.cpp MatterSurfaceLib/tests/Makefile && git commit -m "$(cat <<'EOF'
+git add MatterEngine3/src/part_base.js.h MatterEngine3/src/dsl_bindings.cpp MatterEngine3/include/script_host.h MatterEngine3/include/dsl_state.h MatterEngine3/src/script_host.cpp MatterEngine3/tests/script_host_tests.cpp MatterEngine3/tests/Makefile && git commit -m "$(cat <<'EOF'
 feat(sp2): bind Part DSL methods to C++ DslState with fail-closed misuse
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -883,12 +885,12 @@ EOF
 ### Task 7: CSG lowering — build buffer → additive particles + carve particles + smoothing factor
 
 **Files:**
-- `MatterSurfaceLib/include/csg_lowering.h` (NEW)
-- `MatterSurfaceLib/src/csg_lowering.cpp` (NEW)
-- `MatterSurfaceLib/tests/script_host_tests.cpp` (MODIFIED)
-- `MatterSurfaceLib/tests/Makefile` (MODIFIED)
+- `MatterEngine3/include/csg_lowering.h` (NEW)
+- `MatterEngine3/src/csg_lowering.cpp` (NEW)
+- `MatterEngine3/tests/script_host_tests.cpp` (MODIFIED)
+- `MatterEngine3/tests/Makefile` (MODIFIED)
 
-- [ ] Create `MatterSurfaceLib/include/csg_lowering.h`:
+- [ ] Create `MatterEngine3/include/csg_lowering.h`:
 ```cpp
 #pragma once
 #include "dsl_state.h"
@@ -931,8 +933,8 @@ static void test_csg_lowering() {
     CHECK(f.smoothing == 0.4f || f.smoothing == 0.0f, "smoothing factor carried");
 }
 ```
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` (after adding `../src/csg_lowering.cpp` to `SCRIPT_CPP`) — **expected FAIL**: link error / asserts fail.
-- [ ] Create `MatterSurfaceLib/src/csg_lowering.cpp`. Sphere → one particle at transformed center; box → SDF-sampled small spheres covering the box at half-spacing so corners survive below min particle size; union/intersection → additive, difference → carve. Whole-expression smoothing = max recorded `k`. Real code:
+- [ ] Run `cd MatterEngine3/tests && make run-script` (after adding `../src/csg_lowering.cpp` to `SCRIPT_CPP`) — **expected FAIL**: link error / asserts fail.
+- [ ] Create `MatterEngine3/src/csg_lowering.cpp`. Sphere → one particle at transformed center; box → SDF-sampled small spheres covering the box at half-spacing so corners survive below min particle size; union/intersection → additive, difference → carve. Whole-expression smoothing = max recorded `k`. Real code:
 ```cpp
 #include "../include/csg_lowering.h"
 #define RAYMATH_IMPLEMENTATION_GUARD
@@ -982,10 +984,10 @@ LoweredField lower_build_buffer(const BuildBuffer& buf) {
 } // namespace dsl
 ```
   NOTE on the spec open question (smooth-min per-op vs whole-expression): SP-2 applies it **whole-expression** (`out.smoothing = max(k)`), which is what `Cluster` accepts as a single smooth-min factor. Per-op blend factors are deferred.
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected PASS**: `ALL PASS`.
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected PASS**: `ALL PASS`.
 - [ ] Commit:
 ```
-git add MatterSurfaceLib/include/csg_lowering.h MatterSurfaceLib/src/csg_lowering.cpp MatterSurfaceLib/tests/script_host_tests.cpp MatterSurfaceLib/tests/Makefile && git commit -m "$(cat <<'EOF'
+git add MatterEngine3/include/csg_lowering.h MatterEngine3/src/csg_lowering.cpp MatterEngine3/tests/script_host_tests.cpp MatterEngine3/tests/Makefile && git commit -m "$(cat <<'EOF'
 feat(sp2): lower CSG build buffer to additive + carve particles
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -998,9 +1000,9 @@ EOF
 ### Task 8: Voxel primitive occupancy + CSG composition assertions (analytic field oracle)
 
 **Files:**
-- `MatterSurfaceLib/include/csg_lowering.h` (MODIFIED — add an analytic field-eval oracle for testing)
-- `MatterSurfaceLib/src/csg_lowering.cpp` (MODIFIED)
-- `MatterSurfaceLib/tests/script_host_tests.cpp` (MODIFIED)
+- `MatterEngine3/include/csg_lowering.h` (MODIFIED — add an analytic field-eval oracle for testing)
+- `MatterEngine3/src/csg_lowering.cpp` (MODIFIED)
+- `MatterEngine3/tests/script_host_tests.cpp` (MODIFIED)
 
 This task asserts the spec's "voxel primitives" + "union/difference/intersection compose as expected" bullets **without GL**, by evaluating the analytic CSG field the lowering represents at sample points (occupancy oracle), independent of the BLAS surface path (which Task 9 exercises).
 
@@ -1043,7 +1045,7 @@ static void test_voxel_primitive_occupancy() {
           "intersection keeps only overlap");
 }
 ```
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected FAIL**: `field_is_solid` undefined.
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected FAIL**: `field_is_solid` undefined.
 - [ ] Implement `field_is_solid` in `csg_lowering.cpp` as an exact analytic SDF evaluator over the op list (sphere SDF, box SDF, hard min/max CSG; smoothing ignored here — occupancy oracle uses hard ops):
 ```cpp
 static float sdSphere(const Vector3& p, float r){ return Vector3Length(p) - r; }
@@ -1069,10 +1071,10 @@ bool field_is_solid(const BuildBuffer& buf, const Vector3& wp) {
     return any && field < 0.0f;
 }
 ```
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected PASS**: `ALL PASS`.
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected PASS**: `ALL PASS`.
 - [ ] Commit:
 ```
-git add MatterSurfaceLib/include/csg_lowering.h MatterSurfaceLib/src/csg_lowering.cpp MatterSurfaceLib/tests/script_host_tests.cpp && git commit -m "$(cat <<'EOF'
+git add MatterEngine3/include/csg_lowering.h MatterEngine3/src/csg_lowering.cpp MatterEngine3/tests/script_host_tests.cpp && git commit -m "$(cat <<'EOF'
 test(sp2): analytic occupancy oracle for primitive + CSG composition
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -1085,24 +1087,27 @@ EOF
 ### Task 9: Drive Cluster → per-cell BLAS → `save_v2` (end-to-end bake writes one .part)
 
 **Files:**
-- `MatterSurfaceLib/src/script_host.cpp` (MODIFIED — full lowering + surface + save)
-- `MatterSurfaceLib/include/script_host.h` (MODIFIED — `BakeOptions` cluster sizing knobs)
-- `MatterSurfaceLib/tests/script_host_tests.cpp` (MODIFIED)
-- `MatterSurfaceLib/tests/Makefile` (MODIFIED — link cluster + mesher + part_asset sources)
+- `MatterEngine3/src/script_host.cpp` (MODIFIED — full lowering + surface + save)
+- `MatterEngine3/include/script_host.h` (MODIFIED — `BakeOptions` cluster sizing knobs)
+- `MatterEngine3/tests/script_host_tests.cpp` (MODIFIED)
+- `MatterEngine3/tests/Makefile` (MODIFIED — link cluster + mesher + part_asset sources)
 
 - [ ] Extend the Makefile `SCRIPT_*` to link the surface path used by `part_asset_tests` + `parallel_mesh_tests` (cluster, cell, mesher, blas, tlas, part_asset, plus the C SurfaceLib sources via gcc). Update the target:
 ```makefile
+# NEW MatterEngine3 sources keep ../src/...; SP-1's NEW part_asset_v2.cpp (../src/)
+# supplies save_v2/compute_resolved_hash/LodLevels. Consumed prototype sources are
+# referenced read-only as ../../MatterSurfaceLib/src/<dep>.
 SCRIPT_CPP = script_host_tests.cpp ../src/script_host.cpp ../src/dsl_state.cpp \
-             ../src/dsl_bindings.cpp ../src/csg_lowering.cpp \
-             ../src/cluster.cpp ../src/cell.cpp ../src/mesh_simplifier.cpp \
-             ../src/blas_manager.cpp ../src/bvh.cpp ../src/bvh_analyzer.cpp \
-             ../src/mesh_worker_pool.cpp ../src/mesh_build_utils.cpp \
-             ../src/meshing_algorithm.cpp ../src/marching_cubes_algorithm.cpp \
-             ../src/oriented_cube_algorithm.cpp ../src/vertex_ao.cpp \
-             ../src/occupancy.cpp ../src/tlas_manager.cpp ../src/part_asset.cpp \
-             ../src/lattice.cpp ../src/particle_culling.cpp
-SCRIPT_C   = ../src/surface.c ../src/open_particle_surface.c \
-             ../src/spatial_hash.c ../src/object_allocator.c ../src/material_registry.c
+             ../src/dsl_bindings.cpp ../src/csg_lowering.cpp ../src/part_asset_v2.cpp \
+             ../../MatterSurfaceLib/src/cluster.cpp ../../MatterSurfaceLib/src/cell.cpp ../../MatterSurfaceLib/src/mesh_simplifier.cpp \
+             ../../MatterSurfaceLib/src/blas_manager.cpp ../../MatterSurfaceLib/src/bvh.cpp ../../MatterSurfaceLib/src/bvh_analyzer.cpp \
+             ../../MatterSurfaceLib/src/mesh_worker_pool.cpp ../../MatterSurfaceLib/src/mesh_build_utils.cpp \
+             ../../MatterSurfaceLib/src/meshing_algorithm.cpp ../../MatterSurfaceLib/src/marching_cubes_algorithm.cpp \
+             ../../MatterSurfaceLib/src/oriented_cube_algorithm.cpp ../../MatterSurfaceLib/src/vertex_ao.cpp \
+             ../../MatterSurfaceLib/src/occupancy.cpp ../../MatterSurfaceLib/src/tlas_manager.cpp ../../MatterSurfaceLib/src/part_asset.cpp \
+             ../../MatterSurfaceLib/src/lattice.cpp ../../MatterSurfaceLib/src/particle_culling.cpp
+SCRIPT_C   = ../../MatterSurfaceLib/src/surface.c ../../MatterSurfaceLib/src/open_particle_surface.c \
+             ../../MatterSurfaceLib/src/spatial_hash.c ../../MatterSurfaceLib/src/object_allocator.c ../../MatterSurfaceLib/src/material_registry.c
 SCRIPT_C_OBJ = surface.o open_particle_surface.o spatial_hash.o object_allocator.o material_registry.o
 
 $(SCRIPT_TARGET): $(SCRIPT_CPP) $(SCRIPT_C) $(QJS_C)
@@ -1130,13 +1135,13 @@ static void test_bake_writes_part() {
     CHECK(file_exists(r.written_path), "the .part file exists on disk");
 }
 ```
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected FAIL**: no file written (host stops after build).
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected FAIL**: no file written (host stops after build).
 - [ ] In `script_host.cpp`, after a clean `build` (no `state.has_error()`), perform the full bake. Real code (appended to the post-build success path):
 ```cpp
-#include "../include/csg_lowering.h"
-#include "../include/cluster.h"
-#include "../include/blas_manager.hpp"
-#include "../include/tlas_manager.hpp"
+#include "../include/csg_lowering.h"   // NEW MatterEngine3 header
+#include "cluster.h"                    // consumed prototype (-I../../MatterSurfaceLib/include)
+#include "blas_manager.hpp"             // consumed prototype
+#include "tlas_manager.hpp"             // consumed prototype
 // ... success path (error.ok still true, session closed):
 if (r.error.ok && state.session() != dsl::Session::None) {
     r.error.ok = false; r.error.message = "session left open at end of build";
@@ -1162,10 +1167,10 @@ if (r.error.ok) {
 }
 ```
   NOTE: `cluster.add_to_tlas()` + `tlas.build(blas)` mirrors `part_asset_tests`' scene assembly so `save_v2` has a populated TLAS. Confirm against `tlas_manager.hpp` during impl; if `add_to_tlas` isn't the right call, use the `DrawInstance`/`draw_batch` path from `part_asset_tests.cpp`.
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected PASS**: `ALL PASS`. (Gated on SP-1 `save_v2`/`LodLevels`/`cache_path`.)
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected PASS**: `ALL PASS`. (Gated on SP-1 `save_v2`/`LodLevels`/`cache_path`.)
 - [ ] Commit:
 ```
-git add MatterSurfaceLib/src/script_host.cpp MatterSurfaceLib/include/script_host.h MatterSurfaceLib/tests/script_host_tests.cpp MatterSurfaceLib/tests/Makefile && git commit -m "$(cat <<'EOF'
+git add MatterEngine3/src/script_host.cpp MatterEngine3/include/script_host.h MatterEngine3/tests/script_host_tests.cpp MatterEngine3/tests/Makefile && git commit -m "$(cat <<'EOF'
 feat(sp2): lower to Cluster, surface per-cell BLAS, and save_v2 one .part
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -1178,7 +1183,7 @@ EOF
 ### Task 10: Sharp-vs-smooth seam metric + sub-min-size box feature survival
 
 **Files:**
-- `MatterSurfaceLib/tests/script_host_tests.cpp` (MODIFIED)
+- `MatterEngine3/tests/script_host_tests.cpp` (MODIFIED)
 
 These two spec bullets assert on a surface/seam metric, not exact vertices. Reuse the analytic field oracle + the smoothing factor carried through lowering (no GL).
 
@@ -1214,7 +1219,7 @@ static void test_sharp_vs_smooth_seam() {
     CHECK(fm.smoothing > fs.smoothing, "smooth seam has strictly larger blend factor than sharp");
 }
 ```
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected PASS** (oracle + lowering already implemented; this codifies the seam metric).
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected PASS** (oracle + lowering already implemented; this codifies the seam metric).
 - [ ] Add a failing `test_sub_min_box_feature_survives` that bakes a box brush smaller than the min particle and asserts the carve feature survives lowering (already partly covered in Task 7; here assert against a full bake's lowered field):
 ```cpp
 static void test_sub_min_box_feature_survives() {
@@ -1229,10 +1234,10 @@ static void test_sub_min_box_feature_survives() {
     CHECK(!dsl::field_is_solid(s.buffer(), {1.0f,0,0}), "sub-min feature present in field");
 }
 ```
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected PASS**: `ALL PASS`.
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected PASS**: `ALL PASS`.
 - [ ] Commit:
 ```
-git add MatterSurfaceLib/tests/script_host_tests.cpp && git commit -m "$(cat <<'EOF'
+git add MatterEngine3/tests/script_host_tests.cpp && git commit -m "$(cat <<'EOF'
 test(sp2): sharp-vs-smooth seam metric and sub-min box feature survival
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -1245,7 +1250,7 @@ EOF
 ### Task 11: Determinism — identical bytes on re-bake + fresh-context no residue
 
 **Files:**
-- `MatterSurfaceLib/tests/script_host_tests.cpp` (MODIFIED)
+- `MatterEngine3/tests/script_host_tests.cpp` (MODIFIED)
 
 - [ ] Add a failing `test_determinism_identical_bytes`: bake the same `(source, params)` twice, assert identical `resolved_hash` and byte-identical `.part` files:
 ```cpp
@@ -1268,7 +1273,7 @@ static void test_determinism_identical_bytes() {
     CHECK(!b1.empty() && b1 == b2, "re-bake produces byte-identical .part");
 }
 ```
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected PASS** if SP-1 `save_v2` is byte-deterministic and the fresh context introduces no nondeterminism; if it FAILS, the failure localizes the nondeterminism source (likely unsorted material/particle iteration) — fix in lowering (sort additive particles by a stable key before adding) and rerun. Add the stable sort to `lower_build_buffer` if needed:
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected PASS** if SP-1 `save_v2` is byte-deterministic and the fresh context introduces no nondeterminism; if it FAILS, the failure localizes the nondeterminism source (likely unsorted material/particle iteration) — fix in lowering (sort additive particles by a stable key before adding) and rerun. Add the stable sort to `lower_build_buffer` if needed:
 ```cpp
 // in csg_lowering.cpp, end of lower_build_buffer, before return:
 // (only if determinism test reveals iteration-order nondeterminism)
@@ -1296,10 +1301,10 @@ static void test_fresh_context_no_residue() {
           "B bytes identical whether or not A ran first (fresh context, no residue)");
 }
 ```
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected PASS**: `ALL PASS`. (If FAIL: a `JSContext`/`DslState` is being reused — ensure each `bake_source` constructs a fresh `JSRuntime`/`JSContext` and a fresh stack-local `DslState`.)
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected PASS**: `ALL PASS`. (If FAIL: a `JSContext`/`DslState` is being reused — ensure each `bake_source` constructs a fresh `JSRuntime`/`JSContext` and a fresh stack-local `DslState`.)
 - [ ] Commit:
 ```
-git add MatterSurfaceLib/tests/script_host_tests.cpp MatterSurfaceLib/src/csg_lowering.cpp && git commit -m "$(cat <<'EOF'
+git add MatterEngine3/tests/script_host_tests.cpp MatterEngine3/src/csg_lowering.cpp && git commit -m "$(cat <<'EOF'
 test(sp2): determinism (identical bytes) and fresh-context no-residue
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -1312,12 +1317,12 @@ EOF
 ### Task 12: Seeded `Math.random` + no Date/file/network bindings
 
 **Files:**
-- `MatterSurfaceLib/include/dsl_rng.h` (NEW)
-- `MatterSurfaceLib/src/dsl_bindings.cpp` (MODIFIED)
-- `MatterSurfaceLib/src/script_host.cpp` (MODIFIED — seed from params, install RNG)
-- `MatterSurfaceLib/tests/script_host_tests.cpp` (MODIFIED)
+- `MatterEngine3/include/dsl_rng.h` (NEW)
+- `MatterEngine3/src/dsl_bindings.cpp` (MODIFIED)
+- `MatterEngine3/src/script_host.cpp` (MODIFIED — seed from params, install RNG)
+- `MatterEngine3/tests/script_host_tests.cpp` (MODIFIED)
 
-- [ ] Create `MatterSurfaceLib/include/dsl_rng.h` with a SplitMix64-backed `[0,1)` generator (deterministic, seedable):
+- [ ] Create `MatterEngine3/include/dsl_rng.h` with a SplitMix64-backed `[0,1)` generator (deterministic, seedable):
 ```cpp
 #pragma once
 #include <cstdint>
@@ -1363,7 +1368,7 @@ static void test_seeded_rng_and_no_ambient() {
 }
 ```
   Add `std::string last_ambient_probe() const` hook (read `globalThis.__amb` after build in the host) for the probe assertion.
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected FAIL**: `Math.random` not seeded (QuickJS-ng default seeds from entropy) and/or `Date` present.
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected FAIL**: `Math.random` not seeded (QuickJS-ng default seeds from entropy) and/or `Date` present.
 - [ ] In `dsl_bindings.cpp`, add a seeded `Math.random` override and verify Date removal. Real code:
 ```cpp
 #include "../include/dsl_rng.h"
@@ -1394,10 +1399,10 @@ seed = part_asset::fnv1a64(last_merged_params_.data(), last_merged_params_.size(
 state.set_rng(seed);
 ```
   Add `Rng* rng()` / `void set_rng(uint64_t)` storing a `std::unique_ptr<Rng>` in `DslState`.
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected PASS**: `ALL PASS`.
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected PASS**: `ALL PASS`.
 - [ ] Commit:
 ```
-git add MatterSurfaceLib/include/dsl_rng.h MatterSurfaceLib/src/dsl_bindings.cpp MatterSurfaceLib/src/script_host.cpp MatterSurfaceLib/include/dsl_state.h MatterSurfaceLib/include/script_host.h MatterSurfaceLib/tests/script_host_tests.cpp && git commit -m "$(cat <<'EOF'
+git add MatterEngine3/include/dsl_rng.h MatterEngine3/src/dsl_bindings.cpp MatterEngine3/src/script_host.cpp MatterEngine3/include/dsl_state.h MatterEngine3/include/script_host.h MatterEngine3/tests/script_host_tests.cpp && git commit -m "$(cat <<'EOF'
 feat(sp2): seeded Math.random and no Date/file/network bindings
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -1410,8 +1415,8 @@ EOF
 ### Task 13: Fail-closed errors + configurable time budget
 
 **Files:**
-- `MatterSurfaceLib/src/script_host.cpp` (MODIFIED — interrupt handler, no-file-on-error)
-- `MatterSurfaceLib/tests/script_host_tests.cpp` (MODIFIED)
+- `MatterEngine3/src/script_host.cpp` (MODIFIED — interrupt handler, no-file-on-error)
+- `MatterEngine3/tests/script_host_tests.cpp` (MODIFIED)
 
 - [ ] Add a failing `test_fail_closed`: a thrown error, a session-misuse, and a time-budget overrun each return `error.ok == false` and write NO file:
 ```cpp
@@ -1452,7 +1457,7 @@ static void test_fail_closed() {
           "structured time-budget error");
 }
 ```
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected FAIL**: (c) hangs forever (no interrupt) and/or files written on error.
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected FAIL**: (c) hangs forever (no interrupt) and/or files written on error.
 - [ ] In `script_host.cpp`, install a QuickJS-ng interrupt handler that fires when `time_budget_ms` elapses, and ensure NO save happens on any error. Real code:
 ```cpp
 #include <chrono>
@@ -1475,10 +1480,10 @@ if (JS_IsException(bret) && ic.bounded &&
 }
 ```
   Confirm the save block from Task 9 is guarded by `if (r.error.ok)` so no error path can write — it already is. Verify `written_path` stays empty on every error branch.
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` — **expected PASS**: `ALL PASS`. The spin test now aborts within ~50ms.
+- [ ] Run `cd MatterEngine3/tests && make run-script` — **expected PASS**: `ALL PASS`. The spin test now aborts within ~50ms.
 - [ ] Commit:
 ```
-git add MatterSurfaceLib/src/script_host.cpp MatterSurfaceLib/tests/script_host_tests.cpp && git commit -m "$(cat <<'EOF'
+git add MatterEngine3/src/script_host.cpp MatterEngine3/tests/script_host_tests.cpp && git commit -m "$(cat <<'EOF'
 feat(sp2): fail-closed bakes and configurable per-bake time budget
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -1488,12 +1493,12 @@ EOF
 
 ---
 
-### Task 14: Wire QuickJS-ng + script host into the MatterSurfaceLib app build
+### Task 14: Wire QuickJS-ng + script host into the MatterEngine3 app build
 
 **Files:**
-- `MatterSurfaceLib/Makefile` (MODIFIED)
+- `MatterEngine3/Makefile` (MODIFIED)
 
-- [ ] Read `MatterSurfaceLib/Makefile` and add the vendored quickjs-ng sources + the new host/DSL/CSG `.cpp` to the app's object list, with an include path `-I../Libraries/quickjs-ng`. Compile the quickjs `.c` via the C compiler (unmangled). Add a rule mirroring the existing per-source compile pattern, e.g.:
+- [ ] Edit the `MatterEngine3/Makefile` (the new project's app build; do NOT touch the read-only `MatterSurfaceLib/Makefile`) and add the vendored quickjs-ng sources + the new host/DSL/CSG `.cpp` to the app's object list, with an include path `-I../Libraries/quickjs-ng`. Compile the quickjs `.c` via the C compiler (unmangled). Add a rule mirroring the existing per-source compile pattern, e.g.:
 ```makefile
 QJS_DIR = ../Libraries/quickjs-ng
 CFLAGS  += -I$(QJS_DIR)
@@ -1505,12 +1510,12 @@ cutils.o:     $(QJS_DIR)/cutils.c     ; gcc -c $< -O2 -I$(QJS_DIR)
 # add $(QJS_OBJS) and script_host.o dsl_state.o dsl_bindings.o csg_lowering.o
 # to the app link target's object list.
 ```
-  Match the exact object-list/link conventions already in `MatterSurfaceLib/Makefile` (this step adapts to whatever pattern that file uses — list the four QJS objects + four new `.cpp` objects in the final link).
-- [ ] Run `cd MatterSurfaceLib && make` — **expected: clean app build** linking the host. (Per CLAUDE.md memory: when changing structs/headers on the Windows target, clean-rebuild — `make clean && make` — to avoid stale objects.)
-- [ ] Run `cd MatterSurfaceLib/tests && make run-script` once more — **expected PASS**: `ALL PASS` (full SP-2 suite green).
+  Match the exact object-list/link conventions already in `MatterEngine3/Makefile` (this step adapts to whatever pattern that file uses — list the four QJS objects + four new `.cpp` objects in the final link). The new host/DSL/CSG `.cpp` are local (`src/*.cpp`); consumed prototype sources stay referenced read-only as `../MatterSurfaceLib/src/<dep>.cpp` with `-I../MatterSurfaceLib/include`.
+- [ ] Run `cd MatterEngine3 && make` — **expected: clean app build** linking the host. (Per CLAUDE.md memory: when changing structs/headers on the Windows target, clean-rebuild — `make clean && make` — to avoid stale objects.)
+- [ ] Run `cd MatterEngine3/tests && make run-script` once more — **expected PASS**: `ALL PASS` (full SP-2 suite green).
 - [ ] Commit:
 ```
-git add MatterSurfaceLib/Makefile && git commit -m "$(cat <<'EOF'
+git add MatterEngine3/Makefile && git commit -m "$(cat <<'EOF'
 build(sp2): compile vendored quickjs-ng and script host into the app
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>

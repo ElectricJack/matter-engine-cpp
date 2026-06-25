@@ -1,7 +1,7 @@
 # SP-1 — Part Artifact v2 (`.part` format extension) — Design
 
 **Status:** Approved for planning (2026-06-24)
-**Project:** MatterSurfaceLib
+**Project:** MatterEngine3
 **Parent:** `2026-06-24-procedural-part-authoring-design.md` (sub-project SP-1)
 **Extends:** `2026-06-20-part-serialization-design.md` (the v1 `.part` deep cache)
 

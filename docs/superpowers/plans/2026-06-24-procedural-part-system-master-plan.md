@@ -14,16 +14,78 @@ bake it to a content-addressed `.part`, assemble many parts into a sectored, LOD
 and live-edit it — by executing seven sub-plans in dependency order with verified
 integration seams between them.
 
-**Architecture:** Seven sub-projects layered on the existing MatterSurfaceLib backend
-(`part_asset`, `BLASManager`/`TLASManager`, `Cluster`, `mesh_simplifier`). SP-1 is the
-serialization foundation; SP-2 the JS bake host; SP-3 the graph/install orchestrator; SP-4
-the world composition + LOD; SP-5 the live-edit loop; SP-6 the triangle/variation path;
-SP-7 the shared script library. Each sub-plan is independently testable; this plan wires
-them together at the seams.
+**Architecture:** All new code lives in a **new sibling project `MatterEngine3/`** that
+**consumes `MatterSurfaceLib/` read-only** (the raytracing + meshing prototype is preserved
+untouched for reference/experiments). MatterEngine3 layers seven sub-projects on the
+existing MatterSurfaceLib backend (`part_asset` v1, `BLASManager`/`TLASManager`, `Cluster`,
+`mesh_simplifier`). SP-1 is the serialization foundation; SP-2 the JS bake host; SP-3 the
+graph/install orchestrator; SP-4 the world composition + LOD; SP-5 the live-edit loop; SP-6
+the triangle/variation path; SP-7 the shared script library. Each sub-plan is independently
+testable; this plan wires them together at the seams.
 
 **Tech Stack:** C++17, QuickJS-ng (vendored under `Libraries/quickjs-ng/`), FNV-1a content
-hashing, existing Cluster/BLAS/TLAS + mesh_simplifier, Linux inotify, headless GL-free
-tests under `MatterSurfaceLib/tests/`.
+hashing, existing Cluster/BLAS/TLAS + mesh_simplifier (consumed from MatterSurfaceLib),
+Linux inotify, headless GL-free tests under `MatterEngine3/tests/`.
+
+---
+
+## Project relocation: MatterEngine3 (authoritative — all sub-plans obey this)
+
+All SP-1…SP-7 work is built in a **new top-level project `MatterEngine3/`**, a sibling of
+`MatterSurfaceLib/`. The MatterSurfaceLib prototype is **never modified** — it is a
+read-only dependency (monorepo convention: `-I../MatterSurfaceLib/include` + link its
+`.cpp`). This section overrides any `MatterSurfaceLib/...` path a sub-plan names for a
+**new** file.
+
+**Layout**
+```
+MatterEngine3/
+  Makefile                # builds the lib objects (optional; tests link sources directly)
+  include/                # NEW headers (part_asset_v2.h, script_host.h, part_graph.h,
+                          #   module_resolver.h, composition.h, live_edit_interfaces.h, …)
+  src/                    # NEW impls (part_asset_v2.cpp, script_host.cpp, …)
+  shared-lib/             # SP-7 JS helper modules (lsystem.js, bezier.js, … rng.js)
+  tests/
+    Makefile              # run-partv2/script/graph/trivar/shlib/comp/dev targets
+    *_tests.cpp           # all SP-1…SP-7 headless tests
+```
+
+**Path-classification rule (apply per reference):**
+- A **new** file the sub-plans author → `MatterEngine3/{include,src,tests}/…`.
+- A file that **already exists in MatterSurfaceLib** (consumed) → stays
+  `MatterSurfaceLib/…`, referenced from MatterEngine3 as `../MatterSurfaceLib/…` (Makefile
+  sources) or via `-I../MatterSurfaceLib/include` (headers).
+
+**Dependency files that STAY `MatterSurfaceLib` (consumed, never relocated):**
+headers — `bvh.h`, `blas_manager.hpp`, `tlas_manager.hpp`, `mesh_simplifier.hpp`,
+`occupancy.h`, `vertex_ao.h`, `material_registry.h`, `cluster.h`, `cell.h`, `particle.h`,
+`marching_cubes_algorithm.h`, `oriented_cube_algorithm.h`, `mesh_build_utils.h`,
+`precomp.h`, **`part_asset.h` (v1)**; sources — `blas_manager.cpp`, `bvh.cpp`,
+`tlas_manager.cpp`, `occupancy.cpp`, `vertex_ao.cpp`, `material_registry.c`,
+`part_asset.cpp` (v1), `cluster.cpp`, `cell.cpp`, `marching_cubes_algorithm.cpp`,
+`oriented_cube_algorithm.cpp`, `mesh_build_utils.cpp`, `mesh_simplifier.cpp`.
+
+**SP-1 special case (no prototype edit):** SP-1 does **not** modify
+`MatterSurfaceLib/include/part_asset.h`. It **creates** `MatterEngine3/include/part_asset_v2.h`
++ `MatterEngine3/src/part_asset_v2.cpp`, which `#include "part_asset.h"` (the v1 header, via
+`-I../MatterSurfaceLib/include`) to reuse `part_asset::fnv1a64`, `cache_path`, `kMagic`, and
+defines the v2 additions (`compute_resolved_hash`, `ChildInstance`, `LodLevel` with
+`screen_size_threshold`, `LodLevels`, `save_v2`, `load_v2`) in the same `part_asset`
+namespace. Consumers `#include "part_asset_v2.h"`.
+
+**Makefile path conventions (from `MatterEngine3/tests/`):**
+- New project headers: `-I../include`; consumed prototype headers: add
+  `-I../../MatterSurfaceLib/include`.
+- New test/impl sources: `../src/<new>.cpp` (unchanged form).
+- Consumed prototype sources: `../../MatterSurfaceLib/src/<dep>.cpp` (one extra `../` vs the
+  old MatterSurfaceLib/tests Makefile, which used `../src/<dep>.cpp`).
+- raylib is at repo-root `Libraries/` — **unchanged** (`MatterEngine3/tests` is the same
+  depth as `MatterSurfaceLib/tests`, so `../../Libraries/raylib/build/linux/libraylib.a`
+  and `-I../../Libraries/raylib/src` carry over verbatim). Compile C deps (`material_registry.c`)
+  with `gcc` to keep `extern "C"` symbols unmangled, as the prototype's test Makefile does.
+
+**Registration:** add `MatterEngine3` to `build-all.sh` (build + `test` paths) so
+`./build-all.sh test` runs the new `run-*` targets.
 
 ---
 
@@ -162,22 +224,22 @@ std::string cache_path(uint64_t resolved_hash);   // parts/<16hex>.part
 ## Integration gates (cross-boundary; verify after each sub-plan)
 
 Each gate is an integration test that no single sub-plan can own because it spans two
-subsystems. Add these under `MatterSurfaceLib/tests/` as they become reachable.
+subsystems. Add these under `MatterEngine3/tests/` as they become reachable.
 
-- [ ] **Gate M1 — SP-1 done:** `make -C MatterSurfaceLib/tests run-partv2` green. A v2
+- [ ] **Gate M1 — SP-1 done:** `make -C MatterEngine3/tests run-partv2` green. A v2
   `.part` with children + multi-level LODs round-trips; v1 files rejected.
 
 - [ ] **Gate M2 — SP-2 done (first geometry from a script):**
   - Reconcile: SP-2 uses real SP-1 `save_v2`/`compute_resolved_hash` (no shim).
   - Integration test: a hand-written `.js` part with a voxel sphere∖box bakes to a `.part`;
     `load_v2` restores BLAS geometry; re-baking the same source+params yields identical
-    bytes. `make -C MatterSurfaceLib/tests run-script` green.
+    bytes. `make -C MatterEngine3/tests run-script` green.
 
 - [ ] **Gate M3 — SP-3 done (a world installs):**
   - Reconcile: SP-3 `Baker` adapter calls the real `ScriptHost`; `ModuleResolver` real.
   - Integration test: a 3-part graph (root→2 children, one shared) installs to a populated
     `parts/`; second install bakes 0 (all hits); editing the shared leaf rebakes leaf+root
-    only; a cycle errors. `make -C MatterSurfaceLib/tests run-graph` green.
+    only; a cycle errors. `make -C MatterEngine3/tests run-graph` green.
 
 - [ ] **Gate M4 — SP-6 done (triangles + variations):**
   - Reconcile: delete SP-6's local `ChildInstance`/`compute_resolved_hash` mirror; include
@@ -185,7 +247,7 @@ subsystems. Add these under `MatterSurfaceLib/tests/` as they become reachable.
   - Integration test: a script mixing a voxel brush + a `beginShape` quad + a skinned
     `line` bakes a **single** part BLAS holding all three with per-triangle materials;
     `instance(child, variationParams)` writes the child-instance table; identical variation
-    params dedup to one artifact. `make -C MatterSurfaceLib/tests run-trivar` green.
+    params dedup to one artifact. `make -C MatterEngine3/tests run-trivar` green.
 
 - [ ] **Gate M5 — SP-7 done (shared lib + fold invalidation):**
   - Reconcile: SP-3 `resolve` assembles `source_bytes` via SP-7's fold; SP-2 Math.random
@@ -193,7 +255,7 @@ subsystems. Add these under `MatterSurfaceLib/tests/` as they become reachable.
   - Integration test: a part `import`s `shared-lib/lsystem` + `shared-lib/rng`; bake is
     deterministic from `p.seed`; editing the imported module changes the part's resolved
     hash (rebakes) while a non-importer is untouched; import-order permutation → same hash.
-    `make -C MatterSurfaceLib/tests run-shlib` green.
+    `make -C MatterEngine3/tests run-shlib` green.
 
 - [ ] **Gate M6 — SP-4 done (world composes + LODs):**
   - Reconcile: SP-4 LOD round-trip uses real `save_v2`/`load_v2` (drop the shim).
@@ -201,7 +263,7 @@ subsystems. Add these under `MatterSurfaceLib/tests/` as they become reachable.
     monotone tri counts, `screen_size_threshold` tagged, written back into the `.part`),
     flatten roots into per-sector instance lists (composed transforms, dedup preserved,
     depth/budget guards), and select sector LOD by closest-instance screen size.
-    `make -C MatterSurfaceLib/tests run-comp` green.
+    `make -C MatterEngine3/tests run-comp` green.
 
 - [ ] **Gate M7 — SP-5 done (live edit):**
   - Reconcile: SP-5 `GraphResolver`→real SP-3; `Baker`→real SP-2 (dev budget set);
@@ -209,7 +271,7 @@ subsystems. Add these under `MatterSurfaceLib/tests/` as they become reachable.
   - Integration test: touch a leaf `.js` in a temp `WorldData/<world>/ObjectSchemas/`; the
     inotify path debounces, rebakes exactly the upward cone, re-flattens the affected
     subtree, and a script that throws keeps the last-good artifact + surfaces the error.
-    `make -C MatterSurfaceLib/tests run-dev` green.
+    `make -C MatterEngine3/tests run-dev` green.
 
 - [ ] **Final gate — full suite:** `./build-all.sh test` green on Linux; all
   `run-partv2/script/graph/trivar/shlib/comp/dev` targets pass.

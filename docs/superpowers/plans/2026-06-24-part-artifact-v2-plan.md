@@ -2,11 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Extend the existing `.part` serialization to `format_version=2`, adding a content-addressed `compute_resolved_hash` helper, a child-instance table, and an ordered per-part LOD-level array, with a clean v2 cutover and no v1 reader.
+**Goal:** Add a content-addressed `format_version=2` `.part` layer in the **new `MatterEngine3/` project** — a `compute_resolved_hash` helper, a child-instance table, and an ordered per-part LOD-level array — built as a **new `part_asset_v2.{h,cpp}` pair that consumes the MatterSurfaceLib v1 `part_asset` read-only** (never modifying the prototype).
 
-**Architecture:** v2 keeps the v1 header/materials/BLAS-table/internal-instance sections byte-for-byte and appends two new length-prefixed sections (child instances, LOD levels). New `save_v2`/`load_v2` functions live alongside the v1 `save`/`load` in `part_asset.cpp`; the v1 `save`/`load` remain but are no longer the cutover path (v1 files fail the new loader's `format_version != 2` guard). The header carries `resolved_hash ^ kFormatVersion` and a `sizeof(ChildInstance)` layout guard; geometry is restored via `register_prebuilt`, child table and LOD array are passive (returned to caller).
+**Architecture:** v2 lives in `MatterEngine3/include/part_asset_v2.h` + `MatterEngine3/src/part_asset_v2.cpp`, which `#include "part_asset.h"` (the v1 header from MatterSurfaceLib, via `-I../../MatterSurfaceLib/include`) to reuse `part_asset::fnv1a64`, `cache_path`, `kMagic`, and the `BLASManager`/`TLASManager`/`MaterialDef`/`Tri`/`TriEx`/`BVHNode` types. The v2 additions are declared in the **same `part_asset` namespace**. Because `part_asset_v2.cpp` is a separate translation unit, it **cannot see** the v1 `part_asset.cpp`'s file-local serialization helpers (`put`, `put_bytes`, `ensure_parent_dir`, `Reader`); it defines its **own copies** in an anonymous namespace. v2 keeps the v1 materials/BLAS-table/internal-instance body byte-for-byte and appends two new length-prefixed sections (child instances, LOD levels). The header carries `resolved_hash ^ kFormatVersionV2` and a `sizeof(ChildInstance)` layout guard; geometry is restored via `register_prebuilt`, child table and LOD array are passive (returned to caller). The prototype's v1 `save`/`load` and its `.part` files are untouched and out of scope.
 
-**Tech Stack:** C++17, FNV-1a, existing BLASManager/TLASManager, headless GoogleTest-or-assert-style tests under MatterSurfaceLib/tests/ (match the existing part_asset_tests.cpp style — do NOT introduce a new test framework).
+**Tech Stack:** C++17, FNV-1a (reused from v1 `part_asset::fnv1a64`), existing BLASManager/TLASManager (consumed from MatterSurfaceLib), headless assert-style tests under `MatterEngine3/tests/` (match the prototype's `part_asset_tests.cpp` style — do NOT introduce a new test framework).
+
+> **Relocation note (from the master plan):** This sub-plan obeys the `MatterEngine3` relocation contract in `2026-06-24-procedural-part-system-master-plan.md`. All NEW files are under `MatterEngine3/`; the consumed prototype backend (`part_asset.cpp`, `blas_manager.cpp`, `bvh.cpp`, `tlas_manager.cpp`, `vertex_ao.cpp`, `occupancy.cpp`, `material_registry.c`) is referenced read-only as `../../MatterSurfaceLib/src/<dep>` with `-I../../MatterSurfaceLib/include`. raylib paths are unchanged (`MatterEngine3/tests` is the same depth as `MatterSurfaceLib/tests`).
 
 ---
 
@@ -14,27 +16,43 @@
 
 | File | Create/Modify | Responsibility |
 |------|---------------|----------------|
-| `MatterSurfaceLib/include/part_asset.h` | Modify | Add `kFormatVersionV2`, `compute_resolved_hash`, `ChildInstance`, `LodLevel`, `LodLevels`, `cache_path_resolved`, `save_v2`, `load_v2` declarations. |
-| `MatterSurfaceLib/src/part_asset.cpp` | Modify | Implement `compute_resolved_hash`, `cache_path_resolved`, `save_v2`, `load_v2` alongside the existing v1 functions; add a shared `put_transform`/transform-read helper. |
-| `MatterSurfaceLib/tests/part_asset_v2_tests.cpp` | Create | Headless assert-style tests covering every v2 testing bullet, mirroring `part_asset_tests.cpp` style. |
-| `MatterSurfaceLib/tests/Makefile` | Modify | Add `PARTV2_TARGET = part_asset_v2_tests` TARGET/SOURCES/`run-partv2` rule and extend `clean`. |
+| `MatterEngine3/include/part_asset_v2.h` | Create | `#include "part_asset.h"`; declare `kFormatVersionV2`, `compute_resolved_hash`, `ChildInstance`, `LodLevel`, `LodLevels`, `cache_path_resolved`, `save_v2`, `load_v2` in `namespace part_asset`. |
+| `MatterEngine3/src/part_asset_v2.cpp` | Create | Own anonymous-namespace `put`/`put_bytes`/`ensure_parent_dir`/`Reader`; implement `compute_resolved_hash`, `cache_path_resolved`, `save_v2`, `load_v2`; reuse v1 `fnv1a64`/`kMagic` via the header. |
+| `MatterEngine3/tests/part_asset_v2_tests.cpp` | Create | Headless assert-style tests covering every v2 testing bullet, mirroring the prototype `part_asset_tests.cpp` style. |
+| `MatterEngine3/tests/Makefile` | Create | NEW project tests Makefile (SP-1 is the first MatterEngine3 sub-project): platform preamble + `INCLUDE_PATHS` (adds `-I../../MatterSurfaceLib/include`) + `PARTV2_TARGET`/`run-partv2`/`clean`. Later sub-plans append their targets. |
 
 ---
 
 ## Tasks
 
-### Task 1: Declare the v2 API surface in the header
+### Task 1: Create the v2 header (`part_asset_v2.h`)
 
 **Files:**
-- Modify: `MatterSurfaceLib/include/part_asset.h` (after line 36, the `compute_param_hash` decl; before `cache_path` at line 38)
+- Create: `MatterEngine3/include/part_asset_v2.h`
 
-- [ ] Add the v2 format-version constant just below the existing `kFormatVersion` (line 16). Edit `MatterSurfaceLib/include/part_asset.h`, inserting after line 16:
+- [ ] Create `MatterEngine3/include/part_asset_v2.h` with this complete content:
 ```cpp
+#pragma once
+
+// Part Artifact v2 — content-addressed extension of the v1 .part format.
+// Consumes the MatterSurfaceLib prototype's v1 part_asset (read-only) for
+// fnv1a64 / cache_path / kMagic and the BLAS/TLAS/material types, and adds the
+// v2 surface (resolved hash, child-instance table, ordered LOD levels) in the
+// SAME part_asset namespace.
+// See docs/superpowers/specs/2026-06-24-part-artifact-v2-design.md
+#include "part_asset.h"   // v1 (MatterSurfaceLib via -I../../MatterSurfaceLib/include):
+                          // fnv1a64, cache_path, kMagic, BLASManager/TLASManager,
+                          // MaterialDef, Tri/TriEx/BVHNode
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace part_asset {
+
 constexpr uint32_t kFormatVersionV2 = 2u;
-```
 
-- [ ] Add the `ChildInstance` and LOD types plus the new function declarations. Insert into `namespace part_asset` after the `compute_param_hash` declaration (line 36), before `cache_path` (line 38):
-```cpp
 // Content-addressed identity for a part. All three inputs are OPAQUE byte ranges
 // to SP-1 (script source, params, child resolved-hashes). child_hashes need NOT be
 // pre-sorted; the helper sorts a local copy before folding so the result is
@@ -83,33 +101,20 @@ bool load_v2(const std::string& path, uint64_t expected_resolved_hash,
              BLASManager& blas, TLASManager& tlas,
              std::vector<ChildInstance>& children_out,
              LodLevels& lods_out);
+
+} // namespace part_asset
 ```
 
-- [ ] Add the `<vector>` include needed by `LodLevel`/`LodLevels`. Edit `MatterSurfaceLib/include/part_asset.h`, change the include block (lines 7-9) from:
-```cpp
-#include <cstddef>
-#include <cstdint>
-#include <string>
-```
-to:
-```cpp
-#include <cstddef>
-#include <cstdint>
-#include <string>
-#include <vector>
-```
-
-- [ ] Verify the header compiles standalone (syntax + static_assert) by compiling a throwaway TU. Run:
+- [ ] Verify the header compiles standalone (syntax + static_assert) using the same include flags the tests Makefile will use. Run:
 ```bash
-cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterSurfaceLib" && echo '#include "include/part_asset.h"
-int main(){ return (int)sizeof(part_asset::ChildInstance); }' > /tmp/hdr_check.cpp && g++ -std=c++17 -fsyntax-only -Iinclude -I../../Libraries/raylib/src /tmp/hdr_check.cpp -DPLATFORM_DESKTOP -DGRAPHICS_API_OPENGL_33 && echo HEADER_OK
+cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterEngine3" && mkdir -p tests && printf '#include "../include/part_asset_v2.h"\nint main(){ return (int)sizeof(part_asset::ChildInstance); }\n' > /tmp/hdr_check.cpp && g++ -std=c++17 -fsyntax-only -I include -I ../MatterSurfaceLib/include -I ../Libraries/raylib/src /tmp/hdr_check.cpp -DPLATFORM_DESKTOP -DGRAPHICS_API_OPENGL_33 && echo HEADER_OK
 ```
-Expected: prints `HEADER_OK` (no `static_assert` failure, no missing-type errors).
+Expected: prints `HEADER_OK` (no `static_assert` failure, no missing-type errors). The `-I../MatterSurfaceLib/include` resolves `part_asset.h`; `-I../Libraries/raylib/src` resolves any raylib types pulled in transitively by `blas_manager.hpp`.
 
 - [ ] Commit the header surface. Run:
 ```bash
-cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp" && git add MatterSurfaceLib/include/part_asset.h && git commit -m "$(cat <<'EOF'
-feat: declare part_asset v2 API (resolved hash, child instances, LOD levels)
+cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp" && git add MatterEngine3/include/part_asset_v2.h && git commit -m "$(cat <<'EOF'
+feat: declare part_asset v2 API in MatterEngine3 (resolved hash, child instances, LOD)
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 EOF
@@ -118,17 +123,104 @@ EOF
 
 ---
 
-### Task 2: `compute_resolved_hash` helper (deterministic, order-independent, sensitive)
+### Task 2: Create the tests Makefile, test file, and `compute_resolved_hash`
 
 **Files:**
-- Modify: `MatterSurfaceLib/src/part_asset.cpp` (add after `compute_param_hash`, lines 56-58)
-- Test: `MatterSurfaceLib/tests/part_asset_v2_tests.cpp` (Create)
+- Create: `MatterEngine3/tests/Makefile`
+- Create: `MatterEngine3/tests/part_asset_v2_tests.cpp`
+- Create: `MatterEngine3/src/part_asset_v2.cpp`
 
-- [ ] Create the v2 test file with its harness scaffolding and the resolved-hash test, written FIRST (it will fail to link because `compute_resolved_hash` is undefined). Create `MatterSurfaceLib/tests/part_asset_v2_tests.cpp`:
+- [ ] Create the NEW MatterEngine3 tests Makefile. SP-1 is the first sub-project, so this file is created from scratch; later sub-plans append their own `*_TARGET`/`run-*` blocks and extend `clean`. Create `MatterEngine3/tests/Makefile` with this complete content:
+```make
+# Makefile for MatterEngine3 tests.
+# MatterEngine3 consumes the MatterSurfaceLib prototype READ-ONLY:
+#   new headers via -I../include, consumed prototype headers via
+#   -I../../MatterSurfaceLib/include, consumed prototype sources as
+#   ../../MatterSurfaceLib/src/<dep>. raylib paths match MatterSurfaceLib/tests
+#   (same directory depth).
+
+# Detect platform
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
+
+# Default to Linux settings
+PLATFORM = PLATFORM_DESKTOP
+LIBTYPE = STATIC
+RAYLIB_RELEASE_PATH = ../../../Libraries/raylib
+RAYLIB_PATH = $(RAYLIB_RELEASE_PATH)/src
+
+ifeq ($(UNAME_S),Linux)
+    PLATFORM = PLATFORM_DESKTOP
+    GRAPHICS = GRAPHICS_API_OPENGL_33
+endif
+
+ifeq ($(UNAME_S),Darwin)
+    PLATFORM = PLATFORM_DESKTOP
+    GRAPHICS = GRAPHICS_API_OPENGL_33
+    ifeq ($(UNAME_M),arm64)
+        MACOS_VERSION = 11.0
+    else
+        MACOS_VERSION = 10.15
+    endif
+endif
+
+# Compiler settings
+CC = g++
+CFLAGS = -std=c++17 -Wall -Wno-missing-braces -Wno-unused-variable -D$(PLATFORM) -D$(GRAPHICS)
+
+ifeq ($(UNAME_S),Darwin)
+    CFLAGS += -mmacosx-version-min=$(MACOS_VERSION)
+    LDFLAGS = -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo
+else
+    LDFLAGS = -lGL -lm -lpthread -ldl -lrt -lX11
+endif
+
+# Include directories: NEW MatterEngine3 headers, then consumed MatterSurfaceLib
+# headers, then raylib.
+INCLUDE_PATHS = -I../include -I../../MatterSurfaceLib/include -I$(RAYLIB_PATH) -I../../Libraries/raylib/src
+
+# Library paths (match MatterSurfaceLib/tests; same depth).
+ifeq ($(UNAME_S),Linux)
+    LDLIBS = ../../Libraries/raylib/build/linux/libraylib.a
+else ifeq ($(UNAME_S),Darwin)
+    LDLIBS = ../../Libraries/raylib/build/macos/libraylib.a
+else
+    LDLIBS = ../../Libraries/raylib/src/libraylib.a
+endif
+
+.PHONY: clean run-partv2
+
+# Part Artifact v2 round-trip + resolved-hash + format-guard tests (headless, GL-free).
+# NEW impl ../src/part_asset_v2.cpp + consumed MatterSurfaceLib backend sources.
+# material_registry.c via gcc to keep its extern "C" symbols unmangled.
+PARTV2_TARGET = part_asset_v2_tests
+PARTV2_CPP = part_asset_v2_tests.cpp ../src/part_asset_v2.cpp \
+             ../../MatterSurfaceLib/src/part_asset.cpp \
+             ../../MatterSurfaceLib/src/blas_manager.cpp \
+             ../../MatterSurfaceLib/src/bvh.cpp \
+             ../../MatterSurfaceLib/src/tlas_manager.cpp \
+             ../../MatterSurfaceLib/src/vertex_ao.cpp \
+             ../../MatterSurfaceLib/src/occupancy.cpp
+PARTV2_C   = ../../MatterSurfaceLib/src/material_registry.c
+PARTV2_C_OBJ = material_registry.o
+
+$(PARTV2_TARGET): $(PARTV2_CPP) $(PARTV2_C)
+	gcc -c $(PARTV2_C) -O2 -DPLATFORM_DESKTOP $(INCLUDE_PATHS)
+	$(CC) $(PARTV2_CPP) $(PARTV2_C_OBJ) -o $(PARTV2_TARGET) $(CFLAGS) $(INCLUDE_PATHS) $(LDFLAGS) $(LDLIBS)
+	rm -f $(PARTV2_C_OBJ)
+
+run-partv2: $(PARTV2_TARGET)
+	./$(PARTV2_TARGET)
+
+clean:
+	rm -f $(PARTV2_TARGET)
+```
+
+- [ ] Create the v2 test file with its harness scaffolding and the resolved-hash test, written FIRST (it will fail to link because `compute_resolved_hash` is undefined). Create `MatterEngine3/tests/part_asset_v2_tests.cpp`:
 ```cpp
-#include "../include/part_asset.h"
-#include "../include/blas_manager.hpp"
-#include "../include/tlas_manager.hpp"
+#include "../include/part_asset_v2.h"
+#include "../../MatterSurfaceLib/include/blas_manager.hpp"
+#include "../../MatterSurfaceLib/include/tlas_manager.hpp"
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -182,58 +274,25 @@ int main() {
 }
 ```
 
-- [ ] Add the Makefile rule so the test can be built (it will compile but FAIL TO LINK until the helper exists). Edit `MatterSurfaceLib/tests/Makefile`. First, extend the `.PHONY` line (line 67) and `clean` rule (line 70). Change line 67 from:
-```make
-.PHONY: clean run run-simp run-blas run-cell run-cont run-reg run-tint run-cull run-par run-cube run-ao run-part run-vox
-```
-to:
-```make
-.PHONY: clean run run-simp run-blas run-cell run-cont run-reg run-tint run-cull run-par run-cube run-ao run-part run-partv2 run-vox
-```
-Then change the `clean` rule body (line 70) from:
-```make
-	rm -f $(TARGET) $(SIMP_TARGET) $(BLAS_TARGET) $(CELL_TARGET) $(CONT_TARGET) $(REG_TARGET) $(TINT_TARGET) $(CULL_TARGET) $(PAR_TARGET) $(CUBE_TARGET) $(AO_TARGET) $(PART_TARGET) $(VOX_TARGET)
-```
-to:
-```make
-	rm -f $(TARGET) $(SIMP_TARGET) $(BLAS_TARGET) $(CELL_TARGET) $(CONT_TARGET) $(REG_TARGET) $(TINT_TARGET) $(CULL_TARGET) $(PAR_TARGET) $(CUBE_TARGET) $(AO_TARGET) $(PART_TARGET) $(PARTV2_TARGET) $(VOX_TARGET)
-```
-
-- [ ] Append the new target block at the END of `MatterSurfaceLib/tests/Makefile` (after the `run-vox` rule, line 253). The source list mirrors `PART_TARGET` exactly, swapping the test cpp:
-```make
-
-# Part Artifact v2 round-trip + resolved-hash + format-guard tests (headless, GL-free).
-# Same source set as PART_TARGET; material_registry.c via gcc to keep extern "C" unmangled.
-PARTV2_TARGET = part_asset_v2_tests
-PARTV2_CPP = part_asset_v2_tests.cpp ../src/part_asset.cpp ../src/blas_manager.cpp \
-             ../src/bvh.cpp ../src/tlas_manager.cpp ../src/vertex_ao.cpp \
-             ../src/occupancy.cpp
-PARTV2_C   = ../src/material_registry.c
-PARTV2_C_OBJ = material_registry.o
-
-$(PARTV2_TARGET): $(PARTV2_CPP) $(PARTV2_C)
-	gcc -c $(PARTV2_C) -O2 -DPLATFORM_DESKTOP $(INCLUDE_PATHS)
-	$(CC) $(PARTV2_CPP) $(PARTV2_C_OBJ) -o $(PARTV2_TARGET) $(CFLAGS) $(INCLUDE_PATHS) $(LDFLAGS) $(LDLIBS)
-	rm -f $(PARTV2_C_OBJ)
-
-run-partv2: $(PARTV2_TARGET)
-	./$(PARTV2_TARGET)
-```
-
-- [ ] Run the test and confirm it FAILS at link (helper not yet defined). Run:
-```bash
-make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterSurfaceLib/tests" run-partv2
-```
-Expected: linker error `undefined reference to 'part_asset::compute_resolved_hash(...)'`.
-
-- [ ] Implement `compute_resolved_hash` in `MatterSurfaceLib/src/part_asset.cpp`. Add `#include <algorithm>` to the includes (after line 7, `#include <unordered_map>`), then add the function after `compute_param_hash` (line 58):
+- [ ] Create the `MatterEngine3/src/part_asset_v2.cpp` skeleton with all includes and the `compute_resolved_hash` implementation. The anonymous-namespace serialization helpers (`put`/`put_bytes`/`ensure_parent_dir`/`Reader`) are added in Tasks 4–5 when `save_v2`/`load_v2` first need them (adding them now would trip `-Wunused-function`). Create `MatterEngine3/src/part_asset_v2.cpp`:
 ```cpp
+#include "../include/part_asset_v2.h"
+
+#include <cstdio>
+#include <cstring>
+#include <cstdint>
+#include <vector>
+#include <unordered_map>
+#include <algorithm>
+#include <sys/stat.h>
+
+namespace part_asset {
+
 uint64_t compute_resolved_hash(const void* source_bytes, size_t source_len,
                                const void* params_bytes, size_t params_len,
                                const uint64_t* child_hashes, size_t child_count) {
     // Fold source, then params, then sorted child hashes into one rolling FNV-1a.
-    // Reuse fnv1a64's basis/prime by chaining: hash the concatenation manually so
-    // the stream order (source -> params -> sorted children) is fixed.
+    // The stream order (source -> params -> sorted children) is fixed.
     uint64_t h = 1469598103934665603ull; // FNV offset basis
     auto fold = [&h](const void* data, size_t len) {
         const uint8_t* p = static_cast<const uint8_t*>(data);
@@ -246,17 +305,19 @@ uint64_t compute_resolved_hash(const void* source_bytes, size_t source_len,
     for (uint64_t c : sorted) fold(&c, sizeof(c));
     return h;
 }
+
+} // namespace part_asset
 ```
 
-- [ ] Run the test and confirm it PASSES. Run:
+- [ ] Run the test and confirm it PASSES (skeleton already defines `compute_resolved_hash`). Run:
 ```bash
-make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterSurfaceLib/tests" run-partv2
+make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterEngine3/tests" run-partv2
 ```
-Expected: `All part_asset_v2 tests passed`, exit 0.
+Expected: `All part_asset_v2 tests passed`, exit 0. (If you instead want to witness the red state, temporarily comment out the function body's `return h;` — not required.)
 
 - [ ] Commit. Run:
 ```bash
-cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp" && git add MatterSurfaceLib/src/part_asset.cpp MatterSurfaceLib/tests/part_asset_v2_tests.cpp MatterSurfaceLib/tests/Makefile && git commit -m "$(cat <<'EOF'
+cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp" && git add MatterEngine3/src/part_asset_v2.cpp MatterEngine3/tests/part_asset_v2_tests.cpp MatterEngine3/tests/Makefile && git commit -m "$(cat <<'EOF'
 feat: add compute_resolved_hash with order-independent child folding
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -269,10 +330,10 @@ EOF
 ### Task 3: `cache_path_resolved` filename helper
 
 **Files:**
-- Modify: `MatterSurfaceLib/src/part_asset.cpp` (add after `cache_path`, lines 60-64)
-- Test: `MatterSurfaceLib/tests/part_asset_v2_tests.cpp`
+- Modify: `MatterEngine3/src/part_asset_v2.cpp` (add after `compute_resolved_hash`)
+- Test: `MatterEngine3/tests/part_asset_v2_tests.cpp`
 
-- [ ] Add the failing test. In `MatterSurfaceLib/tests/part_asset_v2_tests.cpp`, add this function above `main()`:
+- [ ] Add the failing test. In `MatterEngine3/tests/part_asset_v2_tests.cpp`, add this function above `main()`:
 ```cpp
 static void test_cache_path_resolved() {
     using namespace part_asset;
@@ -286,11 +347,11 @@ and add `test_cache_path_resolved();` as the first line inside `main()` (before 
 
 - [ ] Run and confirm FAIL at link. Run:
 ```bash
-make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterSurfaceLib/tests" run-partv2
+make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterEngine3/tests" run-partv2
 ```
 Expected: linker error `undefined reference to 'part_asset::cache_path_resolved(unsigned long)'`.
 
-- [ ] Implement it. In `MatterSurfaceLib/src/part_asset.cpp`, add after the existing `cache_path` (line 64):
+- [ ] Implement it. In `MatterEngine3/src/part_asset_v2.cpp`, add inside `namespace part_asset` after `compute_resolved_hash`:
 ```cpp
 std::string cache_path_resolved(uint64_t resolved_hash) {
     char buf[32];
@@ -302,13 +363,13 @@ std::string cache_path_resolved(uint64_t resolved_hash) {
 
 - [ ] Run and confirm PASS. Run:
 ```bash
-make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterSurfaceLib/tests" run-partv2
+make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterEngine3/tests" run-partv2
 ```
 Expected: `All part_asset_v2 tests passed`.
 
 - [ ] Commit. Run:
 ```bash
-cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp" && git add MatterSurfaceLib/src/part_asset.cpp MatterSurfaceLib/tests/part_asset_v2_tests.cpp && git commit -m "$(cat <<'EOF'
+cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp" && git add MatterEngine3/src/part_asset_v2.cpp MatterEngine3/tests/part_asset_v2_tests.cpp && git commit -m "$(cat <<'EOF'
 feat: add cache_path_resolved keyed on a part's resolved hash
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -321,10 +382,10 @@ EOF
 ### Task 4: `save_v2` writes the header + v1 sections + child/LOD sections
 
 **Files:**
-- Modify: `MatterSurfaceLib/src/part_asset.cpp` (add `save_v2` after `save`, line 130)
-- Test: `MatterSurfaceLib/tests/part_asset_v2_tests.cpp`
+- Modify: `MatterEngine3/src/part_asset_v2.cpp` (add anon helpers + `save_v2`)
+- Test: `MatterEngine3/tests/part_asset_v2_tests.cpp`
 
-- [ ] Add test scaffolding (scene builder + file readers, mirrored from `part_asset_tests.cpp`) and a header-level save assertion. In `MatterSurfaceLib/tests/part_asset_v2_tests.cpp`, add these helpers above `main()`:
+- [ ] Add test scaffolding (scene builder + file readers, mirrored from the prototype `part_asset_tests.cpp`) and a header-level save assertion. In `MatterEngine3/tests/part_asset_v2_tests.cpp`, add these helpers above `main()`:
 ```cpp
 static Tri ptri(float ox, float oy) {
     Tri t;
@@ -429,11 +490,35 @@ and add `test_save_v2_header();` to `main()` after `test_resolved_hash();`.
 
 - [ ] Run and confirm FAIL at link (`save_v2` undefined). Run:
 ```bash
-make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterSurfaceLib/tests" run-partv2
+make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterEngine3/tests" run-partv2
 ```
 Expected: linker error `undefined reference to 'part_asset::save_v2(...)'`.
 
-- [ ] Implement `save_v2` in `MatterSurfaceLib/src/part_asset.cpp`. Add after the existing `save` (closing brace at line 130). The materials/BLAS/internal-instance sections are copied from `save` verbatim; the new child and LOD sections are appended; the header gains the `sizeof(ChildInstance)` guard and writes `resolved_hash ^ kFormatVersionV2`:
+- [ ] Add the v1 serialization helpers to `part_asset_v2.cpp`'s anonymous namespace. The prototype's `part_asset.cpp` keeps these file-local, so this separate TU needs its own copies. In `MatterEngine3/src/part_asset_v2.cpp`, insert this anonymous-namespace block **between the include block and `namespace part_asset {`**:
+```cpp
+namespace {
+template <class T>
+void put(std::vector<uint8_t>& b, const T& v) {
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(&v);
+    b.insert(b.end(), p, p + sizeof(T));
+}
+void put_bytes(std::vector<uint8_t>& b, const void* d, size_t n) {
+    const uint8_t* p = static_cast<const uint8_t*>(d);
+    b.insert(b.end(), p, p + n);
+}
+void ensure_parent_dir(const std::string& path) {
+    auto pos = path.find_last_of('/');
+    if (pos == std::string::npos) return;
+#ifdef _WIN32
+    mkdir(path.substr(0, pos).c_str()); // ignore EEXIST (Windows mkdir takes no mode)
+#else
+    mkdir(path.substr(0, pos).c_str(), 0755); // ignore EEXIST
+#endif
+}
+} // namespace
+```
+
+- [ ] Implement `save_v2` in `MatterEngine3/src/part_asset_v2.cpp`, inside `namespace part_asset` after `cache_path_resolved`. The materials/BLAS/internal-instance sections mirror the v1 `save`; the new child and LOD sections are appended; the header gains the `sizeof(ChildInstance)` guard and writes `resolved_hash ^ kFormatVersionV2`:
 ```cpp
 bool save_v2(const std::string& path, const BLASManager& blas,
              const TLASManager& tlas,
@@ -522,13 +607,13 @@ bool save_v2(const std::string& path, const BLASManager& blas,
 
 - [ ] Run and confirm PASS. Run:
 ```bash
-make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterSurfaceLib/tests" run-partv2
+make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterEngine3/tests" run-partv2
 ```
 Expected: `All part_asset_v2 tests passed`.
 
 - [ ] Commit. Run:
 ```bash
-cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp" && git add MatterSurfaceLib/src/part_asset.cpp MatterSurfaceLib/tests/part_asset_v2_tests.cpp && git commit -m "$(cat <<'EOF'
+cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp" && git add MatterEngine3/src/part_asset_v2.cpp MatterEngine3/tests/part_asset_v2_tests.cpp && git commit -m "$(cat <<'EOF'
 feat: implement part_asset save_v2 with child-instance and LOD sections
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -541,10 +626,10 @@ EOF
 ### Task 5: `load_v2` restores managers + returns child/LOD sections (full round-trip)
 
 **Files:**
-- Modify: `MatterSurfaceLib/src/part_asset.cpp` (add `load_v2` after `load`, line 221)
-- Test: `MatterSurfaceLib/tests/part_asset_v2_tests.cpp`
+- Modify: `MatterEngine3/src/part_asset_v2.cpp` (add `Reader` to the anon namespace + `load_v2`)
+- Test: `MatterEngine3/tests/part_asset_v2_tests.cpp`
 
-- [ ] Add the full round-trip test. In `MatterSurfaceLib/tests/part_asset_v2_tests.cpp`, add above `main()`:
+- [ ] Add the full round-trip test. In `MatterEngine3/tests/part_asset_v2_tests.cpp`, add above `main()`:
 ```cpp
 static void test_round_trip_full() {
     using namespace part_asset;
@@ -622,11 +707,30 @@ and add `test_round_trip_full();` to `main()` after `test_save_v2_header();`.
 
 - [ ] Run and confirm FAIL at link (`load_v2` undefined). Run:
 ```bash
-make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterSurfaceLib/tests" run-partv2
+make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterEngine3/tests" run-partv2
 ```
 Expected: linker error `undefined reference to 'part_asset::load_v2(...)'`.
 
-- [ ] Implement `load_v2` in `MatterSurfaceLib/src/part_asset.cpp`. Add after the existing `load` (closing brace at line 221). Header/materials/BLAS/internal-instance reads mirror `load`; the header uses the 40-byte layout with the `sizeof(ChildInstance)` guard and un-XORs the resolved hash; the new sections are read into the out-params:
+- [ ] Add the `Reader` helper to `part_asset_v2.cpp`'s anonymous namespace. Insert it inside the existing `namespace { ... }` block (added in Task 4), before its closing `}`:
+```cpp
+struct Reader {
+    const uint8_t* p;
+    const uint8_t* end;
+    bool ok = true;
+    template <class T> T get() {
+        T v{};
+        if (p + sizeof(T) > end) { ok = false; return v; }
+        std::memcpy(&v, p, sizeof(T)); p += sizeof(T);
+        return v;
+    }
+    const uint8_t* take(size_t n) {
+        if (p + n > end) { ok = false; return nullptr; }
+        const uint8_t* r = p; p += n; return r;
+    }
+};
+```
+
+- [ ] Implement `load_v2` in `MatterEngine3/src/part_asset_v2.cpp`, inside `namespace part_asset` after `save_v2`. Header/materials/BLAS/internal-instance reads mirror the v1 `load`; the header uses the 40-byte layout with the `sizeof(ChildInstance)` guard and un-XORs the resolved hash; the new sections are read into the out-params:
 ```cpp
 bool load_v2(const std::string& path, uint64_t expected_resolved_hash,
              BLASManager& blas, TLASManager& tlas,
@@ -763,13 +867,13 @@ bool load_v2(const std::string& path, uint64_t expected_resolved_hash,
 
 - [ ] Run and confirm PASS. Run:
 ```bash
-make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterSurfaceLib/tests" run-partv2
+make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterEngine3/tests" run-partv2
 ```
 Expected: `All part_asset_v2 tests passed`.
 
 - [ ] Commit. Run:
 ```bash
-cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp" && git add MatterSurfaceLib/src/part_asset.cpp MatterSurfaceLib/tests/part_asset_v2_tests.cpp && git commit -m "$(cat <<'EOF'
+cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp" && git add MatterEngine3/src/part_asset_v2.cpp MatterEngine3/tests/part_asset_v2_tests.cpp && git commit -m "$(cat <<'EOF'
 feat: implement part_asset load_v2 restoring managers + child/LOD sections
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -782,9 +886,9 @@ EOF
 ### Task 6: Degenerate LOD round-trips (empty + single-level)
 
 **Files:**
-- Test: `MatterSurfaceLib/tests/part_asset_v2_tests.cpp`
+- Test: `MatterEngine3/tests/part_asset_v2_tests.cpp`
 
-- [ ] Add the degenerate-LOD test. In `MatterSurfaceLib/tests/part_asset_v2_tests.cpp`, add above `main()`:
+- [ ] Add the degenerate-LOD test. In `MatterEngine3/tests/part_asset_v2_tests.cpp`, add above `main()`:
 ```cpp
 static void test_round_trip_degenerate_lod() {
     using namespace part_asset;
@@ -832,13 +936,13 @@ and add `test_round_trip_degenerate_lod();` to `main()` after `test_round_trip_f
 
 - [ ] Run and confirm PASS (no implementation change needed; this exercises existing code). Run:
 ```bash
-make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterSurfaceLib/tests" run-partv2
+make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterEngine3/tests" run-partv2
 ```
 Expected: `All part_asset_v2 tests passed`.
 
 - [ ] Commit. Run:
 ```bash
-cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp" && git add MatterSurfaceLib/tests/part_asset_v2_tests.cpp && git commit -m "$(cat <<'EOF'
+cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp" && git add MatterEngine3/tests/part_asset_v2_tests.cpp && git commit -m "$(cat <<'EOF'
 test: cover empty and single-level LOD round-trip for part v2
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -851,9 +955,9 @@ EOF
 ### Task 7: Zero-children round-trip parity
 
 **Files:**
-- Test: `MatterSurfaceLib/tests/part_asset_v2_tests.cpp`
+- Test: `MatterEngine3/tests/part_asset_v2_tests.cpp`
 
-- [ ] Add a test that an empty child table (null + 0) round-trips and that `register_prebuilt` restores byte-identical geometry (prebuilt-vs-built parity carried over from v1, exercised through the v2 path). In `MatterSurfaceLib/tests/part_asset_v2_tests.cpp`, add above `main()`:
+- [ ] Add a test that an empty child table (null + 0) round-trips and that `register_prebuilt` restores byte-identical geometry (prebuilt-vs-built parity carried over from v1, exercised through the v2 path). In `MatterEngine3/tests/part_asset_v2_tests.cpp`, add above `main()`:
 ```cpp
 static void test_round_trip_no_children() {
     using namespace part_asset;
@@ -892,13 +996,13 @@ and add `test_round_trip_no_children();` to `main()` after `test_round_trip_dege
 
 - [ ] Run and confirm PASS. Run:
 ```bash
-make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterSurfaceLib/tests" run-partv2
+make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterEngine3/tests" run-partv2
 ```
 Expected: `All part_asset_v2 tests passed`.
 
 - [ ] Commit. Run:
 ```bash
-cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp" && git add MatterSurfaceLib/tests/part_asset_v2_tests.cpp && git commit -m "$(cat <<'EOF'
+cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp" && git add MatterEngine3/tests/part_asset_v2_tests.cpp && git commit -m "$(cat <<'EOF'
 test: cover zero-children round-trip and prebuilt-vs-built parity via v2
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -911,9 +1015,9 @@ EOF
 ### Task 8: Layout, corruption, and v1-cutover guards
 
 **Files:**
-- Test: `MatterSurfaceLib/tests/part_asset_v2_tests.cpp`
+- Test: `MatterEngine3/tests/part_asset_v2_tests.cpp`
 
-- [ ] Add the guard tests. In `MatterSurfaceLib/tests/part_asset_v2_tests.cpp`, add above `main()`. Header offsets: magic@0, version@4, resolved^ver@8, sizeofTri@16, sizeofTriEx@20, sizeofBVHNode@24, sizeofChildInstance@28, content_hash@32, body starts@40:
+- [ ] Add the guard tests. In `MatterEngine3/tests/part_asset_v2_tests.cpp`, add above `main()`. Header offsets: magic@0, version@4, resolved^ver@8, sizeofTri@16, sizeofTriEx@20, sizeofBVHNode@24, sizeofChildInstance@28, content_hash@32, body starts@40:
 ```cpp
 static void test_v2_guards() {
     using namespace part_asset;
@@ -971,13 +1075,13 @@ and add `test_v2_guards();` to `main()` after `test_round_trip_no_children();`.
 
 - [ ] Run and confirm PASS (guards are already implemented in `load_v2`). Run:
 ```bash
-make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterSurfaceLib/tests" run-partv2
+make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterEngine3/tests" run-partv2
 ```
 Expected: `All part_asset_v2 tests passed`.
 
 - [ ] Commit. Run:
 ```bash
-cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp" && git add MatterSurfaceLib/tests/part_asset_v2_tests.cpp && git commit -m "$(cat <<'EOF'
+cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp" && git add MatterEngine3/tests/part_asset_v2_tests.cpp && git commit -m "$(cat <<'EOF'
 test: cover layout/corruption/v1-cutover guards for part v2 loader
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -994,18 +1098,18 @@ EOF
 
 - [ ] Run the full v2 suite from clean to confirm everything builds and passes. Run:
 ```bash
-make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterSurfaceLib/tests" clean && make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterSurfaceLib/tests" run-partv2
+make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterEngine3/tests" clean && make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterEngine3/tests" run-partv2
 ```
 Expected: clean build, then `All part_asset_v2 tests passed`, exit 0.
 
-- [ ] Confirm the v1 suite still passes (the v2 changes are additive and must not regress v1). Run:
+- [ ] Confirm SP-1 made **no edits to the MatterSurfaceLib prototype** (the v2 work is a new file pair consuming v1 read-only, so there is no v1 regression surface). Run:
 ```bash
-make -C "/mnt/d/Shared With Desktop/AI/matter-engine-cpp/MatterSurfaceLib/tests" run-part
+cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp" && git status --short MatterSurfaceLib && echo "--- (expected: no SP-1 changes under MatterSurfaceLib/) ---"
 ```
-Expected: `All part_asset tests passed`, exit 0.
+Expected: no `part_asset.*`, Makefile, or other prototype source listed as modified by SP-1.
 
-- [ ] Confirm working tree is clean (all work committed). Run:
+- [ ] Confirm working tree is clean (all SP-1 work committed). Run:
 ```bash
 cd "/mnt/d/Shared With Desktop/AI/matter-engine-cpp" && git status --short
 ```
-Expected: no modified/untracked source, header, Makefile, or test files from this plan.
+Expected: no modified/untracked source, header, Makefile, or test files from this plan under `MatterEngine3/`.

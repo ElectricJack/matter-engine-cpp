@@ -1,7 +1,7 @@
 # SP-2 — Script Host & Voxel-CSG Bake — Design
 
 **Status:** Approved for planning (2026-06-24)
-**Project:** MatterSurfaceLib
+**Project:** MatterEngine3
 **Parent:** `2026-06-24-procedural-part-authoring-design.md` (sub-project SP-2)
 **Consumes:** SP-1 (`2026-06-24-part-artifact-v2-design.md`) for artifact output.
 **Implements (subset of):** `2026-06-24-dsl-procedural-geometry-design.md` — the
@@ -28,7 +28,7 @@ caller, treated opaquely).
 
 ## Engine choice & vendoring
 
-- **QuickJS-ng**, vendored under `Libraries/quickjs-ng/` and compiled into MatterSurfaceLib
+- **QuickJS-ng**, vendored under `Libraries/quickjs-ng/` and compiled into MatterEngine3
   (consistent with the repo's vendored-deps convention in `Libraries/`). No system
   dependency, no network fetch at build.
 - Rationale: small, embeddable, deterministic, ES2020+ classes/modules, no JIT

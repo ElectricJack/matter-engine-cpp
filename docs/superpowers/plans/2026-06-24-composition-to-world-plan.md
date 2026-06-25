@@ -6,7 +6,9 @@
 
 **Architecture:** Four GL-free CPU modules layered bottom-up: (1) `lod_bake` decimates a BLAS's `Tri` set via `mesh_simplifier` into N levels with monotone target ratios, assigns each a `screen_size_threshold`, and emits an SP-1 `LodLevels` written back into the `.part`. (2) `world_flatten` walks a part-graph (a map of resolved_hash to `ChildInstance` rows) depth-first, composing `world = parent_world * child.transform` via `mat4`, enforcing max depth and a total instance budget as hard errors. (3) `sector_grid` bins each flat instance's world position into a fixed-pitch integer cell, deterministic on boundaries via floor. (4) `lod_select` computes each instance's projected screen size (`bound_radius / distance`, a defined normalized metric) and picks, per sector, the LOD band driven by the sector's closest instance. Variation is orthogonal: it only changes which resolved_hash a leaf points at; LOD bands and selection are identical across variations.
 
-**Tech Stack:** C++17, mesh_simplifier, BLAS/TLAS managers, SP-1 part_asset v2, headless tests under MatterSurfaceLib/tests/.
+**Tech Stack:** C++17, mesh_simplifier (consumed from MatterSurfaceLib), BLAS/TLAS managers (consumed from MatterSurfaceLib), SP-1 part_asset v2 (new in MatterEngine3), headless tests under MatterEngine3/tests/.
+
+> **Relocation note (from the master plan):** This sub-plan obeys the `MatterEngine3` relocation contract in `2026-06-24-procedural-part-system-master-plan.md`. All NEW files (`lod_bake`, `world_flatten`, `sector_grid`, `lod_select`, tests) live under `MatterEngine3/`; the consumed prototype backend (`mesh_simplifier.cpp`, `blas_manager.cpp`, `bvh.cpp`, `vertex_ao.cpp`, `occupancy.cpp`, `material_registry.c`) and SP-1's `part_asset.cpp` (v1) are referenced read-only as `../../MatterSurfaceLib/src/<dep>` with `-I../../MatterSurfaceLib/include`. SP-1's NEW `part_asset_v2.{h,cpp}` live in `MatterEngine3/`. raylib paths are unchanged (`MatterEngine3/tests` is the same depth as `MatterSurfaceLib/tests`).
 
 ---
 
@@ -16,7 +18,7 @@
 - BLAS geometry is stored as `std::vector<Tri>` per `BLASManager::BLASEntry` (see `blas_manager.hpp`); `Tri` is `vertex0/1/2 + centroid` (`bvh.h`). `register_triangles(Tri*, int, const TriEx*)` builds a BLAS and returns a `BLASHandle`.
 - `mat4` (`bvh.h`) is row-major `float cell[16]`, has `operator()(i,j)`, `TransformPoint`, `Inverted`. `ChildInstance.transform` is `float[16]` row-major (SP-1). I will add a `mat4 mat4_mul(const mat4&, const mat4&)` helper (none exists) and a `float[16]`↔`mat4` bridge.
 - SP-1 `save_v2`/`load_v2` and `struct ChildInstance { uint64_t child_resolved_hash; float transform[16]; }` and `LodLevels` are per the SP-1 spec (`docs/superpowers/specs/2026-06-24-part-artifact-v2-design.md`). They may not exist at execution time. Where SP-1 is absent, depend on the spec interface; the in-memory `LodLevels` shape below matches SP-1's "ordered level array, each level = `screen_size_threshold` + `blas_index[]`".
-- Test convention (`tests/part_asset_tests.cpp`): a `static int failures` + `CHECK(cond, msg)` macro, `main` returns `failures ? 1 : 0`. Makefile gets a `composition_tests` TARGET/SOURCES + `run-comp` rule mirroring `run-part`.
+- Test convention (the prototype's `MatterSurfaceLib/tests/part_asset_tests.cpp`): a `static int failures` + `CHECK(cond, msg)` macro, `main` returns `failures ? 1 : 0`. The MatterEngine3 tests Makefile gets a `composition_tests` TARGET/SOURCES + `run-comp` rule appended (the Makefile already exists — SP-1 created it).
 
 ### Screen-size metric (defined concretely — not abstract)
 
@@ -34,7 +36,7 @@ This is the tangent-approximation of angular radius (`r/d` ≈ `tan(theta)` for 
 ## File Structure
 
 ```
-MatterSurfaceLib/
+MatterEngine3/
   include/
     lod_bake.h          # LodLevels (in-memory), decimate a BLAS Tri-set into N levels + thresholds
     world_flatten.h     # PartGraph, FlatInstance, flatten() with depth/budget guards
@@ -47,8 +49,9 @@ MatterSurfaceLib/
     lod_select.cpp
   tests/
     composition_tests.cpp
-    Makefile            # add composition_tests target + run-comp
+    Makefile            # APPEND composition_tests target + run-comp (already exists from SP-1)
 ```
+(Consumed read-only from `MatterSurfaceLib/`: `mesh_simplifier.{hpp,cpp}`, `blas_manager.{hpp,cpp}`, `bvh.{h,cpp}`, `vertex_ao.cpp`, `occupancy.cpp`, `material_registry.c`, and `part_asset.{h,cpp}` (v1). SP-1's `part_asset_v2.{h,cpp}` are new under `MatterEngine3/`.)
 
 `lod_bake.h` defines the in-memory `LodLevels` used across SP-4 (matching SP-1's on-disk shape) so the modules are testable even before SP-1 lands:
 
@@ -61,28 +64,31 @@ struct LodLevel {
 using LodLevels = std::vector<LodLevel>;  // ordered LOD0..LODn (fine -> coarse)
 ```
 
-If SP-1 ships its own `LodLevels`, replace this typedef with `#include "part_asset.h"` and delete the local definition; the field names match by design.
+If SP-1 ships its own `LodLevels`, replace this typedef with `#include "part_asset_v2.h"` (SP-1's NEW MatterEngine3 header, via `-I../include`) and delete the local definition; the field names match by design. Note SP-1's `LodLevel` uses a `blas_indices` member, while SP-4's local mirror uses `blas_index` — reconcile at the swap.
 
 ---
 
 ## Task 1 — `Tri[]` ↔ raylib `Mesh` bridge + single-level decimate
 
 **Files:**
-- `MatterSurfaceLib/include/lod_bake.h`
-- `MatterSurfaceLib/src/lod_bake.cpp`
-- `MatterSurfaceLib/tests/composition_tests.cpp`
-- `MatterSurfaceLib/tests/Makefile`
+- `MatterEngine3/include/lod_bake.h`
+- `MatterEngine3/src/lod_bake.cpp`
+- `MatterEngine3/tests/composition_tests.cpp`
+- `MatterEngine3/tests/Makefile`
 
-- [ ] **Add the test target to the Makefile.** Append to `tests/Makefile` after the `run-vox` rule, and add `run-comp` + `$(COMP_TARGET)` to the `.PHONY`/`clean` lines:
+- [ ] **Append the test target to the MatterEngine3 tests Makefile.** The Makefile already exists (SP-1 created `MatterEngine3/tests/Makefile`). Append this block, and add `run-comp` + `$(COMP_TARGET)` to the `.PHONY`/`clean` lines. New impl sources are `../src/<new>.cpp`; consumed prototype sources are `../../MatterSurfaceLib/src/<dep>.cpp`:
   ```make
   # Composition-to-world (SP-4): LOD bake + flatten + sector grid + LOD select.
   # Headless, GL-free CPU steps. raylib linked only for MemAlloc/MemFree in the
-  # Tri<->Mesh bridge.
+  # Tri<->Mesh bridge. NEW impl ../src/*.cpp + consumed MatterSurfaceLib backend.
   COMP_TARGET = composition_tests
   COMP_SOURCES = composition_tests.cpp ../src/lod_bake.cpp ../src/world_flatten.cpp \
                  ../src/sector_grid.cpp ../src/lod_select.cpp \
-                 ../src/mesh_simplifier.cpp ../src/blas_manager.cpp ../src/bvh.cpp \
-                 ../src/vertex_ao.cpp ../src/occupancy.cpp
+                 ../../MatterSurfaceLib/src/mesh_simplifier.cpp \
+                 ../../MatterSurfaceLib/src/blas_manager.cpp \
+                 ../../MatterSurfaceLib/src/bvh.cpp \
+                 ../../MatterSurfaceLib/src/vertex_ao.cpp \
+                 ../../MatterSurfaceLib/src/occupancy.cpp
 
   $(COMP_TARGET): $(COMP_SOURCES)
   	$(CC) $(COMP_SOURCES) -o $(COMP_TARGET) $(CFLAGS) $(INCLUDE_PATHS) $(LDFLAGS) $(LDLIBS)
@@ -95,7 +101,7 @@ If SP-1 ships its own `LodLevels`, replace this typedef with `#include "part_ass
 - [ ] **Write the failing test** (`composition_tests.cpp`): create the harness + a test that decimating a subdivided grid keeps fewer triangles. Real code:
   ```cpp
   #include "../include/lod_bake.h"
-  #include "../include/blas_manager.hpp"
+  #include "../../MatterSurfaceLib/include/blas_manager.hpp"
   #include <cstdio>
   #include <cstdint>
   #include <vector>
@@ -132,7 +138,7 @@ If SP-1 ships its own `LodLevels`, replace this typedef with `#include "part_ass
   }
   ```
 
-- [ ] **Run and expect FAIL** (no `lod_bake.h` yet): `cd "MatterSurfaceLib/tests" && make run-comp` → expect compile error (`lod_bake.h: No such file` / `decimate_tris` undeclared).
+- [ ] **Run and expect FAIL** (no `lod_bake.h` yet): `make -C MatterEngine3/tests run-comp` → expect compile error (`lod_bake.h: No such file` / `decimate_tris` undeclared).
 
 - [ ] **Write the header** (`include/lod_bake.h`):
   ```cpp
@@ -160,7 +166,7 @@ If SP-1 ships its own `LodLevels`, replace this typedef with `#include "part_ass
 - [ ] **Write the impl** (`src/lod_bake.cpp`) — the `Tri[]`↔`Mesh` bridge + `simplify_mesh` call:
   ```cpp
   #include "../include/lod_bake.h"
-  #include "../include/mesh_simplifier.hpp"
+  #include "../../MatterSurfaceLib/include/mesh_simplifier.hpp"
   extern "C" { #include "raylib.h" }
   #include <cstring>
 
@@ -221,7 +227,7 @@ If SP-1 ships its own `LodLevels`, replace this typedef with `#include "part_ass
   ```
   Note: `lock_boundary=false` so an isolated grid actually collapses (boundary-locked would freeze a flat sheet). If `simplify_mesh` returns the input unchanged for tiny meshes, the grid(16)=512-tri input is large enough to reduce.
 
-- [ ] **Run and expect PASS**: `cd "MatterSurfaceLib/tests" && make run-comp` → `OK`.
+- [ ] **Run and expect PASS**: `make -C MatterEngine3/tests run-comp` → `OK`.
 
 - [ ] **Commit**: `lod_bake: Tri<->Mesh bridge + single-level decimate via mesh_simplifier`
   ```
@@ -233,9 +239,9 @@ If SP-1 ships its own `LodLevels`, replace this typedef with `#include "part_ass
 ## Task 2 — Multi-level LOD bake: monotone tri counts + thresholds + BLAS registration
 
 **Files:**
-- `MatterSurfaceLib/include/lod_bake.h`
-- `MatterSurfaceLib/src/lod_bake.cpp`
-- `MatterSurfaceLib/tests/composition_tests.cpp`
+- `MatterEngine3/include/lod_bake.h`
+- `MatterEngine3/src/lod_bake.cpp`
+- `MatterEngine3/tests/composition_tests.cpp`
 
 - [ ] **Write the failing test** — append to `composition_tests.cpp` and call from `main`. Covers the spec's "decimates to 3 levels with monotonically decreasing tri counts". Real code:
   ```cpp
@@ -265,7 +271,7 @@ If SP-1 ships its own `LodLevels`, replace this typedef with `#include "part_ass
   ```
   Add `test_bake_three_levels();` to `main`.
 
-- [ ] **Run and expect FAIL**: `make run-comp` → compile error (`BakeTargets`/`bake_lods` undeclared).
+- [ ] **Run and expect FAIL**: `make -C MatterEngine3/tests run-comp` → compile error (`BakeTargets`/`bake_lods` undeclared).
 
 - [ ] **Extend the header** (`include/lod_bake.h`) — add before the closing namespace brace:
   ```cpp
@@ -312,7 +318,7 @@ If SP-1 ships its own `LodLevels`, replace this typedef with `#include "part_ass
   ```
   Note: monotonicity holds because `keep_ratio` is strictly decreasing and `simplify_mesh` keeps ≈ratio of tris; if a coarser level fails to drop below a finer one for a pathological mesh the test grid(32) is large enough that it will. The plan's targets {1.0,0.1,0.01} guarantee clear separation.
 
-- [ ] **Run and expect PASS**: `make run-comp` → `OK`.
+- [ ] **Run and expect PASS**: `make -C MatterEngine3/tests run-comp` → `OK`.
 
 - [ ] **Commit**: `lod_bake: bake N monotone LOD levels with screen-size thresholds`
 
@@ -321,15 +327,15 @@ If SP-1 ships its own `LodLevels`, replace this typedef with `#include "part_ass
 ## Task 3 — LOD round-trip through SP-1 `save_v2`/`load_v2`
 
 **Files:**
-- `MatterSurfaceLib/tests/composition_tests.cpp`
-- `MatterSurfaceLib/include/lod_bake.h` (only if a thin shim is needed)
+- `MatterEngine3/tests/composition_tests.cpp`
+- `MatterEngine3/include/lod_bake.h` (only if a thin shim is needed)
 
 This task depends on SP-1's `save_v2`/`load_v2`. If SP-1 has NOT landed at execution time, implement the round-trip against an **in-memory serializer** (`lod_bake::serialize_lods`/`deserialize_lods`) so the spec's "round-trip through save_v2/load_v2" is covered structurally; swap to the real `save_v2`/`load_v2` once SP-1 exists (the `LodLevels` field names match by design). Decide which path at execution time; do BOTH steps below for the chosen path.
 
 - [ ] **Write the failing test** — append + call from `main`. Covers spec "each level's BLAS indices + `screen_size_threshold` round-trip" and SP-1's degenerate empty/single-level cases.
-  - **If SP-1 present** (`#include "part_asset.h"`):
+  - **If SP-1 present** (`#include "part_asset_v2.h"`):
     ```cpp
-    #include "../include/part_asset.h"
+    #include "../include/part_asset_v2.h"
     static void test_lod_roundtrip_v2() {
         std::vector<Tri> tris = grid_tris(32);
         BLASManager blas; TLASManager tlas(64);
@@ -346,7 +352,8 @@ This task depends on SP-1's `save_v2`/`load_v2`. If SP-1 has NOT landed at execu
         CHECK(lods_out.size() == lods.size(), "lod level count round-trips");
         for (size_t i = 0; i < lods.size(); ++i) {
             CHECK(lods_out[i].screen_size_threshold == lods[i].screen_size_threshold, "threshold round-trips");
-            CHECK(lods_out[i].blas_index == lods[i].blas_index, "blas indices round-trip");
+            // SP-1's LodLevel member is `blas_indices`; SP-4's bake_lods mirror is `blas_index`.
+            CHECK(lods_out[i].blas_indices == lods[i].blas_index, "blas indices round-trip");
         }
     }
     // Degenerate cases per SP-1.
@@ -363,11 +370,11 @@ This task depends on SP-1's `save_v2`/`load_v2`. If SP-1 has NOT landed at execu
     ```
   - **If SP-1 absent** (in-memory shim): assert `deserialize_lods(serialize_lods(lods)) == lods` byte-for-byte (level count, each threshold, each `blas_index`), plus the empty and single-level cases.
 
-- [ ] **Run and expect FAIL**: `make run-comp` → link/compile error (`save_v2` unresolved, or `serialize_lods` undeclared). If using the SP-1 path, add `../src/part_asset.cpp` + `material_registry.o` (gcc) to `COMP_SOURCES`/Makefile like the `part_asset` target does.
+- [ ] **Run and expect FAIL**: `make -C MatterEngine3/tests run-comp` → link/compile error (`save_v2` unresolved, or `serialize_lods` undeclared). If using the SP-1 path, add the NEW `../src/part_asset_v2.cpp` + the consumed `../../MatterSurfaceLib/src/part_asset.cpp` + `material_registry.o` (compiled from `../../MatterSurfaceLib/src/material_registry.c` via gcc) to `COMP_SOURCES`/Makefile, exactly as SP-1's `run-partv2` target does.
 
 - [ ] **Make it pass**: if SP-1 present, no impl needed (SP-1 owns `save_v2`/`load_v2`); just wire the Makefile sources. If SP-1 absent, add `serialize_lods(const LodLevels&) -> std::vector<uint8_t>` and `deserialize_lods(const uint8_t*, size_t) -> LodLevels` to `lod_bake.{h,cpp}` (write `level_count u32`, then per level `screen_size_threshold f32`, `blas_index_count u32`, `blas_index u32[]` — exactly SP-1's on-disk LOD layout).
 
-- [ ] **Run and expect PASS**: `make run-comp` → `OK`.
+- [ ] **Run and expect PASS**: `make -C MatterEngine3/tests run-comp` → `OK`.
 
 - [ ] **Commit**: `lod_bake: round-trip LOD levels through SP-1 save_v2/load_v2`
 
@@ -376,9 +383,9 @@ This task depends on SP-1's `save_v2`/`load_v2`. If SP-1 has NOT landed at execu
 ## Task 4 — Recursive world flatten with composed transforms
 
 **Files:**
-- `MatterSurfaceLib/include/world_flatten.h`
-- `MatterSurfaceLib/src/world_flatten.cpp`
-- `MatterSurfaceLib/tests/composition_tests.cpp`
+- `MatterEngine3/include/world_flatten.h`
+- `MatterEngine3/src/world_flatten.cpp`
+- `MatterEngine3/tests/composition_tests.cpp`
 
 - [ ] **Write the failing test** — covers spec "a 2-level child graph (parent with N children, each with M grandchildren) flattens to N*M leaf instances with correctly composed world transforms". Real code:
   ```cpp
@@ -415,7 +422,7 @@ This task depends on SP-1's `save_v2`/`load_v2`. If SP-1 has NOT landed at execu
   ```
   Add to `main`. **Decision:** only leaf parts (no children) emit `FlatInstance`s — interior parts contribute transform composition only. This matches the spec's "flat list of leaf instances."
 
-- [ ] **Run and expect FAIL**: `make run-comp` → compile error (`world_flatten.h` missing).
+- [ ] **Run and expect FAIL**: `make -C MatterEngine3/tests run-comp` → compile error (`world_flatten.h` missing).
 
 - [ ] **Write the header** (`include/world_flatten.h`):
   ```cpp
@@ -521,7 +528,7 @@ This task depends on SP-1's `save_v2`/`load_v2`. If SP-1 has NOT landed at execu
   } // namespace world_flatten
   ```
 
-- [ ] **Run and expect PASS**: `make run-comp` → `OK`.
+- [ ] **Run and expect PASS**: `make -C MatterEngine3/tests run-comp` → `OK`.
 
 - [ ] **Commit**: `world_flatten: recursive flatten with composed world transforms`
 
@@ -530,7 +537,7 @@ This task depends on SP-1's `save_v2`/`load_v2`. If SP-1 has NOT landed at execu
 ## Task 5 — Dedup preserved + depth guard + budget guard
 
 **Files:**
-- `MatterSurfaceLib/tests/composition_tests.cpp`
+- `MatterEngine3/tests/composition_tests.cpp`
 
 The guards already exist in Task 4's impl; this task adds the spec's three remaining flatten tests (dedup, depth guard, budget guard). No new impl unless a test reveals a bug.
 
@@ -587,9 +594,9 @@ The guards already exist in Task 4's impl; this task adds the spec's three remai
 ## Task 6 — Sector grid binning (boundary-deterministic)
 
 **Files:**
-- `MatterSurfaceLib/include/sector_grid.h`
-- `MatterSurfaceLib/src/sector_grid.cpp`
-- `MatterSurfaceLib/tests/composition_tests.cpp`
+- `MatterEngine3/include/sector_grid.h`
+- `MatterEngine3/src/sector_grid.cpp`
+- `MatterEngine3/tests/composition_tests.cpp`
 
 - [ ] **Write the failing test** — covers spec "instances land in expected sectors by position; an instance on a sector boundary is assigned deterministically". Real code:
   ```cpp
@@ -626,7 +633,7 @@ The guards already exist in Task 4's impl; this task adds the spec's three remai
   ```
   Add to `main`. **Decision:** sector position is taken from the instance world translation (`world.cell[3,7,11]`). Half-open `[lo,hi)` cells via `floor` make boundaries deterministic.
 
-- [ ] **Run and expect FAIL**: `make run-comp` → compile error (`sector_grid.h` missing).
+- [ ] **Run and expect FAIL**: `make -C MatterEngine3/tests run-comp` → compile error (`sector_grid.h` missing).
 
 - [ ] **Write the header** (`include/sector_grid.h`):
   ```cpp
@@ -702,7 +709,7 @@ The guards already exist in Task 4's impl; this task adds the spec's three remai
   } // namespace sector_grid
   ```
 
-- [ ] **Run and expect PASS**: `make run-comp` → `OK`.
+- [ ] **Run and expect PASS**: `make -C MatterEngine3/tests run-comp` → `OK`.
 
 - [ ] **Commit**: `sector_grid: deterministic floor-binning of flat instances`
 
@@ -711,9 +718,9 @@ The guards already exist in Task 4's impl; this task adds the spec's three remai
 ## Task 7 — Closest-instance screen-size LOD selection + escalation
 
 **Files:**
-- `MatterSurfaceLib/include/lod_select.h`
-- `MatterSurfaceLib/src/lod_select.cpp`
-- `MatterSurfaceLib/tests/composition_tests.cpp`
+- `MatterEngine3/include/lod_select.h`
+- `MatterEngine3/src/lod_select.cpp`
+- `MatterEngine3/tests/composition_tests.cpp`
 
 - [ ] **Write the failing test** — covers spec "for a synthetic camera, a sector picks the level dictated by its closest instance's projected size; moving the camera closer escalates the level". Real code:
   ```cpp
@@ -762,7 +769,7 @@ The guards already exist in Task 4's impl; this task adds the spec's three remai
   ```
   Add both to `main`. **Decision:** `select_sector_lods` returns, per sector, a per-part-hash chosen LOD index, where the projected size is computed from the sector's **closest instance** (min distance to camera). Per-part thresholds let different parts pick their own level within the closest-instance-driven evaluation, matching the spec.
 
-- [ ] **Run and expect FAIL**: `make run-comp` → compile error (`lod_select.h` missing).
+- [ ] **Run and expect FAIL**: `make -C MatterEngine3/tests run-comp` → compile error (`lod_select.h` missing).
 
 - [ ] **Write the header** (`include/lod_select.h`):
   ```cpp
@@ -859,7 +866,7 @@ The guards already exist in Task 4's impl; this task adds the spec's three remai
   } // namespace lod_select
   ```
 
-- [ ] **Run and expect PASS**: `make run-comp` → `OK`.
+- [ ] **Run and expect PASS**: `make -C MatterEngine3/tests run-comp` → `OK`.
 
 - [ ] **Commit**: `lod_select: closest-instance sector LOD selection with escalation`
 
@@ -868,7 +875,7 @@ The guards already exist in Task 4's impl; this task adds the spec's three remai
 ## Task 8 — Variation / LOD independence
 
 **Files:**
-- `MatterSurfaceLib/tests/composition_tests.cpp`
+- `MatterEngine3/tests/composition_tests.cpp`
 
 Covers spec "two variations of a part get identical LOD level sets and identical screen-size selection behavior." No new impl: this asserts the orthogonality is a property of the existing modules (variation = different resolved_hash leaf; LOD bake + selection don't depend on which variation).
 
@@ -920,12 +927,12 @@ Covers spec "two variations of a part get identical LOD level sets and identical
 ## Task 9 — Wire into build-all test sweep + final self-review
 
 **Files:**
-- `MatterSurfaceLib/tests/Makefile`
+- `MatterEngine3/tests/Makefile`
 - (verify only) `build-all.sh`
 
-- [ ] **Verify** `build-all.sh test` invokes the MatterSurfaceLib test rules; if it runs explicit `run-*` targets, add `run-comp` to the sweep. If it globs, no change needed. Read `build-all.sh` first; do NOT invent a hook that isn't there.
+- [ ] **Verify** `build-all.sh test` invokes the MatterEngine3 test rules (SP-1 registered `MatterEngine3` in `build-all.sh`); if it runs explicit `run-*` targets, add `run-comp` to the sweep. If it globs, no change needed. Read `build-all.sh` first; do NOT invent a hook that isn't there.
 
-- [ ] **Full sweep**: `cd "MatterSurfaceLib/tests" && make run-comp` and confirm `OK` with zero `FAIL:` lines. Re-run `make clean && make run-comp` to confirm a clean build links (validates the `Tri<->Mesh` bridge frees and the new sources compile from scratch).
+- [ ] **Full sweep**: `make -C MatterEngine3/tests run-comp` and confirm `OK` with zero `FAIL:` lines. Re-run `make -C MatterEngine3/tests clean && make -C MatterEngine3/tests run-comp` to confirm a clean build links (validates the `Tri<->Mesh` bridge frees and the new sources compile from scratch).
 
 - [ ] **Self-review** every module against the spec Testing bullets: LOD bake monotone + round-trip (Tasks 2,3), flatten N*M composed (Task 4), dedup preserved (Task 5), depth + budget guards (Task 5), sector binning + boundary determinism (Task 6), LOD escalation + closest-instance (Task 7), variation/LOD independence (Task 8). Confirm the screen-size metric is defined in code (`lod_select::projected_size`) and used consistently.
 

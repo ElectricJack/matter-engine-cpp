@@ -1,7 +1,7 @@
 # SP-7 — Shared Script Library — Design
 
 **Status:** Approved for planning (2026-06-24)
-**Project:** MatterSurfaceLib
+**Project:** MatterEngine3
 **Parent:** `2026-06-24-procedural-part-authoring-design.md` (sub-project SP-7)
 **Consumes:** SP-2 (`ScriptHost` / QuickJS-ng, seeded RNG hook), SP-3 (resolved-hash
 folding, cache-miss invalidation).

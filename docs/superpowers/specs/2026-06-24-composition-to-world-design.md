@@ -1,7 +1,7 @@
 # SP-4 — Composition to World (LOD bake + sector expansion) — Design
 
 **Status:** Approved for planning (2026-06-24)
-**Project:** MatterSurfaceLib
+**Project:** MatterEngine3
 **Parent:** `2026-06-24-procedural-part-authoring-design.md` (sub-project SP-4)
 **Consumes:** SP-1 (`.part` v2: child-instance table + LOD-level array w/
 `screen_size_threshold`), SP-3 (a populated `parts/` cache for the world).

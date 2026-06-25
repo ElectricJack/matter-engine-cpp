@@ -6,29 +6,31 @@
 
 **Architecture:** A `FileWatcher` interface emits debounced change events (`InotifyWatcher` for Linux, `FakeWatcher` for tests, `ReadDirectoryChangesW` stubbed for Windows). A `LiveEditSession` owns the loop: it maps a changed file to the parts that depend on it, computes the **upward cone** (changed part + all transitive ancestors) against an injected SP-3 `GraphResolver` interface, drives a SCOPED rebake in topo order through an injected `Baker`, then re-flattens each affected root subtree through an injected `Flattener`. Bakes run under SP-2's time budget; any failure keeps the prior `parts/<hash>.part` artifact in place and pushes a structured error to an `ErrorSink`, retrying on the next event. All SP-2/3/4 collaborators are interfaces so the scoping/debounce/last-good logic is unit-testable with fakes; only one task wires the real inotify backend.
 
-**Tech Stack:** C++17, Linux inotify (ReadDirectoryChangesW deferred/stubbed for Windows), depends on SP-2/3/4 interfaces, headless tests under MatterSurfaceLib/tests/.
+**Tech Stack:** C++17, Linux inotify (ReadDirectoryChangesW deferred/stubbed for Windows), depends on SP-2/3/4 interfaces, headless tests under MatterEngine3/tests/.
+
+> **Relocation note (from the master plan):** This sub-plan obeys the `MatterEngine3` relocation contract in `2026-06-24-procedural-part-system-master-plan.md`. All NEW files are under `MatterEngine3/`; the read-only MatterSurfaceLib prototype backend is referenced via `-I../../MatterSurfaceLib/include` and `../../MatterSurfaceLib/src/<dep>`. SP-5 here consumes no prototype sources directly (its seams are SP-2/3/4 interfaces, all new MatterEngine3 files); raylib paths are unchanged (`MatterEngine3/tests` is the same depth as `MatterSurfaceLib/tests`).
 
 ---
 
 ## File Structure
 
-**New headers (MatterSurfaceLib/include/):**
+**New headers (MatterEngine3/include/):**
 - `file_watcher.h` — `FileEvent`, `FileEventKind`, abstract `FileWatcher` interface, and `FakeWatcher` (in-header, test-injectable) that lets tests push synthetic events and a clock.
 - `inotify_watcher.h` — `InotifyWatcher` declaration (Linux real backend; `#ifdef __linux__`).
 - `win_watcher.h` — `WinDirWatcher` declaration, clearly marked **stubbed/deferred** (`#ifdef _WIN32`), throwing `not_implemented` if instantiated.
 - `live_edit_interfaces.h` — the SP-3/SP-4/SP-2 seams SP-5 builds on: `PartId`, `ResolvedHash`, `GraphResolver` (re-resolve + ancestors + topo + file→parts reverse map), `Baker` (scoped bake under budget, fail-closed), `Flattener` (re-flatten a root subtree), `ErrorSink` (structured error), `LiveEditError`. Pure-virtual; SP-2/3/4 provide concrete impls at execution time.
 - `live_edit.h` — `LiveEditConfig` (debounce window, dev time budget) + `LiveEditSession` (the debounce + upward-cone scoping + rebake + re-flatten + last-good orchestration).
 
-**New sources (MatterSurfaceLib/src/):**
+**New sources (MatterEngine3/src/):**
 - `inotify_watcher.cpp` — Linux inotify implementation (`inotify_init1`, `inotify_add_watch`, `read()` loop, event→`FileEvent` mapping, debounce coalescing at the source).
 - `live_edit.cpp` — `LiveEditSession` implementation (debounce coalescing, `upward_cone()`, topo-ordered scoped rebake, affected-root re-flatten, fail-closed/last-good, retry).
 
-**New tests (MatterSurfaceLib/tests/):**
+**New tests (MatterEngine3/tests/):**
 - `dev_live_edit_tests.cpp` — plain-`main()` CHECK-macro headless suite. Drives `FakeWatcher` + fake `GraphResolver`/`Baker`/`Flattener`/`ErrorSink`. One task additionally drives the **real** `InotifyWatcher` against a temp dir with an actual file touch.
 
 **Modified:**
-- `MatterSurfaceLib/tests/Makefile` — add `DEV_TARGET = dev_live_edit_tests` + `SOURCES` + `run-dev` rule.
-- `build-all.sh` — add `dev_live_edit_tests` to the MatterSurfaceLib headless suite loop.
+- `MatterEngine3/tests/Makefile` — append `DEV_TARGET = dev_live_edit_tests` + `SOURCES` + `run-dev` rule (the Makefile already exists from SP-1; do NOT recreate it).
+- `build-all.sh` — add `dev_live_edit_tests` to the MatterEngine3 headless suite loop.
 
 ---
 
@@ -53,13 +55,13 @@ using ResolvedHash = std::string;
 ## Task 1: Test scaffolding + FakeWatcher + CHECK harness
 
 **Files:**
-- Create: `MatterSurfaceLib/include/file_watcher.h`
-- Create: `MatterSurfaceLib/tests/dev_live_edit_tests.cpp`
-- Modify: `MatterSurfaceLib/tests/Makefile`
+- Create: `MatterEngine3/include/file_watcher.h`
+- Create: `MatterEngine3/tests/dev_live_edit_tests.cpp`
+- Modify: `MatterEngine3/tests/Makefile` (append; created by SP-1)
 
 - [ ] **Step 1: Write the watcher interface + FakeWatcher (failing-test target needs it to compile)**
 
-Create `MatterSurfaceLib/include/file_watcher.h`:
+Create `MatterEngine3/include/file_watcher.h`:
 ```cpp
 #pragma once
 #include <string>
@@ -124,7 +126,7 @@ private:
 
 - [ ] **Step 2: Write the first failing test (harness + FakeWatcher round-trip)**
 
-Create `MatterSurfaceLib/tests/dev_live_edit_tests.cpp`:
+Create `MatterEngine3/tests/dev_live_edit_tests.cpp`:
 ```cpp
 // Headless SP-5 dev live-edit tests. plain main(), no GL. Drives FakeWatcher +
 // fake SP-2/3/4 seams. See docs/superpowers/specs/2026-06-24-dev-live-edit-design.md
@@ -163,12 +165,12 @@ int main() {
 }
 ```
 
-- [ ] **Step 3: Add the Makefile target**
+- [ ] **Step 3: Append the Makefile target**
 
-In `MatterSurfaceLib/tests/Makefile`, append after the `run-vox` rule:
+The `MatterEngine3/tests/Makefile` already exists (created by SP-1). Append this plan's target after the existing `run-*` rules (do NOT recreate the Makefile or edit `MatterSurfaceLib/tests/Makefile`):
 ```make
 # SP-5 dev live-edit: debounce + upward-cone scoping + last-good (headless, GL-free).
-# inotify_watcher.cpp is Linux-only (guarded by __linux__ internally).
+# All-new MatterEngine3 sources; inotify_watcher.cpp is Linux-only (guarded by __linux__ internally).
 DEV_TARGET = dev_live_edit_tests
 DEV_SOURCES = dev_live_edit_tests.cpp ../src/live_edit.cpp ../src/inotify_watcher.cpp
 
@@ -181,18 +183,18 @@ run-dev: $(DEV_TARGET)
 Also add `run-dev` to the `.PHONY` line and `$(DEV_TARGET)` to the `clean` rule's `rm -f` list.
 
 > NOTE: `live_edit.cpp` and `inotify_watcher.cpp` do not exist yet, so the target will not build until Task 2/Task 8. To run this first test in isolation before those exist, temporarily build only the test file:
-> `cd MatterSurfaceLib/tests && g++ -std=c++17 -I../include dev_live_edit_tests.cpp -o dev_live_edit_tests`
+> `cd MatterEngine3/tests && g++ -std=c++17 -I../include dev_live_edit_tests.cpp -o dev_live_edit_tests`
 
 - [ ] **Step 4: Run — expect this isolated compile+run to PASS** (it only exercises the header-only FakeWatcher)
 
-Run: `cd MatterSurfaceLib/tests && g++ -std=c++17 -I../include dev_live_edit_tests.cpp -o dev_live_edit_tests && ./dev_live_edit_tests`
+Run: `cd MatterEngine3/tests && g++ -std=c++17 -I../include dev_live_edit_tests.cpp -o dev_live_edit_tests && ./dev_live_edit_tests`
 Expected: `ALL PASS`. (This confirms the harness + FakeWatcher; later tasks add `live_edit.cpp`/`inotify_watcher.cpp` and switch to the Makefile target.)
 
 - [ ] **Step 5: Commit**
 
 Run:
 ```bash
-git add MatterSurfaceLib/include/file_watcher.h MatterSurfaceLib/tests/dev_live_edit_tests.cpp MatterSurfaceLib/tests/Makefile
+git add MatterEngine3/include/file_watcher.h MatterEngine3/tests/dev_live_edit_tests.cpp MatterEngine3/tests/Makefile
 git commit -m "$(cat <<'EOF'
 test: scaffold SP-5 dev live-edit suite + FakeWatcher
 
@@ -206,15 +208,15 @@ EOF
 ## Task 2: Interface seams + LiveEditSession skeleton (no scoping yet)
 
 **Files:**
-- Create: `MatterSurfaceLib/include/live_edit_interfaces.h`
-- Create: `MatterSurfaceLib/include/live_edit.h`
-- Create: `MatterSurfaceLib/src/live_edit.cpp`
-- Create: `MatterSurfaceLib/src/inotify_watcher.cpp` (Linux real impl stub for now so the Makefile target links; filled in Task 8)
-- Modify: `MatterSurfaceLib/tests/dev_live_edit_tests.cpp`
+- Create: `MatterEngine3/include/live_edit_interfaces.h`
+- Create: `MatterEngine3/include/live_edit.h`
+- Create: `MatterEngine3/src/live_edit.cpp`
+- Create: `MatterEngine3/src/inotify_watcher.cpp` (Linux real impl stub for now so the Makefile target links; filled in Task 8)
+- Modify: `MatterEngine3/tests/dev_live_edit_tests.cpp`
 
 - [ ] **Step 1: Write the SP-2/3/4 seam interfaces**
 
-Create `MatterSurfaceLib/include/live_edit_interfaces.h`:
+Create `MatterEngine3/include/live_edit_interfaces.h`:
 ```cpp
 #pragma once
 #include <string>
@@ -284,7 +286,7 @@ public:
 
 - [ ] **Step 2: Write the session header**
 
-Create `MatterSurfaceLib/include/live_edit.h`:
+Create `MatterEngine3/include/live_edit.h`:
 ```cpp
 #pragma once
 #include "file_watcher.h"
@@ -350,7 +352,7 @@ private:
 
 - [ ] **Step 3: Write a minimal source (skeleton: upward_cone + empty tick) — just enough to fail the next test meaningfully**
 
-Create `MatterSurfaceLib/src/live_edit.cpp`:
+Create `MatterEngine3/src/live_edit.cpp`:
 ```cpp
 #include "live_edit.h"
 
@@ -377,14 +379,14 @@ RebuildReport LiveEditSession::tick() {
 
 - [ ] **Step 4: Create a placeholder inotify source so the Makefile target links on Linux**
 
-Create `MatterSurfaceLib/src/inotify_watcher.cpp`:
+Create `MatterEngine3/src/inotify_watcher.cpp`:
 ```cpp
 #include "inotify_watcher.h"
 // Real Linux inotify backend implemented in Task 8. Header defines the class
 // guarded by __linux__; this TU is intentionally empty until then so the test
 // Makefile target links without a real backend (tests use FakeWatcher).
 ```
-And create `MatterSurfaceLib/include/inotify_watcher.h`:
+And create `MatterEngine3/include/inotify_watcher.h`:
 ```cpp
 #pragma once
 #include "file_watcher.h"
@@ -459,14 +461,14 @@ And call `test_upward_cone();` in `main()`.
 
 - [ ] **Step 6: Run via the Makefile target — expect PASS**
 
-Run: `make -C MatterSurfaceLib/tests dev_live_edit_tests && ./MatterSurfaceLib/tests/dev_live_edit_tests`
+Run: `make -C MatterEngine3/tests dev_live_edit_tests && ./MatterEngine3/tests/dev_live_edit_tests`
 Expected: `ALL PASS` (both `test_fake_watcher_roundtrip` and `test_upward_cone`).
 
 - [ ] **Step 7: Commit**
 
 Run:
 ```bash
-git add MatterSurfaceLib/include/live_edit_interfaces.h MatterSurfaceLib/include/live_edit.h MatterSurfaceLib/include/inotify_watcher.h MatterSurfaceLib/src/live_edit.cpp MatterSurfaceLib/src/inotify_watcher.cpp MatterSurfaceLib/tests/dev_live_edit_tests.cpp
+git add MatterEngine3/include/live_edit_interfaces.h MatterEngine3/include/live_edit.h MatterEngine3/include/inotify_watcher.h MatterEngine3/src/live_edit.cpp MatterEngine3/src/inotify_watcher.cpp MatterEngine3/tests/dev_live_edit_tests.cpp
 git commit -m "$(cat <<'EOF'
 feat: SP-5 interface seams + upward-cone scoping helper
 
@@ -482,8 +484,8 @@ EOF
 Covers spec testing bullets **single-part edit scope** (file maps to one part) and the mapping half of **shared-module edit fan-out** (file maps to many importers).
 
 **Files:**
-- Modify: `MatterSurfaceLib/tests/dev_live_edit_tests.cpp`
-- Modify: `MatterSurfaceLib/src/live_edit.cpp`
+- Modify: `MatterEngine3/tests/dev_live_edit_tests.cpp`
+- Modify: `MatterEngine3/src/live_edit.cpp`
 
 - [ ] **Step 1: Add a failing test for the changed-set assembly from a set of paths**
 
@@ -515,7 +517,7 @@ Call `test_changed_parts_single_and_shared();` in `main()`.
 
 - [ ] **Step 2: Run — expect FAIL (no `changed_parts` member yet → compile error)**
 
-Run: `make -C MatterSurfaceLib/tests dev_live_edit_tests`
+Run: `make -C MatterEngine3/tests dev_live_edit_tests`
 Expected: compile error `no member named 'changed_parts'`.
 
 - [ ] **Step 3: Declare + implement `changed_parts`**
@@ -539,14 +541,14 @@ std::set<PartId> LiveEditSession::changed_parts(const std::set<std::string>& pat
 
 - [ ] **Step 4: Run — expect PASS**
 
-Run: `make -C MatterSurfaceLib/tests dev_live_edit_tests && ./MatterSurfaceLib/tests/dev_live_edit_tests`
+Run: `make -C MatterEngine3/tests dev_live_edit_tests && ./MatterEngine3/tests/dev_live_edit_tests`
 Expected: `ALL PASS`.
 
 - [ ] **Step 5: Commit**
 
 Run:
 ```bash
-git add MatterSurfaceLib/include/live_edit.h MatterSurfaceLib/src/live_edit.cpp MatterSurfaceLib/tests/dev_live_edit_tests.cpp
+git add MatterEngine3/include/live_edit.h MatterEngine3/src/live_edit.cpp MatterEngine3/tests/dev_live_edit_tests.cpp
 git commit -m "$(cat <<'EOF'
 feat: SP-5 file-to-parts reverse mapping (single + shared module)
 
@@ -562,8 +564,8 @@ EOF
 Covers spec testing bullet **Debounce: two writes within the window → one rebuild**.
 
 **Files:**
-- Modify: `MatterSurfaceLib/tests/dev_live_edit_tests.cpp`
-- Modify: `MatterSurfaceLib/src/live_edit.cpp`
+- Modify: `MatterEngine3/tests/dev_live_edit_tests.cpp`
+- Modify: `MatterEngine3/src/live_edit.cpp`
 
 - [ ] **Step 1: Add an instrumented fake baker that records calls (used here + later)**
 
@@ -638,7 +640,7 @@ This requires the `FakeGraph` to support `roots_over`/`topo_order`; extend `Fake
 
 - [ ] **Step 3: Run — expect FAIL (`tick()` is a no-op skeleton)**
 
-Run: `make -C MatterSurfaceLib/tests dev_live_edit_tests && ./MatterSurfaceLib/tests/dev_live_edit_tests`
+Run: `make -C MatterEngine3/tests dev_live_edit_tests && ./MatterEngine3/tests/dev_live_edit_tests`
 Expected: FAIL on "after quiet window: exactly one rebuild fires" (tick returns empty).
 
 - [ ] **Step 4: Implement debounce in `tick()`**
@@ -669,14 +671,14 @@ RebuildReport LiveEditSession::tick() {
 
 - [ ] **Step 5: Run — expect PASS**
 
-Run: `make -C MatterSurfaceLib/tests dev_live_edit_tests && ./MatterSurfaceLib/tests/dev_live_edit_tests`
+Run: `make -C MatterEngine3/tests dev_live_edit_tests && ./MatterEngine3/tests/dev_live_edit_tests`
 Expected: `ALL PASS`.
 
 - [ ] **Step 6: Commit**
 
 Run:
 ```bash
-git add MatterSurfaceLib/src/live_edit.cpp MatterSurfaceLib/tests/dev_live_edit_tests.cpp
+git add MatterEngine3/src/live_edit.cpp MatterEngine3/tests/dev_live_edit_tests.cpp
 git commit -m "$(cat <<'EOF'
 feat: SP-5 debounce coalescing of rapid saves into one rebuild
 
@@ -692,8 +694,8 @@ EOF
 Covers spec testing bullets **single-part edit scope** (rebake cone + re-flatten affected, others untouched) and **scope correctness** (rebaked == exactly the upward cone), plus **shared-module fan-out** rebake.
 
 **Files:**
-- Modify: `MatterSurfaceLib/tests/dev_live_edit_tests.cpp`
-- Modify: `MatterSurfaceLib/src/live_edit.cpp`
+- Modify: `MatterEngine3/tests/dev_live_edit_tests.cpp`
+- Modify: `MatterEngine3/src/live_edit.cpp`
 
 - [ ] **Step 1: Add failing tests for scope + topo order + re-flatten**
 
@@ -745,7 +747,7 @@ Call both in `main()`.
 
 - [ ] **Step 2: Run — expect FAIL (`run_rebuild` returns empty)**
 
-Run: `make -C MatterSurfaceLib/tests dev_live_edit_tests && ./MatterSurfaceLib/tests/dev_live_edit_tests`
+Run: `make -C MatterEngine3/tests dev_live_edit_tests && ./MatterEngine3/tests/dev_live_edit_tests`
 Expected: FAIL (rebaked empty, f.roots empty).
 
 - [ ] **Step 3: Implement `run_rebuild` happy path**
@@ -790,14 +792,14 @@ RebuildReport LiveEditSession::run_rebuild(const std::set<std::string>& paths) {
 
 - [ ] **Step 4: Run — expect PASS**
 
-Run: `make -C MatterSurfaceLib/tests dev_live_edit_tests && ./MatterSurfaceLib/tests/dev_live_edit_tests`
+Run: `make -C MatterEngine3/tests dev_live_edit_tests && ./MatterEngine3/tests/dev_live_edit_tests`
 Expected: `ALL PASS`.
 
 - [ ] **Step 5: Commit**
 
 Run:
 ```bash
-git add MatterSurfaceLib/src/live_edit.cpp MatterSurfaceLib/tests/dev_live_edit_tests.cpp
+git add MatterEngine3/src/live_edit.cpp MatterEngine3/tests/dev_live_edit_tests.cpp
 git commit -m "$(cat <<'EOF'
 feat: SP-5 scoped topo rebake of upward cone + affected-root re-flatten
 
@@ -813,8 +815,8 @@ EOF
 Covers spec testing bullet **Fail-closed retry: an edit that throws keeps last-good and reports the error; a subsequent valid edit succeeds and updates the world.**
 
 **Files:**
-- Modify: `MatterSurfaceLib/tests/dev_live_edit_tests.cpp`
-- Modify: `MatterSurfaceLib/src/live_edit.cpp`
+- Modify: `MatterEngine3/tests/dev_live_edit_tests.cpp`
+- Modify: `MatterEngine3/src/live_edit.cpp`
 
 The Baker is the fail-closed boundary (SP-2 guarantees the prior `parts/<hash>.part` is untouched on failure). SP-5's responsibility: do NOT re-flatten when a bake fails (so the world keeps the last-good composition), surface the error, and stay ready so the next event retries cleanly.
 
@@ -871,7 +873,7 @@ Call it in `main()`.
 
 - [ ] **Step 3: Run — expect PASS already, or FAIL only if residual debounce state leaks**
 
-Run: `make -C MatterSurfaceLib/tests dev_live_edit_tests && ./MatterSurfaceLib/tests/dev_live_edit_tests`
+Run: `make -C MatterEngine3/tests dev_live_edit_tests && ./MatterEngine3/tests/dev_live_edit_tests`
 Expected: the Task-5 `run_rebuild` already returns early on `!o.ok` (no re-flatten, error surfaced). This test should PASS. If the retry leg FAILS, the cause is debounce state not reset on the failure path — fix by ensuring `tick()` already cleared `pending_paths_`/`have_pending_` before calling `run_rebuild` (it does in Task 4). Confirm and, if needed, add the explicit reset below.
 
 - [ ] **Step 4: (If the retry leg failed) make the pending-state reset explicit before rebuild**
@@ -882,7 +884,7 @@ Confirm in `live_edit.cpp` `tick()` that `pending_paths_` is swapped out and `ha
 
 Run:
 ```bash
-git add MatterSurfaceLib/src/live_edit.cpp MatterSurfaceLib/tests/dev_live_edit_tests.cpp
+git add MatterEngine3/src/live_edit.cpp MatterEngine3/tests/dev_live_edit_tests.cpp
 git commit -m "$(cat <<'EOF'
 test: SP-5 fail-closed keeps last-good, retries on next save
 
@@ -898,8 +900,8 @@ EOF
 Covers spec testing bullet **Budget abort: an edit that exceeds the dev time budget aborts with a structured error, last-good kept.**
 
 **Files:**
-- Modify: `MatterSurfaceLib/tests/dev_live_edit_tests.cpp`
-- Modify: `MatterSurfaceLib/src/live_edit.cpp`
+- Modify: `MatterEngine3/tests/dev_live_edit_tests.cpp`
+- Modify: `MatterEngine3/src/live_edit.cpp`
 
 The budget value is owned by `LiveEditConfig.bake_budget_ms` and passed to `Baker::bake`. SP-2 enforces the wall-clock abort and returns `Cause::BudgetExceeded`; SP-5's job is to (a) actually pass the configured budget (set in dev, unbounded `<=0` for install reuse) and (b) treat a budget error like any fail-closed bake error.
 
@@ -935,14 +937,14 @@ Call it in `main()`.
 
 - [ ] **Step 2: Run — expect PASS** (the budget is already forwarded in Task 5's `bake(p, h, cfg_.bake_budget_ms)` and budget errors hit the same fail-closed path)
 
-Run: `make -C MatterSurfaceLib/tests dev_live_edit_tests && ./MatterSurfaceLib/tests/dev_live_edit_tests`
+Run: `make -C MatterEngine3/tests dev_live_edit_tests && ./MatterEngine3/tests/dev_live_edit_tests`
 Expected: `ALL PASS`. This task is a guard test confirming the budget wiring; if `seen_budget` is wrong, fix the `bake(...)` call site in `run_rebuild` to pass `cfg_.bake_budget_ms`.
 
 - [ ] **Step 3: Commit**
 
 Run:
 ```bash
-git add MatterSurfaceLib/tests/dev_live_edit_tests.cpp MatterSurfaceLib/src/live_edit.cpp
+git add MatterEngine3/tests/dev_live_edit_tests.cpp MatterEngine3/src/live_edit.cpp
 git commit -m "$(cat <<'EOF'
 test: SP-5 dev time-budget forwarded + budget abort fails closed
 
@@ -958,12 +960,12 @@ EOF
 Implements the real watcher and tests it against an actual file touch (the one task using a real OS event, per the hard rules).
 
 **Files:**
-- Modify: `MatterSurfaceLib/src/inotify_watcher.cpp`
-- Modify: `MatterSurfaceLib/tests/dev_live_edit_tests.cpp`
+- Modify: `MatterEngine3/src/inotify_watcher.cpp`
+- Modify: `MatterEngine3/tests/dev_live_edit_tests.cpp`
 
 - [ ] **Step 1: Implement the inotify backend**
 
-Replace `MatterSurfaceLib/src/inotify_watcher.cpp`:
+Replace `MatterEngine3/src/inotify_watcher.cpp`:
 ```cpp
 #include "inotify_watcher.h"
 #ifdef __linux__
@@ -1077,14 +1079,14 @@ Guard the call in `main()`:
 
 - [ ] **Step 3: Run — expect PASS on Linux**
 
-Run: `make -C MatterSurfaceLib/tests dev_live_edit_tests && ./MatterSurfaceLib/tests/dev_live_edit_tests`
+Run: `make -C MatterEngine3/tests dev_live_edit_tests && ./MatterEngine3/tests/dev_live_edit_tests`
 Expected: `ALL PASS`, including `inotify observed the real file write`.
 
 - [ ] **Step 4: Commit**
 
 Run:
 ```bash
-git add MatterSurfaceLib/include/inotify_watcher.h MatterSurfaceLib/src/inotify_watcher.cpp MatterSurfaceLib/tests/dev_live_edit_tests.cpp
+git add MatterEngine3/include/inotify_watcher.h MatterEngine3/src/inotify_watcher.cpp MatterEngine3/tests/dev_live_edit_tests.cpp
 git commit -m "$(cat <<'EOF'
 feat: SP-5 Linux inotify watcher backend + real temp-dir touch test
 
@@ -1100,7 +1102,7 @@ EOF
 Wires the real watcher into a `LiveEditSession` and verifies a real file write flows all the way through (debounce → cone → bake → reflatten) with fakes on the SP-2/3/4 side. Confirms the watcher abstraction is interchangeable.
 
 **Files:**
-- Modify: `MatterSurfaceLib/tests/dev_live_edit_tests.cpp`
+- Modify: `MatterEngine3/tests/dev_live_edit_tests.cpp`
 
 - [ ] **Step 1: Add a failing end-to-end test (Linux-only)**
 
@@ -1137,14 +1139,14 @@ Guard the call in `main()` under `#ifdef __linux__`.
 
 - [ ] **Step 2: Run — expect PASS** (all pieces exist; this is an integration check)
 
-Run: `make -C MatterSurfaceLib/tests dev_live_edit_tests && ./MatterSurfaceLib/tests/dev_live_edit_tests`
+Run: `make -C MatterEngine3/tests dev_live_edit_tests && ./MatterEngine3/tests/dev_live_edit_tests`
 Expected: `ALL PASS`. If the loop times out, the debounce `now_ms()` source on `InotifyWatcher` (monotonic clock) and the event `t_ms` must be on the same clock — they are (both `InotifyWatcher::now_ms`). With `debounce_ms=0` the first tick after the event fires.
 
 - [ ] **Step 3: Commit**
 
 Run:
 ```bash
-git add MatterSurfaceLib/tests/dev_live_edit_tests.cpp
+git add MatterEngine3/tests/dev_live_edit_tests.cpp
 git commit -m "$(cat <<'EOF'
 test: SP-5 end-to-end real-inotify write drives scoped rebuild
 
@@ -1160,12 +1162,12 @@ EOF
 Per the hard rules: Windows backend is stubbed/deferred; the Linux path is fully implemented above. This task lands the marked stub so the interface is complete and the Windows build has a definite "not implemented" failure rather than a missing symbol.
 
 **Files:**
-- Create: `MatterSurfaceLib/include/win_watcher.h`
-- Modify: `MatterSurfaceLib/tests/dev_live_edit_tests.cpp`
+- Create: `MatterEngine3/include/win_watcher.h`
+- Modify: `MatterEngine3/tests/dev_live_edit_tests.cpp`
 
 - [ ] **Step 1: Write the marked Windows stub header**
 
-Create `MatterSurfaceLib/include/win_watcher.h`:
+Create `MatterEngine3/include/win_watcher.h`:
 ```cpp
 #pragma once
 #include "file_watcher.h"
@@ -1208,14 +1210,14 @@ Call it in `main()`.
 
 - [ ] **Step 3: Run — expect PASS on Linux**
 
-Run: `make -C MatterSurfaceLib/tests dev_live_edit_tests && ./MatterSurfaceLib/tests/dev_live_edit_tests`
+Run: `make -C MatterEngine3/tests dev_live_edit_tests && ./MatterEngine3/tests/dev_live_edit_tests`
 Expected: `ALL PASS` (the non-Windows branch is a trivial true).
 
 - [ ] **Step 4: Commit**
 
 Run:
 ```bash
-git add MatterSurfaceLib/include/win_watcher.h MatterSurfaceLib/tests/dev_live_edit_tests.cpp
+git add MatterEngine3/include/win_watcher.h MatterEngine3/tests/dev_live_edit_tests.cpp
 git commit -m "$(cat <<'EOF'
 feat: SP-5 marked Windows ReadDirectoryChangesW stub (deferred)
 
@@ -1231,8 +1233,8 @@ EOF
 Resolves two spec open questions: a part instanced under multiple roots re-flattens **each** affected root; and created/deleted file events map to add/remove (here: an unmapped/new path that resolves to a part still drives the cone; a path that maps to no part is a no-op). This hardens **scope correctness** for the fan-out-to-multiple-roots case.
 
 **Files:**
-- Modify: `MatterSurfaceLib/tests/dev_live_edit_tests.cpp`
-- Modify: `MatterSurfaceLib/src/live_edit.cpp` (only if a fix is needed)
+- Modify: `MatterEngine3/tests/dev_live_edit_tests.cpp`
+- Modify: `MatterEngine3/src/live_edit.cpp` (only if a fix is needed)
 
 - [ ] **Step 1: Add failing tests for multi-root re-flatten + no-op on unmapped file**
 
@@ -1269,14 +1271,14 @@ Call both in `main()`.
 
 - [ ] **Step 2: Run — expect PASS** (Task 5's `run_rebuild` already iterates all `roots_over` and early-returns on empty `changed`)
 
-Run: `make -C MatterSurfaceLib/tests dev_live_edit_tests && ./MatterSurfaceLib/tests/dev_live_edit_tests`
+Run: `make -C MatterEngine3/tests dev_live_edit_tests && ./MatterEngine3/tests/dev_live_edit_tests`
 Expected: `ALL PASS`. If multi-root fails, ensure `run_rebuild` loops over the full `g_.roots_over(changed)` vector (it does). If the no-op test fails, ensure the `if (changed.empty()) return rep;` guard with `rep.succeeded` defaulting true is present.
 
 - [ ] **Step 3: Commit**
 
 Run:
 ```bash
-git add MatterSurfaceLib/tests/dev_live_edit_tests.cpp MatterSurfaceLib/src/live_edit.cpp
+git add MatterEngine3/tests/dev_live_edit_tests.cpp MatterEngine3/src/live_edit.cpp
 git commit -m "$(cat <<'EOF'
 test: SP-5 multi-root re-flatten + non-part file no-op
 
@@ -1294,21 +1296,20 @@ EOF
 
 - [ ] **Step 1: Add `dev_live_edit_tests` to the headless suite loop**
 
-In `build-all.sh`, edit the MatterSurfaceLib headless suite list (currently ending `particle_culling_tests voxel_imposter_tests`) to append the new suite:
+In `build-all.sh`, append `dev_live_edit_tests` to the **MatterEngine3** headless suite list (SP-1 added the first MatterEngine3 entry, `part_asset_v2_tests`). Do NOT touch the MatterSurfaceLib prototype's suite loop. Extend the MatterEngine3 loop so it reads:
 ```sh
-    for suite in mesh_simplifier_tests material_registry_tests cell_bounds_tests \
-                 blas_refcount_tests mesh_continuity_tests blas_tint_tests \
-                 particle_culling_tests voxel_imposter_tests dev_live_edit_tests; do
+    for suite in part_asset_v2_tests dev_live_edit_tests; do
 ```
+(Append `dev_live_edit_tests` to whatever the MatterEngine3 loop lists at this point; later sub-plans append their suites too.)
 
 - [ ] **Step 2: Run the full headless suite to confirm integration**
 
 Run: `./build-all.sh test 2>&1 | tail -30`
-Expected: a `--- MatterSurfaceLib (dev_live_edit_tests) ---` section reporting `ALL PASS`, and no `FAIL` for MatterSurfaceLib.
+Expected: a `--- MatterEngine3 (dev_live_edit_tests) ---` section reporting `ALL PASS`, and no `FAIL` for MatterEngine3.
 
 - [ ] **Step 3: Run the dedicated target one more time for a clean signal**
 
-Run: `make -C MatterSurfaceLib/tests dev_live_edit_tests && ./MatterSurfaceLib/tests/dev_live_edit_tests`
+Run: `make -C MatterEngine3/tests dev_live_edit_tests && ./MatterEngine3/tests/dev_live_edit_tests`
 Expected: `ALL PASS` covering every test: fake-watcher round-trip, upward-cone, changed-parts (single + shared), debounce, scope/topo + re-flatten, shared-module fan-out, fail-closed retry, budget abort, real inotify touch, e2e real-watch rebuild, Windows stub, multi-root, non-part no-op.
 
 - [ ] **Step 4: Commit**

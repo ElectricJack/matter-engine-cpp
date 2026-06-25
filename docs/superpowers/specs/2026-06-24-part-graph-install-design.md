@@ -1,7 +1,7 @@
 # SP-3 — Part Graph, Build-as-Cache-Miss & Install — Design
 
 **Status:** Approved for planning (2026-06-24)
-**Project:** MatterSurfaceLib
+**Project:** MatterEngine3
 **Parent:** `2026-06-24-procedural-part-authoring-design.md` (sub-project SP-3)
 **Consumes:** SP-1 (`.part` v2, resolved hash) and SP-2 (single-part bake via `ScriptHost`).
 

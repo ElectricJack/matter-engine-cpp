@@ -4,9 +4,13 @@
 
 **Goal:** Orchestrate SP-2 part bakes by resolving a content-addressed dependency graph leaves-first, baking each unique part exactly once on a cache miss, in single-threaded topological order, rooted at a world manifest.
 
-**Architecture:** `PartGraph` discovers child deps from each module's `static requires` (top-level eval, no `build()`), folds child resolved-hashes into each part's identity via SP-1 `compute_resolved_hash`, memoizes resolve over `(source_hash, canonical_params)`, detects cycles as back-edges on the resolution stack, and walks topo order baking only parts whose `parts/<hash>.part` is absent. All graph logic sits behind a `Baker` seam and a `ModuleResolver` seam so resolve/dedup/topo/cycle/reachability/cache-miss are unit-tested with fakes; a thin final task wires the real SP-2 `ScriptHost` and SP-1 `cache_path`.
+**Project:** MatterEngine3 (consumes MatterSurfaceLib read-only)
 
-**Tech Stack:** C++17, depends on SP-1 part_asset v2 (`compute_resolved_hash`, `cache_path`) + SP-2 ScriptHost (`resolve_hash`, `bake_source`, `eval_requires` — SP-2 is the hash authority per master C-2; SP-3 obtains hashes through these, never computing them itself), headless tests under MatterSurfaceLib/tests/ matching the existing assert/style (`CHECK` macro + `failures` counter + return code).
+**Architecture:** All new code lives in the **new sibling project `MatterEngine3/`**, which consumes the `MatterSurfaceLib/` prototype **read-only** (never modified). `PartGraph` discovers child deps from each module's `static requires` (top-level eval, no `build()`), folds child resolved-hashes into each part's identity via SP-1 `compute_resolved_hash`, memoizes resolve over `(source_hash, canonical_params)`, detects cycles as back-edges on the resolution stack, and walks topo order baking only parts whose `parts/<hash>.part` is absent. All graph logic sits behind a `Baker` seam and a `ModuleResolver` seam so resolve/dedup/topo/cycle/reachability/cache-miss are unit-tested with fakes; a thin final task wires the real SP-2 `ScriptHost` and SP-1 `cache_path_resolved`.
+
+**Tech Stack:** C++17, depends on SP-1 part_asset v2 (`compute_resolved_hash`, `cache_path_resolved` — new `MatterEngine3/part_asset_v2.h`) + SP-2 ScriptHost (`resolve_hash`, `bake_source`, `eval_requires` — new `MatterEngine3/script_host.h`; SP-2 is the hash authority per master C-2; SP-3 obtains hashes through these, never computing them itself). The consumed prototype backend (`part_asset.cpp` v1 for `fnv1a64`, BLAS/TLAS managers, etc.) is referenced read-only from MatterSurfaceLib. Headless tests under `MatterEngine3/tests/` matching the existing assert/style (`CHECK` macro + `failures` counter + return code).
+
+> **Relocation note (from the master plan):** This sub-plan obeys the `MatterEngine3` relocation contract in `2026-06-24-procedural-part-system-master-plan.md`. All NEW files (`part_graph.{h,cpp}`, `part_graph_tests.cpp`) are under `MatterEngine3/`; SP-1's `part_asset_v2.{h,cpp}` and SP-2's `script_host.{h,cpp}` are also NEW MatterEngine3 files (included via `-I../include`, linked as `../src/<new>.cpp`). The consumed prototype backend (`part_asset.cpp`, `blas_manager.cpp`, `bvh.cpp`, `tlas_manager.cpp`, `vertex_ao.cpp`, `occupancy.cpp`, `material_registry.c`) is referenced read-only as `../../MatterSurfaceLib/src/<dep>` with `-I../../MatterSurfaceLib/include`. raylib paths are unchanged (`MatterEngine3/tests` is the same depth as `MatterSurfaceLib/tests`). The tests Makefile already EXISTS (SP-1 created it); this plan APPENDS its target block.
 
 ---
 
@@ -35,7 +39,7 @@
 ## File Structure
 
 ```
-MatterSurfaceLib/
+MatterEngine3/                 # NEW project; consumes MatterSurfaceLib read-only
   include/
     part_graph.h          # PartGraph, Baker seam, ModuleResolver seam, public structs
   src/
@@ -43,7 +47,8 @@ MatterSurfaceLib/
                           # canonical params serialization, manifest parsing
   tests/
     part_graph_tests.cpp  # headless, GL-free; uses FakeBaker + FakeModuleResolver
-    Makefile              # + part_graph_tests TARGET/SOURCES/run-graph rule
+    Makefile              # APPEND part_graph_tests TARGET/SOURCES/run-graph (file already
+                          #   exists from SP-1; do NOT recreate)
 ```
 
 ### Public interface (target shape — built incrementally by the tasks below)
@@ -108,7 +113,7 @@ struct Baker {
     virtual bool cached(uint64_t resolved_hash) = 0;
     // Bake one part. child_hashes are this part's direct children's resolved hashes
     // (already baked, present in cache). Returns false on bake failure (fail-closed).
-    // Implementations bake to cache_path(resolved_hash); resolved_hash is the value
+    // Implementations bake to cache_path_resolved(resolved_hash); resolved_hash is the value
     // resolve_hash returned for the same inputs (host recomputes it identically).
     virtual bool bake(const std::string& source, const Params& params,
                       const std::vector<uint64_t>& child_hashes, uint64_t resolved_hash) = 0;
@@ -159,12 +164,12 @@ private:
 ## Task 1 — Test scaffold + Makefile target (headless, GL-free)
 
 **Files:**
-- `MatterSurfaceLib/tests/part_graph_tests.cpp` (new)
-- `MatterSurfaceLib/tests/Makefile` (edit)
-- `MatterSurfaceLib/include/part_graph.h` (new, minimal stub)
-- `MatterSurfaceLib/src/part_graph.cpp` (new, minimal stub)
+- `MatterEngine3/tests/part_graph_tests.cpp` (new)
+- `MatterEngine3/tests/Makefile` (edit — APPEND to the existing SP-1 Makefile)
+- `MatterEngine3/include/part_graph.h` (new, minimal stub)
+- `MatterEngine3/src/part_graph.cpp` (new, minimal stub)
 
-- [ ] Create `MatterSurfaceLib/include/part_graph.h` with just the namespace + `serialize_params` declaration (filled out further in later tasks):
+- [ ] Create `MatterEngine3/include/part_graph.h` with just the namespace + `serialize_params` declaration (filled out further in later tasks):
 
 ```cpp
 #pragma once
@@ -190,7 +195,7 @@ std::string serialize_params(const Params& params);
 } // namespace part_graph
 ```
 
-- [ ] Create `MatterSurfaceLib/src/part_graph.cpp` with an intentionally WRONG stub so the first test fails:
+- [ ] Create `MatterEngine3/src/part_graph.cpp` with an intentionally WRONG stub so the first test fails:
 
 ```cpp
 #include "part_graph.h"
@@ -204,7 +209,7 @@ std::string serialize_params(const Params&) {
 } // namespace part_graph
 ```
 
-- [ ] Create `MatterSurfaceLib/tests/part_graph_tests.cpp` with the harness + one trivial test:
+- [ ] Create `MatterEngine3/tests/part_graph_tests.cpp` with the harness + one trivial test:
 
 ```cpp
 #include "part_graph.h"
@@ -223,15 +228,20 @@ int main() {
 }
 ```
 
-- [ ] Add the target to `MatterSurfaceLib/tests/Makefile`. Append to the `.PHONY` line `run-graph`, append `$(GRAPH_TARGET)` to the `clean` rule, and add this block at the end (GL-free; `part_graph.cpp` has no raylib/GL deps, but the test still links the standard `LDLIBS`/`LDFLAGS` for harness uniformity):
+- [ ] APPEND the target to the existing `MatterEngine3/tests/Makefile` (created by SP-1 — do NOT recreate it, and do NOT edit `MatterSurfaceLib/tests/Makefile`). Append `run-graph` to the `.PHONY` line, append `$(GRAPH_TARGET)` to the `clean` rule, and add this block at the end. New sources stay `../src/<new>.cpp`; consumed prototype sources are `../../MatterSurfaceLib/src/<dep>.cpp`. SP-1's `part_asset_v2.cpp` is a NEW MatterEngine3 source (provides `compute_resolved_hash`/`cache_path_resolved`); v1 `part_asset.cpp` is consumed read-only for `fnv1a64` (GL-free; `part_graph.cpp` has no raylib/GL deps, but the test still links the standard `LDLIBS`/`LDFLAGS` for harness uniformity):
 
 ```make
 # Part graph resolve/dedup/topo/cycle/reachability/cache-miss tests (headless, GL-free).
+# NEW MatterEngine3 sources ../src/<new>.cpp + consumed MatterSurfaceLib backend.
 GRAPH_TARGET = part_graph_tests
-GRAPH_SOURCES = part_graph_tests.cpp ../src/part_graph.cpp ../src/part_asset.cpp \
-                ../src/blas_manager.cpp ../src/bvh.cpp ../src/tlas_manager.cpp \
-                ../src/vertex_ao.cpp ../src/occupancy.cpp
-GRAPH_C   = ../src/material_registry.c
+GRAPH_SOURCES = part_graph_tests.cpp ../src/part_graph.cpp ../src/part_asset_v2.cpp \
+                ../../MatterSurfaceLib/src/part_asset.cpp \
+                ../../MatterSurfaceLib/src/blas_manager.cpp \
+                ../../MatterSurfaceLib/src/bvh.cpp \
+                ../../MatterSurfaceLib/src/tlas_manager.cpp \
+                ../../MatterSurfaceLib/src/vertex_ao.cpp \
+                ../../MatterSurfaceLib/src/occupancy.cpp
+GRAPH_C   = ../../MatterSurfaceLib/src/material_registry.c
 GRAPH_C_OBJ = material_registry.o
 
 $(GRAPH_TARGET): $(GRAPH_SOURCES) $(GRAPH_C)
@@ -243,14 +253,15 @@ run-graph: $(GRAPH_TARGET)
 	./$(GRAPH_TARGET)
 ```
 
-> Note: `part_asset.cpp` and friends are linked so later tasks can call SP-1
-> `compute_resolved_hash`/`cache_path` (added by SP-1). If SP-1 is not yet implemented
-> when this plan runs, see Task 3's seam note — the graph logic depends only on the
-> declared SP-1 signatures, and the fake baker means the tests never need a real bake.
+> Note: SP-1's `part_asset_v2.cpp` (new) + the consumed v1 `part_asset.cpp` and friends are
+> linked so later tasks can call SP-1 `compute_resolved_hash`/`cache_path_resolved` (added by
+> SP-1). If SP-1 is not yet implemented when this plan runs, see Task 3's seam note — the
+> graph logic depends only on the declared SP-1 signatures, and the fake baker means the
+> tests never need a real bake.
 
-- [ ] **Run (expect FAIL):** `cd "MatterSurfaceLib/tests" && make run-graph`
+- [ ] **Run (expect FAIL):** `make -C MatterEngine3/tests run-graph`
   Expected: `FAIL: empty params -> empty string` then nonzero exit (stub returns `"STUB"`).
-- [ ] Make it pass minimally — fix the stub in `src/part_graph.cpp`:
+- [ ] Make it pass minimally — fix the stub in `MatterEngine3/src/part_graph.cpp`:
 
 ```cpp
 std::string serialize_params(const Params& params) {
@@ -259,9 +270,9 @@ std::string serialize_params(const Params& params) {
 }
 ```
 
-- [ ] **Run (expect PASS):** `cd "MatterSurfaceLib/tests" && make run-graph`
+- [ ] **Run (expect PASS):** `make -C MatterEngine3/tests run-graph`
   Expected: `All part_graph tests passed`, exit 0.
-- [ ] **Commit:** `git add MatterSurfaceLib/include/part_graph.h MatterSurfaceLib/src/part_graph.cpp MatterSurfaceLib/tests/part_graph_tests.cpp MatterSurfaceLib/tests/Makefile && git commit -m "$(cat <<'EOF'
+- [ ] **Commit:** `git add MatterEngine3/include/part_graph.h MatterEngine3/src/part_graph.cpp MatterEngine3/tests/part_graph_tests.cpp MatterEngine3/tests/Makefile && git commit -m "$(cat <<'EOF'
 test(part-graph): scaffold headless part_graph_tests + Makefile target
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -273,8 +284,8 @@ EOF
 ## Task 2 — Canonical params serialization (sorted keys, %.17g numbers)
 
 **Files:**
-- `MatterSurfaceLib/tests/part_graph_tests.cpp` (edit)
-- `MatterSurfaceLib/src/part_graph.cpp` (edit)
+- `MatterEngine3/tests/part_graph_tests.cpp` (edit)
+- `MatterEngine3/src/part_graph.cpp` (edit)
 
 - [ ] Add failing tests to `main()` in `part_graph_tests.cpp` (before the pass print):
 
@@ -308,9 +319,9 @@ EOF
     }
 ```
 
-- [ ] **Run (expect FAIL):** `cd "MatterSurfaceLib/tests" && make run-graph`
+- [ ] **Run (expect FAIL):** `make -C MatterEngine3/tests run-graph`
   Expected: multiple `FAIL:` lines (stub returns `""`), nonzero exit.
-- [ ] Implement the real serializer in `src/part_graph.cpp`:
+- [ ] Implement the real serializer in `MatterEngine3/src/part_graph.cpp`:
 
 ```cpp
 #include "part_graph.h"
@@ -346,9 +357,9 @@ std::string serialize_params(const Params& params) {
 } // namespace part_graph
 ```
 
-- [ ] **Run (expect PASS):** `cd "MatterSurfaceLib/tests" && make run-graph`
+- [ ] **Run (expect PASS):** `make -C MatterEngine3/tests run-graph`
   Expected: `All part_graph tests passed`, exit 0.
-- [ ] **Commit:** `git add MatterSurfaceLib/src/part_graph.cpp MatterSurfaceLib/tests/part_graph_tests.cpp && git commit -m "$(cat <<'EOF'
+- [ ] **Commit:** `git add MatterEngine3/src/part_graph.cpp MatterEngine3/tests/part_graph_tests.cpp && git commit -m "$(cat <<'EOF'
 feat(part-graph): canonical params serialization (sorted keys, %.17g)
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -360,9 +371,9 @@ EOF
 ## Task 3 — Seams (`Baker`, `ModuleResolver`) + fakes for testing
 
 **Files:**
-- `MatterSurfaceLib/include/part_graph.h` (edit — add seams + structs + `PartGraph`)
-- `MatterSurfaceLib/src/part_graph.cpp` (edit — `PartGraph` ctor, empty `install`)
-- `MatterSurfaceLib/tests/part_graph_tests.cpp` (edit — fakes + a wiring test)
+- `MatterEngine3/include/part_graph.h` (edit — add seams + structs + `PartGraph`)
+- `MatterEngine3/src/part_graph.cpp` (edit — `PartGraph` ctor, empty `install`)
+- `MatterEngine3/tests/part_graph_tests.cpp` (edit — fakes + a wiring test)
 
 This is the explicit early seam task: define `Baker`/`ModuleResolver` so all graph
 logic is testable with fakes and **no real JS host / SP-1 file I/O**. The graph core gets
@@ -372,17 +383,18 @@ folds `(source, canonical params, child_hashes)` via SP-1's `compute_resolved_ha
 deterministic stand-in, and its `cached`/`bake` replace all disk/host behavior, so the suite
 is self-contained even before SP-2 exists. (`memo_key_of` still uses `fnv1a64` for identity.)
 
-- [ ] Replace the contents of `MatterSurfaceLib/include/part_graph.h` with the full
+- [ ] Replace the contents of `MatterEngine3/include/part_graph.h` with the full
   public interface shown in the **File Structure** section above (the block beginning
   `// part_graph.h  (final shape)`), keeping the `ParamValue`/`Params`/`serialize_params`
   declarations already present.
 
-- [ ] In `src/part_graph.cpp` add includes and the `PartGraph` ctor + an empty `install`
+- [ ] In `MatterEngine3/src/part_graph.cpp` add includes and the `PartGraph` ctor + an empty `install`
   returning a not-yet-implemented result (so the wiring test fails meaningfully):
 
 ```cpp
 #include "part_graph.h"
-#include "part_asset.h"   // SP-1: compute_resolved_hash, fnv1a64, cache_path
+#include "part_asset_v2.h"   // SP-1 (MatterEngine3, via -I../include): compute_resolved_hash,
+                            //   cache_path_resolved; pulls in v1 part_asset.h for fnv1a64
 #include <cstdio>
 #include <unordered_map>
 #include <vector>
@@ -488,11 +500,11 @@ struct FakeBaker : Baker {
     }
 ```
 
-- [ ] **Run (expect FAIL):** `cd "MatterSurfaceLib/tests" && make run-graph`
+- [ ] **Run (expect FAIL):** `make -C MatterEngine3/tests run-graph`
   Expected: `FAIL: single leaf install succeeds` / `... baked exactly once` (install
   returns `not implemented`), nonzero exit.
 - [ ] Leave the wiring test failing — Task 4 implements `install`. (No PASS step here.)
-- [ ] **Commit:** `git add MatterSurfaceLib/include/part_graph.h MatterSurfaceLib/src/part_graph.cpp MatterSurfaceLib/tests/part_graph_tests.cpp && git commit -m "$(cat <<'EOF'
+- [ ] **Commit:** `git add MatterEngine3/include/part_graph.h MatterEngine3/src/part_graph.cpp MatterEngine3/tests/part_graph_tests.cpp && git commit -m "$(cat <<'EOF'
 feat(part-graph): add Baker/ModuleResolver seams + test fakes
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -504,10 +516,10 @@ EOF
 ## Task 4 — Memoized leaves-first resolve + single-leaf bake (cache miss)
 
 **Files:**
-- `MatterSurfaceLib/src/part_graph.cpp` (edit — resolve + install core)
-- `MatterSurfaceLib/tests/part_graph_tests.cpp` (already has the Task 3 wiring test)
+- `MatterEngine3/src/part_graph.cpp` (edit — resolve + install core)
+- `MatterEngine3/tests/part_graph_tests.cpp` (already has the Task 3 wiring test)
 
-- [ ] Implement resolve + a minimal install in `src/part_graph.cpp`. Internal node store
+- [ ] Implement resolve + a minimal install in `MatterEngine3/src/part_graph.cpp`. Internal node store
   keyed by memo key `(source_hash, canonical_params)`:
 
 ```cpp
@@ -623,9 +635,9 @@ InstallResult PartGraph::install(const std::vector<ChildRequest>& roots) {
 
   Add `#include <functional>` and `#include <set>` to `part_graph.cpp`.
 
-- [ ] **Run (expect PASS for the Task 3 wiring test):** `cd "MatterSurfaceLib/tests" && make run-graph`
+- [ ] **Run (expect PASS for the Task 3 wiring test):** `make -C MatterEngine3/tests run-graph`
   Expected: `All part_graph tests passed`, exit 0.
-- [ ] **Commit:** `git add MatterSurfaceLib/src/part_graph.cpp && git commit -m "$(cat <<'EOF'
+- [ ] **Commit:** `git add MatterEngine3/src/part_graph.cpp && git commit -m "$(cat <<'EOF'
 feat(part-graph): memoized leaves-first resolve + cache-miss bake core
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -637,7 +649,7 @@ EOF
 ## Task 5 — Cache miss → bake / hit → skip (incremental build mechanism)
 
 **Files:**
-- `MatterSurfaceLib/tests/part_graph_tests.cpp` (edit)
+- `MatterEngine3/tests/part_graph_tests.cpp` (edit)
 
 - [ ] Add tests covering the spec's "first install bakes N; second install bakes 0":
 
@@ -669,10 +681,10 @@ EOF
     }
 ```
 
-- [ ] **Run (expect PASS):** `cd "MatterSurfaceLib/tests" && make run-graph`
+- [ ] **Run (expect PASS):** `make -C MatterEngine3/tests run-graph`
   Expected: `All part_graph tests passed`, exit 0. (Resolve + cache-miss already implemented;
   this locks the behavior with a test.)
-- [ ] **Commit:** `git add MatterSurfaceLib/tests/part_graph_tests.cpp && git commit -m "$(cat <<'EOF'
+- [ ] **Commit:** `git add MatterEngine3/tests/part_graph_tests.cpp && git commit -m "$(cat <<'EOF'
 test(part-graph): cache miss bakes; cache hit skips (incremental build)
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -684,8 +696,8 @@ EOF
 ## Task 6 — Topological bake order (children before parents)
 
 **Files:**
-- `MatterSurfaceLib/src/part_graph.cpp` (edit — replace map-iteration bake with topo walk)
-- `MatterSurfaceLib/tests/part_graph_tests.cpp` (edit)
+- `MatterEngine3/src/part_graph.cpp` (edit — replace map-iteration bake with topo walk)
+- `MatterEngine3/tests/part_graph_tests.cpp` (edit)
 
 - [ ] Add a failing topo-order test (the Task-4 map iteration is unordered, so this can
   fail nondeterministically — the test makes the requirement explicit):
@@ -717,7 +729,7 @@ EOF
     }
 ```
 
-- [ ] **Run (expect FAIL or flaky):** `cd "MatterSurfaceLib/tests" && make run-graph`
+- [ ] **Run (expect FAIL or flaky):** `make -C MatterEngine3/tests run-graph`
   Expected: `FAIL: children baked before their parents (topo order)` on at least some
   runs (unordered `std::unordered_map` iteration). Treat any failure as the red state.
 - [ ] Replace the bake loop in `install` with a deterministic post-order (DFS) topo walk
@@ -753,9 +765,9 @@ EOF
 
   Delete the Task-4 `for (const auto& kv : memo)` bake loop.
 
-- [ ] **Run (expect PASS):** `cd "MatterSurfaceLib/tests" && make run-graph`
+- [ ] **Run (expect PASS):** `make -C MatterEngine3/tests run-graph`
   Expected: `All part_graph tests passed`, exit 0 (topo + the Task 5 cache tests still pass).
-- [ ] **Commit:** `git add MatterSurfaceLib/src/part_graph.cpp MatterSurfaceLib/tests/part_graph_tests.cpp && git commit -m "$(cat <<'EOF'
+- [ ] **Commit:** `git add MatterEngine3/src/part_graph.cpp MatterEngine3/tests/part_graph_tests.cpp && git commit -m "$(cat <<'EOF'
 feat(part-graph): deterministic topological (children-first) bake order
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -767,7 +779,7 @@ EOF
 ## Task 7 — Dedup (same params collapse; different params split)
 
 **Files:**
-- `MatterSurfaceLib/tests/part_graph_tests.cpp` (edit)
+- `MatterEngine3/tests/part_graph_tests.cpp` (edit)
 
 - [ ] Add dedup tests (resolve memo key = `(source_hash, canonical_params)` already gives
   this; these lock the spec behavior):
@@ -813,9 +825,9 @@ EOF
     }
 ```
 
-- [ ] **Run (expect PASS):** `cd "MatterSurfaceLib/tests" && make run-graph`
+- [ ] **Run (expect PASS):** `make -C MatterEngine3/tests run-graph`
   Expected: `All part_graph tests passed`, exit 0.
-- [ ] **Commit:** `git add MatterSurfaceLib/tests/part_graph_tests.cpp && git commit -m "$(cat <<'EOF'
+- [ ] **Commit:** `git add MatterEngine3/tests/part_graph_tests.cpp && git commit -m "$(cat <<'EOF'
 test(part-graph): params->hash dedup (same collapses, different splits)
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -827,8 +839,8 @@ EOF
 ## Task 8 — Cycle detection (hard error naming the cycle path)
 
 **Files:**
-- `MatterSurfaceLib/src/part_graph.cpp` (edit — track resolution stack, detect back-edge)
-- `MatterSurfaceLib/tests/part_graph_tests.cpp` (edit)
+- `MatterEngine3/src/part_graph.cpp` (edit — track resolution stack, detect back-edge)
+- `MatterEngine3/tests/part_graph_tests.cpp` (edit)
 
 - [ ] Add a failing cycle test (a→b→a). Without detection, resolve recurses infinitely
   (stack overflow) — so introduce detection driven by this test:
@@ -852,7 +864,7 @@ EOF
     }
 ```
 
-- [ ] **Run (expect FAIL / hang):** `cd "MatterSurfaceLib/tests" && make run-graph`
+- [ ] **Run (expect FAIL / hang):** `make -C MatterEngine3/tests run-graph`
   Expected: infinite recursion / crash (no cycle guard yet) — the red state. (If it
   hangs, that confirms the missing guard; proceed to implement.)
 - [ ] Add a resolution-stack guard inside the `resolve` lambda in `install`. Maintain a
@@ -929,9 +941,9 @@ EOF
   check + `return result` (with `result.ok` left false) happens **before** any bake walk,
   so nothing is baked on a cyclic graph.
 
-- [ ] **Run (expect PASS):** `cd "MatterSurfaceLib/tests" && make run-graph`
+- [ ] **Run (expect PASS):** `make -C MatterEngine3/tests run-graph`
   Expected: `All part_graph tests passed`, exit 0.
-- [ ] **Commit:** `git add MatterSurfaceLib/src/part_graph.cpp MatterSurfaceLib/tests/part_graph_tests.cpp && git commit -m "$(cat <<'EOF'
+- [ ] **Commit:** `git add MatterEngine3/src/part_graph.cpp MatterEngine3/tests/part_graph_tests.cpp && git commit -m "$(cat <<'EOF'
 feat(part-graph): cycle detection via back-edge on resolution stack
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -943,7 +955,7 @@ EOF
 ## Task 9 — Reachability (orphans never baked) + transitive invalidation
 
 **Files:**
-- `MatterSurfaceLib/tests/part_graph_tests.cpp` (edit)
+- `MatterEngine3/tests/part_graph_tests.cpp` (edit)
 
 Reachability already holds (resolve walks only from roots; the topo walk only visits
 reachable memo keys). Transitive invalidation already holds (a leaf source change →
@@ -973,7 +985,7 @@ different `source_hash` → different `resolved_hash` → folds up). These tests
     }
 ```
 
-  Add `#include "part_asset.h"` to the test file (for `compute_resolved_hash`).
+  Add `#include "part_asset_v2.h"` to the test file (SP-1, via `-I../include`; for `compute_resolved_hash`).
 
 - [ ] Add a transitive-invalidation test — editing a leaf's source forces leaf + ancestor
   rebake while an unrelated branch stays a hit:
@@ -1004,9 +1016,9 @@ different `source_hash` → different `resolved_hash` → folds up). These tests
     }
 ```
 
-- [ ] **Run (expect PASS):** `cd "MatterSurfaceLib/tests" && make run-graph`
+- [ ] **Run (expect PASS):** `make -C MatterEngine3/tests run-graph`
   Expected: `All part_graph tests passed`, exit 0.
-- [ ] **Commit:** `git add MatterSurfaceLib/tests/part_graph_tests.cpp && git commit -m "$(cat <<'EOF'
+- [ ] **Commit:** `git add MatterEngine3/tests/part_graph_tests.cpp && git commit -m "$(cat <<'EOF'
 test(part-graph): reachability (no orphan bake) + transitive invalidation
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -1018,7 +1030,7 @@ EOF
 ## Task 10 — Failure propagation (child bake fail ⇒ parent unbaked ⇒ install fails named)
 
 **Files:**
-- `MatterSurfaceLib/tests/part_graph_tests.cpp` (edit)
+- `MatterEngine3/tests/part_graph_tests.cpp` (edit)
 
 The topo walk already returns on the first bake failure with `result.ok=false` and an
 error naming the part, and because children are baked first, a failed child means the
@@ -1056,9 +1068,9 @@ parent's bake is never attempted. This test locks that contract.
   > `strlen("src-Child")` and `strlen("src-Root")`. If you change the source strings,
   > update the lengths. Prefer `std::string s="src-Child"; ...s.size()...` to avoid drift.
 
-- [ ] **Run (expect PASS):** `cd "MatterSurfaceLib/tests" && make run-graph`
+- [ ] **Run (expect PASS):** `make -C MatterEngine3/tests run-graph`
   Expected: `All part_graph tests passed`, exit 0.
-- [ ] **Commit:** `git add MatterSurfaceLib/tests/part_graph_tests.cpp && git commit -m "$(cat <<'EOF'
+- [ ] **Commit:** `git add MatterEngine3/tests/part_graph_tests.cpp && git commit -m "$(cat <<'EOF'
 test(part-graph): child bake failure leaves parent unbaked, install fails named
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -1070,8 +1082,8 @@ EOF
 ## Task 11 — World manifest discovery (root-part discovery)
 
 **Files:**
-- `MatterSurfaceLib/src/part_graph.cpp` (edit — implement `read_manifest`)
-- `MatterSurfaceLib/tests/part_graph_tests.cpp` (edit)
+- `MatterEngine3/src/part_graph.cpp` (edit — implement `read_manifest`)
+- `MatterEngine3/tests/part_graph_tests.cpp` (edit)
 
 Decision: roots come from `WorldData/<world>/world.manifest` — newline-delimited module
 names; blank lines and `#` comments ignored; missing file → hard error. Roots take empty
@@ -1111,10 +1123,10 @@ names; blank lines and `#` comments ignored; missing file → hard error. Roots 
 
   Add `#include <cstdlib>` (for `system`) to the test file if not present.
 
-- [ ] **Run (expect FAIL):** `cd "MatterSurfaceLib/tests" && make run-graph`
+- [ ] **Run (expect FAIL):** `make -C MatterEngine3/tests run-graph`
   Expected: link/compile error or `FAIL: manifest parse succeeds` (`read_manifest` not yet
   implemented). The red state.
-- [ ] Implement `read_manifest` in `src/part_graph.cpp` (add `#include <fstream>`,
+- [ ] Implement `read_manifest` in `MatterEngine3/src/part_graph.cpp` (add `#include <fstream>`,
   `#include <sstream>`):
 
 ```cpp
@@ -1140,9 +1152,9 @@ bool PartGraph::read_manifest(const std::string& world_data_dir, const std::stri
 }
 ```
 
-- [ ] **Run (expect PASS):** `cd "MatterSurfaceLib/tests" && make run-graph`
+- [ ] **Run (expect PASS):** `make -C MatterEngine3/tests run-graph`
   Expected: `All part_graph tests passed`, exit 0.
-- [ ] **Commit:** `git add MatterSurfaceLib/src/part_graph.cpp MatterSurfaceLib/tests/part_graph_tests.cpp && git commit -m "$(cat <<'EOF'
+- [ ] **Commit:** `git add MatterEngine3/src/part_graph.cpp MatterEngine3/tests/part_graph_tests.cpp && git commit -m "$(cat <<'EOF'
 feat(part-graph): world.manifest root discovery (comments/blanks ignored)
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -1151,21 +1163,21 @@ EOF
 
 ---
 
-## Task 12 — Real adapters: wire SP-2 ScriptHost + SP-1 cache_path (integration seam)
+## Task 12 — Real adapters: wire SP-2 ScriptHost + SP-1 cache_path_resolved (integration seam)
 
 **Files:**
-- `MatterSurfaceLib/include/part_graph.h` (edit — declare adapter classes)
-- `MatterSurfaceLib/src/part_graph.cpp` (edit — implement adapters)
+- `MatterEngine3/include/part_graph.h` (edit — declare adapter classes)
+- `MatterEngine3/src/part_graph.cpp` (edit — implement adapters)
 
 > **Dependency gate:** This task is the ONLY one requiring SP-2 (`ScriptHost`) and SP-1
-> (`cache_path`/`save_v2`) to be implemented. Tasks 1-11 are fully green with fakes. If
+> (`cache_path_resolved`/`save_v2`) to be implemented. Tasks 1-11 are fully green with fakes. If
 > SP-2 is not yet merged when this plan executes, STOP after Task 11, leave Task 12's code
 > behind `#if MATTER_HAVE_SCRIPT_HOST` (default 0), and revisit when SP-2 lands. This keeps
 > SP-3's graph logic shipped and tested independently.
 
 The real `ModuleResolver` reads `.js` files from `WorldData/<world>/ObjectSchemas/` and
 asks the SP-2 host to top-level-eval the module and read `static requires` (NOT `build()`).
-The real `Baker` checks `parts/<hash>.part` existence via SP-1 `cache_path` and bakes via
+The real `Baker` checks `parts/<hash>.part` existence via SP-1 `cache_path_resolved` and bakes via
 `ScriptHost::bake`.
 
 - [ ] Declare adapters in `part_graph.h` (guarded so the GL-free unit tests never pull in
@@ -1173,7 +1185,7 @@ The real `Baker` checks `parts/<hash>.part` existence via SP-1 `cache_path` and 
 
 ```cpp
 #if defined(MATTER_HAVE_SCRIPT_HOST)
-#include "script_host.h"   // SP-2
+#include "script_host.h"   // SP-2 (MatterEngine3, via -I../include)
 
 namespace part_graph {
 
@@ -1190,7 +1202,7 @@ private:
     std::string              schemas_dir_;
 };
 
-// Checks parts/<hash>.part existence (SP-1 cache_path) and delegates hashing/baking to
+// Checks parts/<hash>.part existence (SP-1 cache_path_resolved) and delegates hashing/baking to
 // SP-2 ScriptHost (resolve_hash + bake_source). SP-2 is the hash authority (master C-2).
 class HostBaker : public Baker {
 public:
@@ -1214,7 +1226,7 @@ private:
   > `BakeResult bake_source(source, params_json, opts, child_hashes*, count)`, and
   > `std::vector<RequiredChild> eval_requires(source, params_json)`. The adapters convert
   > SP-3's `Params` to the host's JSON `params_json` and forward `child_hashes` as a pointer
-  > pair. **Precondition:** SP-2's `bake_source` writes to `cache_path(resolved_hash)` and
+  > pair. **Precondition:** SP-2's `bake_source` writes to `cache_path_resolved(resolved_hash)` and
   > SP-3's `cached`/`install` read from `parts_dir_`; the integration test runs with the
   > working directory set so `parts/` resolves to `parts_dir_` (so both sides agree on the
   > path). The host's `resolve_hash` and `bake_source` recompute the same hash, so the value
@@ -1298,7 +1310,7 @@ uint64_t HostBaker::resolve_hash(const std::string& source, const Params& params
 }
 
 bool HostBaker::cached(uint64_t resolved_hash) {
-    std::string path = parts_dir_ + "/" + part_asset::cache_path(resolved_hash);
+    std::string path = parts_dir_ + "/" + part_asset::cache_path_resolved(resolved_hash);
     std::ifstream in(path, std::ios::binary);
     return in.good();
 }
@@ -1364,13 +1376,13 @@ Params params_from_json(const std::string& json) {
   > (`double`→`%.17g`→`strtod`→`%.17g` is stable), so a child's memo key and host hash
   > stay consistent across the JSON hop. Needs `#include <cstdlib>` for `std::strtod`.
 
-- [ ] **Build check (no new test, guard off by default):** `cd "MatterSurfaceLib/tests" && make run-graph`
+- [ ] **Build check (no new test, guard off by default):** `make -C MatterEngine3/tests run-graph`
   Expected: `All part_graph tests passed`, exit 0 (adapters compiled out; nothing regressed).
 - [ ] When SP-2 is available, add a guarded integration test (`-DMATTER_HAVE_SCRIPT_HOST`)
   that writes two real `.js` schemas + a `world.manifest`, runs `install`, and asserts the
   expected `parts/<hash>.part` files now exist on disk and a second install bakes 0. This
   is the single end-to-end check; all logic-level guarantees are already covered Tasks 5-11.
-- [ ] **Commit:** `git add MatterSurfaceLib/include/part_graph.h MatterSurfaceLib/src/part_graph.cpp && git commit -m "$(cat <<'EOF'
+- [ ] **Commit:** `git add MatterEngine3/include/part_graph.h MatterEngine3/src/part_graph.cpp && git commit -m "$(cat <<'EOF'
 feat(part-graph): real FileModuleResolver + HostBaker adapters (SP-2/SP-1 seam)
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>

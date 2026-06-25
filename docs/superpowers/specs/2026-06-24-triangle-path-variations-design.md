@@ -1,7 +1,7 @@
 # SP-6 — Direct-Triangle Path & Variations — Design
 
 **Status:** Approved for planning (2026-06-24)
-**Project:** MatterSurfaceLib
+**Project:** MatterEngine3
 **Parent:** `2026-06-24-procedural-part-authoring-design.md` (sub-project SP-6)
 **Consumes:** SP-2 (`ScriptHost`, build buffer, lowering → BLAS), SP-1 (`.part`),
 SP-3 (params→hash dedup).
