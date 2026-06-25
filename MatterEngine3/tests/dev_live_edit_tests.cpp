@@ -322,10 +322,40 @@ static void test_windows_stub_is_marked_deferred() {
 #endif
 }
 
+static void test_multi_root_reflatten() {
+    std::printf("[test_multi_root_reflatten]\n");
+    // shared 'gear' instanced under two roots A and B.
+    FakeGraph g;
+    g.file_to_parts["/w/gear.js"] = {"gear"};
+    g.parents["gear"] = {"A", "B"};
+    g.roots["gear"] = {"A", "B"};
+    FakeWatcher w; RecBaker b; RecFlattener f; RecSink s;
+    LiveEditSession sess(w, g, b, f, s, LiveEditConfig{150, 0});
+    w.set_now_ms(1000); w.push("/w/gear.js"); w.advance_ms(200);
+    auto r = sess.tick();
+    std::set<PartId> got(r.rebaked.begin(), r.rebaked.end());
+    CHECK(got.count("gear") && got.count("A") && got.count("B"), "cone includes both ancestors");
+    std::set<PartId> roots(f.roots.begin(), f.roots.end());
+    CHECK(roots.size() == 2 && roots.count("A") && roots.count("B"), "re-flatten BOTH affected roots");
+}
+
+static void test_unmapped_file_is_noop() {
+    std::printf("[test_unmapped_file_is_noop]\n");
+    FakeGraph g; // no file_to_parts entries
+    FakeWatcher w; RecBaker b; RecFlattener f; RecSink s;
+    LiveEditSession sess(w, g, b, f, s, LiveEditConfig{150, 0});
+    w.set_now_ms(1000); w.push("/w/README.md"); w.advance_ms(200);
+    auto r = sess.tick();
+    CHECK(r.rebaked.empty() && f.roots.empty(), "edit to a non-part file does nothing");
+    CHECK(r.succeeded, "no-op is a success, not a failure");
+}
+
 int main() {
     std::printf("=== dev_live_edit_tests ===\n");
     test_fake_watcher_roundtrip();
     test_windows_stub_is_marked_deferred();
+    test_multi_root_reflatten();
+    test_unmapped_file_is_noop();
     test_upward_cone();
     test_changed_parts_single_and_shared();
     test_debounce_coalesces_two_writes();
