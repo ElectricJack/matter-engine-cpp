@@ -205,6 +205,24 @@ int main() {
         CHECK(r.baked.size() == 3, "differing-params child produces two artifacts");
     }
 
+    // Task 8: cycle detection (hard error naming the cycle path).
+    {
+        // a -> b -> a cycle: install must hard-error and bake NOTHING.
+        FakeModuleResolver res;
+        res.modules["a"] = FakeModule{ "src-a",
+            [](const Params&){ return std::vector<ChildRequest>{ ChildRequest{"b", Params{}} }; }, false };
+        res.modules["b"] = FakeModule{ "src-b",
+            [](const Params&){ return std::vector<ChildRequest>{ ChildRequest{"a", Params{}} }; }, false };
+        FakeBaker baker;
+        PartGraph g(res, baker);
+        InstallResult r = g.install({ ChildRequest{"a", Params{}} });
+        CHECK(!r.ok, "cycle install fails");
+        CHECK(r.error.find("cycle") != std::string::npos, "error message names a cycle");
+        CHECK(r.error.find("a") != std::string::npos && r.error.find("b") != std::string::npos,
+              "cycle error names the involved modules");
+        CHECK(baker.bake_order.empty(), "nothing baked when a cycle is present");
+    }
+
     if (failures == 0) printf("All part_graph tests passed\n");
     return failures == 0 ? 0 : 1;
 }

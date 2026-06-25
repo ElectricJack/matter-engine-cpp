@@ -67,6 +67,9 @@ InstallResult PartGraph::install(const std::vector<ChildRequest>& roots) {
     std::unordered_map<uint64_t, InternalNode> memo;   // memo_key -> node
     std::string error;
 
+    std::vector<std::string> stack;            // module names, for the error path
+    std::set<uint64_t> on_stack;               // memo_keys currently being resolved
+
     // Recursive resolve. Returns memo_key (0 sentinel cannot collide in practice; we
     // also carry a success flag out-of-band via `error`).
     std::function<bool(const ChildRequest&, uint64_t&)> resolve =
@@ -78,8 +81,16 @@ InstallResult PartGraph::install(const std::vector<ChildRequest>& roots) {
             }
             std::string canon = serialize_params(req.params);
             uint64_t key = memo_key_of(source, canon);
+
+            if (on_stack.count(key)) {                 // back-edge => cycle
+                std::string path;
+                for (const auto& m : stack) path += m + " -> ";
+                path += req.module;
+                error = "cycle detected: " + path;
+                return false;
+            }
             auto it = memo.find(key);
-            if (it != memo.end()) { out_key = key; return true; }   // memoized
+            if (it != memo.end()) { out_key = key; return true; }   // memoized (DAG reuse)
 
             std::vector<ChildRequest> kids;
             if (!resolver_.get_requires(req.module, req.params, kids)) {
@@ -87,16 +98,19 @@ InstallResult PartGraph::install(const std::vector<ChildRequest>& roots) {
                 return false;
             }
 
-            std::vector<uint64_t> child_keys;
-            std::vector<uint64_t> child_hashes;
-            child_keys.reserve(kids.size());
-            child_hashes.reserve(kids.size());
+            stack.push_back(req.module);
+            on_stack.insert(key);
+
+            std::vector<uint64_t> child_keys, child_hashes;
             for (const auto& kid : kids) {
                 uint64_t ck = 0;
-                if (!resolve(kid, ck)) return false;     // leaves-first recursion
+                if (!resolve(kid, ck)) { stack.pop_back(); on_stack.erase(key); return false; }
                 child_keys.push_back(ck);
                 child_hashes.push_back(memo.at(ck).resolved_hash);
             }
+
+            stack.pop_back();
+            on_stack.erase(key);
 
             InternalNode node;
             node.memo_key      = key;
