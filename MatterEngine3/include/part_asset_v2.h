@@ -44,7 +44,8 @@ struct LodLevel {
     float                 screen_size_threshold;
     std::vector<uint32_t> blas_indices;
 };
-// Ordered, coarsest-to-finest is SP-4's convention; SP-1 preserves array order as-is.
+// Ordered finest-to-coarsest (index 0 = finest, largest screen_size_threshold) is SP-4's
+// convention; SP-1 preserves array order as-is.
 using LodLevels = std::vector<LodLevel>;
 
 // Cache key / filename for a part keyed on its resolved hash: "parts/<16-hex>.part".
