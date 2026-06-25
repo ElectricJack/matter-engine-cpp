@@ -92,23 +92,28 @@ QJS_C    = $(QJS_DIR)/quickjs.c $(QJS_DIR)/libregexp.c \
 QJS_OBJ  = quickjs.o libregexp.o libunicode.o cutils.o xsum.o
 
 SCRIPT_TARGET = script_host_tests
+# NEW MatterEngine3 sources keep ../src/...; SP-1's NEW part_asset_v2.cpp (../src/)
+# supplies save_v2/compute_resolved_hash/LodLevels. Consumed prototype sources are
+# referenced read-only as ../../MatterSurfaceLib/src/<dep>.
 SCRIPT_CPP = script_host_tests.cpp ../src/script_host.cpp ../src/dsl_state.cpp \
-             ../src/dsl_bindings.cpp ../src/csg_lowering.cpp \
-             ../src/part_asset_v2.cpp \
-             ../../MatterSurfaceLib/src/part_asset.cpp \
-             ../../MatterSurfaceLib/src/blas_manager.cpp \
-             ../../MatterSurfaceLib/src/bvh.cpp \
-             ../../MatterSurfaceLib/src/tlas_manager.cpp \
-             ../../MatterSurfaceLib/src/vertex_ao.cpp \
-             ../../MatterSurfaceLib/src/occupancy.cpp
-SCRIPT_C   = ../../MatterSurfaceLib/src/material_registry.c
+             ../src/dsl_bindings.cpp ../src/csg_lowering.cpp ../src/part_asset_v2.cpp \
+             ../../MatterSurfaceLib/src/cluster.cpp ../../MatterSurfaceLib/src/cell.cpp ../../MatterSurfaceLib/src/mesh_simplifier.cpp \
+             ../../MatterSurfaceLib/src/blas_manager.cpp ../../MatterSurfaceLib/src/bvh.cpp ../../MatterSurfaceLib/src/bvh_analyzer.cpp \
+             ../../MatterSurfaceLib/src/mesh_worker_pool.cpp ../../MatterSurfaceLib/src/mesh_build_utils.cpp \
+             ../../MatterSurfaceLib/src/meshing_algorithm.cpp ../../MatterSurfaceLib/src/marching_cubes_algorithm.cpp \
+             ../../MatterSurfaceLib/src/oriented_cube_algorithm.cpp ../../MatterSurfaceLib/src/vertex_ao.cpp \
+             ../../MatterSurfaceLib/src/occupancy.cpp ../../MatterSurfaceLib/src/tlas_manager.cpp ../../MatterSurfaceLib/src/part_asset.cpp \
+             ../../MatterSurfaceLib/src/lattice.cpp ../../MatterSurfaceLib/src/particle_culling.cpp
+SCRIPT_C   = ../../MatterSurfaceLib/src/surface.c ../../MatterSurfaceLib/src/open_particle_surface.c \
+             ../../MatterSurfaceLib/src/spatial_hash.c ../../MatterSurfaceLib/src/object_allocator.c ../../MatterSurfaceLib/src/material_registry.c
+SCRIPT_C_OBJ = surface.o open_particle_surface.o spatial_hash.o object_allocator.o material_registry.o
 
 $(SCRIPT_TARGET): $(SCRIPT_CPP) $(SCRIPT_C) $(QJS_C)
 	gcc -c $(QJS_C) -O2 -DCONFIG_VERSION='"0.10.0"' $(QJS_INC)
 	gcc -c $(SCRIPT_C) -O2 -DPLATFORM_DESKTOP $(INCLUDE_PATHS)
-	$(CC) $(SCRIPT_CPP) $(QJS_OBJ) material_registry.o -o $(SCRIPT_TARGET) \
+	$(CC) $(SCRIPT_CPP) $(QJS_OBJ) $(SCRIPT_C_OBJ) -o $(SCRIPT_TARGET) \
 	      $(CFLAGS) $(INCLUDE_PATHS) $(QJS_INC) $(LDFLAGS) $(LDLIBS)
-	rm -f $(QJS_OBJ) material_registry.o
+	rm -f $(QJS_OBJ) $(SCRIPT_C_OBJ)
 
 run-script: $(SCRIPT_TARGET)
 	./$(SCRIPT_TARGET)

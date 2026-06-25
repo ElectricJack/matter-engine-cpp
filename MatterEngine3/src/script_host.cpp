@@ -3,10 +3,20 @@ extern "C" {
 #include "quickjs.h"
 }
 #include "part_base.js.h"
-#include "part_asset_v2.h"   // SP-1 v2 helper (compute_resolved_hash)
+#include "part_asset_v2.h"   // SP-1 v2 helper (compute_resolved_hash, save_v2)
 #include "../include/dsl_state.h"
 #include "../include/dsl_bindings.h"
+#include "../include/csg_lowering.h"   // NEW MatterEngine3 header
+#include "cluster.h"                    // consumed prototype (StaticParticle, Cluster)
+#include "cell.h"                       // consumed prototype (Cell, build_cell_meshes GL-free)
+#include "mesh_worker_pool.h"           // consumed prototype (CellMeshResult/GroupMeshResult)
+#include "blas_manager.hpp"             // consumed prototype
+#include "tlas_manager.hpp"             // consumed prototype
+#include "surface.h"                    // consumed prototype (CreateSurfaceScratch; self-guards extern "C")
 #include <cstring>
+#include <cmath>
+#include <map>
+#include <memory>
 #include <regex>
 
 namespace script_host {
@@ -203,6 +213,100 @@ BakeResult ScriptHost::bake_source(const std::string& source,
     if (r.error.ok && state.has_error()) {
         r.error.ok = false;
         r.error.message = state.error();
+    }
+    // A session left open at end of build is a misuse.
+    if (r.error.ok && state.session() != dsl::Session::None) {
+        r.error.ok = false;
+        r.error.message = "session left open at end of build";
+    }
+
+    // Success path: lower the build buffer to particles, surface per-cell BLAS,
+    // and serialize one .part via SP-1's save_v2. Fail-closed: writes nothing on
+    // any error branch above (r.error.ok already false there).
+    //
+    // The prototype's Cluster::force_rebuild_all_cells commits each cell mesh via
+    // Cell::commit_cell_meshes, which calls raylib UploadMesh (a GL upload). The
+    // bake is headless (no GL context), so we cannot drive Cluster. Instead we
+    // partition particles into Cells exactly as the prototype does, mesh each cell
+    // GL-FREE via Cell::build_cell_meshes, and register the resulting triangle
+    // arrays straight into the BLAS (the same register_triangles path the headless
+    // part-asset tests use), skipping the GL UploadMesh entirely.
+    if (r.error.ok) {
+        dsl::LoweredField f = dsl::lower_build_buffer(state.buffer());
+        const float cell_size = 1.0f;   // smallest_cell_size (matches Cluster default)
+        const float base_detail = state.buffer().ops.empty()
+                                      ? 0.1f : state.buffer().ops[0].spacing;
+
+        BLASManager blas; TLASManager tlas;
+
+        // Build the additive particle vector once (Cell reads it by index).
+        const std::vector<StaticParticle>& particles = f.additive;
+
+        // Determine the set of integer cell coordinates touched by any additive
+        // particle, using the prototype's influence_radius = radius * 2 halo.
+        std::map<std::tuple<int,int,int>, std::unique_ptr<Cell>> cells;
+        auto cell_key = [](int x,int y,int z){ return std::make_tuple(x,y,z); };
+        for (const StaticParticle& sp : particles) {
+            float inf = sp.radius * 2.0f;
+            int x0 = (int)std::floor((sp.position.x - inf) / cell_size);
+            int x1 = (int)std::floor((sp.position.x + inf) / cell_size);
+            int y0 = (int)std::floor((sp.position.y - inf) / cell_size);
+            int y1 = (int)std::floor((sp.position.y + inf) / cell_size);
+            int z0 = (int)std::floor((sp.position.z - inf) / cell_size);
+            int z1 = (int)std::floor((sp.position.z + inf) / cell_size);
+            for (int x=x0;x<=x1;++x) for (int y=y0;y<=y1;++y) for (int z=z0;z<=z1;++z) {
+                auto k = cell_key(x,y,z);
+                if (cells.find(k) == cells.end())
+                    cells[k] = std::make_unique<Cell>(Vector3{(float)x,(float)y,(float)z},
+                                                      0, cell_size);
+            }
+        }
+
+        SurfaceScratch* scratch = CreateSurfaceScratch();
+        for (auto& kv : cells) {
+            Cell* cell = kv.second.get();
+            // Assign overlapping additive particles to this cell, grouped by material.
+            cell->clear_particle_indices();
+            for (uint32_t i = 0; i < particles.size(); ++i) {
+                const StaticParticle& sp = particles[i];
+                if (cell->intersects_sphere(sp.position, sp.radius))
+                    cell->add_particle_index(i, sp.materialId);
+            }
+            if (cell->material_particle_indices.empty()) continue;
+
+            // Gather carve particles whose influence overlaps this cell (mirrors
+            // the prototype's intersects_sphere halo with the same 1.5x slack).
+            std::vector<Particle> carve;
+            for (const Particle& cp : f.carve)
+                if (cell->intersects_sphere(cp.position, cp.radius * 1.5f))
+                    carve.push_back(cp);
+            const Particle* carvePtr = carve.empty() ? nullptr : carve.data();
+            int carveCount = (int)carve.size();
+
+            CellMeshResult res = cell->build_cell_meshes(
+                particles, scratch, /*simplification*/1.0f, base_detail,
+                /*max_pow*/6, /*uniform_detail*/0.0f, carvePtr, carveCount);
+
+            // Register each group's GL-free triangle arrays directly into the BLAS
+            // and place an identity instance in the TLAS.
+            for (GroupMeshResult& g : res.groups) {
+                if (g.triangles.empty()) continue;
+                BLASHandle h = blas.register_triangles(g.triangles, g.triangle_normals);
+                if (h != INVALID_BLAS_HANDLE) {
+                    tlas.load_identity();
+                    tlas.draw(h, g.group_id);
+                }
+            }
+        }
+        DestroySurfaceScratch(scratch);
+
+        tlas.build(blas);
+        std::string path = part_asset::cache_path_resolved(r.resolved_hash);
+        part_asset::LodLevels lods{};   // SP-2 writes no children, empty LOD array.
+        bool ok = part_asset::save_v2(path, blas, tlas, /*children*/nullptr, 0,
+                                      lods, r.resolved_hash);
+        if (!ok) { r.error.ok = false; r.error.message = "save_v2 failed"; }
+        else { r.written_path = path; }
     }
 
 done:

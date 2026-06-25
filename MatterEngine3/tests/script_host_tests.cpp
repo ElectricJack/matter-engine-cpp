@@ -7,6 +7,9 @@ extern "C" {
 #include "../include/script_host.h"
 #include "../include/dsl_state.h"
 #include "../include/csg_lowering.h"
+#include <sys/stat.h>
+
+static bool file_exists(const std::string& p){ struct stat st; return stat(p.c_str(),&st)==0; }
 
 static int failures = 0;
 #define CHECK(cond, msg) do { if (!(cond)) { printf("FAIL: %s\n", msg); ++failures; } } while (0)
@@ -199,6 +202,18 @@ static void test_voxel_primitive_occupancy() {
           "intersection keeps only overlap");
 }
 
+static void test_bake_writes_part() {
+    script_host::ScriptHost host;
+    const char* src =
+        "class Ball extends Part { static params={r:1.0};\n"
+        "  build(p){ this.beginVoxels(0.25); this.fill(MAT.stone); this.sphere([0,0,0],p.r); this.endVoxels(); }\n"
+        "}\n";
+    script_host::BakeResult r = host.bake_source(src, "{}", {});
+    CHECK(r.error.ok, "sphere bake succeeds");
+    CHECK(!r.written_path.empty(), "written path reported");
+    CHECK(file_exists(r.written_path), "the .part file exists on disk");
+}
+
 int main() {
     test_embed_eval_1_plus_1();
     test_fresh_context_runs_empty_class();
@@ -209,6 +224,7 @@ int main() {
     test_bindings_record_ops_and_misuse();
     test_csg_lowering();
     test_voxel_primitive_occupancy();
+    test_bake_writes_part();
     if (failures == 0) printf("ALL PASS\n");
     return failures ? 1 : 0;
 }
