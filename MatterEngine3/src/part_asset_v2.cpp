@@ -3,10 +3,22 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
+#include <cstddef>   // offsetof
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
 #include <sys/stat.h>
+
+// Pin the consumed (read-only) TriEx layout the serializer depends on. The TriEx
+// write path below copies only the first kTriExPad (92) named-member bytes into a
+// memset-zeroed staging struct so re-bakes stay byte-identical (the alignment
+// padding after the trailing ao2 would otherwise carry allocator garbage). That
+// trick is only correct if ao2 really is the last named member ending at byte 92
+// and sizeof(TriEx) is 96 with 4 trailing padding bytes. If MatterSurfaceLib's
+// bvh.h ever reshapes TriEx, these fire at compile time so the determinism fix is
+// revisited rather than silently corrupting the content-addressed cache.
+static_assert(sizeof(TriEx) == 96, "TriEx layout changed: serializer pad/size assumptions broken");
+static_assert(offsetof(TriEx, ao2) == 88, "TriEx trailing member moved: named-member extent (92) is stale");
 
 namespace {
 template <class T>
