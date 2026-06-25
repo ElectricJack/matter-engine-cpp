@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <algorithm>
 
 static int g_failures = 0;
 #define CHECK(cond, msg) do { \
@@ -34,9 +35,38 @@ struct FakeGraph : GraphResolver {
         }
         return out;
     }
-    std::vector<PartId> topo_order(const std::set<PartId>&) override { return {}; }
-    std::vector<PartId> roots_over(const std::set<PartId>&) override { return {}; }
+    std::map<PartId, std::vector<PartId>> roots; // p -> affected roots (test-set)
+    std::vector<PartId> topo_order(const std::set<PartId>& subset) override {
+        // deterministic: children before parents using `parents` depth.
+        std::vector<PartId> v(subset.begin(), subset.end());
+        auto depth = [&](const PartId& p){ int d=0; PartId c=p;
+            while (parents.count(c) && !parents[c].empty()) { c = parents[c][0]; ++d; } return d; };
+        std::sort(v.begin(), v.end(), [&](const PartId&a,const PartId&b){ return depth(a) > depth(b); });
+        return v;
+    }
+    std::vector<PartId> roots_over(const std::set<PartId>& changed) override {
+        std::set<PartId> rs;
+        for (auto& c : changed) { auto it = roots.find(c);
+            if (it != roots.end()) for (auto& r : it->second) rs.insert(r); }
+        return {rs.begin(), rs.end()};
+    }
     ResolvedHash reresolve(const PartId& p) override { return "h_" + p; }
+};
+
+// Records every bake/reflatten/error so tests can assert scope + counts.
+struct RecBaker : Baker {
+    std::vector<PartId> baked;
+    BakeOutcome bake(const PartId& p, const ResolvedHash&, long long) override {
+        baked.push_back(p); return {true, {}};
+    }
+};
+struct RecFlattener : Flattener {
+    std::vector<PartId> roots;
+    BakeOutcome reflatten(const PartId& r) override { roots.push_back(r); return {true, {}}; }
+};
+struct RecSink : ErrorSink {
+    std::vector<LiveEditError> errs;
+    void report(const LiveEditError& e) override { errs.push_back(e); }
 };
 
 static void test_fake_watcher_roundtrip() {
@@ -93,11 +123,37 @@ static void test_changed_parts_single_and_shared() {
     CHECK(both.size() == 3, "union dedups overlapping importer (rock counted once)");
 }
 
+static void test_debounce_coalesces_two_writes() {
+    std::printf("[test_debounce_coalesces_two_writes]\n");
+    FakeGraph g;
+    g.file_to_parts["/w/rock.js"] = {"rock"};
+    g.parents["rock"] = {"root"};
+    g.roots["rock"] = {"root"};
+    FakeWatcher w; RecBaker b; RecFlattener f; RecSink s;
+    LiveEditSession sess(w, g, b, f, s, LiveEditConfig{/*debounce*/150, /*budget*/0});
+
+    w.set_now_ms(1000);
+    w.push("/w/rock.js");          // editor's first write
+    auto r1 = sess.tick();         // within window -> nothing fires yet
+    CHECK(r1.rebaked.empty(), "first write: no rebuild yet (quiet window open)");
+
+    w.advance_ms(50);
+    w.push("/w/rock.js");          // editor's second write (typical double-save)
+    auto r2 = sess.tick();
+    CHECK(r2.rebaked.empty(), "second write inside window: still no rebuild");
+
+    w.advance_ms(200);             // quiet window elapsed (50+200 > 150 since last)
+    auto r3 = sess.tick();
+    CHECK(r3.rebaked.size() >= 1, "after quiet window: exactly one rebuild fires");
+    CHECK(b.baked.size() >= 1, "baker invoked once for the coalesced burst");
+}
+
 int main() {
     std::printf("=== dev_live_edit_tests ===\n");
     test_fake_watcher_roundtrip();
     test_upward_cone();
     test_changed_parts_single_and_shared();
+    test_debounce_coalesces_two_writes();
     if (g_failures) { std::printf("\n%d FAILURES\n", g_failures); return 1; }
     std::printf("\nALL PASS\n");
     return 0;
