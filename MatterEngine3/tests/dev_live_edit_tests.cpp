@@ -2,10 +2,14 @@
 // fake SP-2/3/4 seams. See docs/superpowers/specs/2026-06-24-dev-live-edit-design.md
 #include "file_watcher.h"
 #include "live_edit.h"
+#include "inotify_watcher.h"
 #include <cstdio>
 #include <cstdlib>
 #include <map>
 #include <algorithm>
+#ifdef __linux__
+#include <unistd.h>
+#endif
 
 static int g_failures = 0;
 #define CHECK(cond, msg) do { \
@@ -257,6 +261,29 @@ static void test_budget_abort_fail_closed() {
     CHECK(f.roots.empty(), "no re-flatten -> last-good world kept");
 }
 
+#ifdef __linux__
+static void test_real_inotify_temp_dir() {
+    std::printf("[test_real_inotify_temp_dir]\n");
+    char tmpl[] = "/tmp/sp5_inotifyXXXXXX";
+    char* dir = mkdtemp(tmpl);
+    CHECK(dir != nullptr, "made temp watch dir");
+    if (!dir) return;
+    InotifyWatcher iw;
+    iw.add_watch(dir);
+    std::string file = std::string(dir) + "/rock.js";
+    { FILE* fp = std::fopen(file.c_str(), "w"); std::fprintf(fp, "class Rock {}\n"); std::fclose(fp); }
+    // Give the kernel a moment to queue the event, then poll.
+    bool saw = false;
+    for (int i = 0; i < 50 && !saw; ++i) {
+        std::vector<FileEvent> evs; iw.poll(evs);
+        for (auto& e : evs) if (e.path == file) saw = true;
+        if (!saw) usleep(2000);
+    }
+    CHECK(saw, "inotify observed the real file write");
+    std::remove(file.c_str()); rmdir(dir);
+}
+#endif
+
 int main() {
     std::printf("=== dev_live_edit_tests ===\n");
     test_fake_watcher_roundtrip();
@@ -267,6 +294,9 @@ int main() {
     test_shared_module_fanout_rebake();
     test_fail_closed_then_retry();
     test_budget_abort_fail_closed();
+#ifdef __linux__
+    test_real_inotify_temp_dir();
+#endif
     if (g_failures) { std::printf("\n%d FAILURES\n", g_failures); return 1; }
     std::printf("\nALL PASS\n");
     return 0;
