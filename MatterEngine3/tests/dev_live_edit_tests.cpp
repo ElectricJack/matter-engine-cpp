@@ -148,12 +148,57 @@ static void test_debounce_coalesces_two_writes() {
     CHECK(b.baked.size() >= 1, "baker invoked once for the coalesced burst");
 }
 
+static void test_scope_single_part_and_topo() {
+    std::printf("[test_scope_single_part_and_topo]\n");
+    // graph: leaf -> mid -> root ; sibling -> root (untouched)
+    FakeGraph g;
+    g.file_to_parts["/w/leaf.js"] = {"leaf"};
+    g.parents["leaf"] = {"mid"}; g.parents["mid"] = {"root"}; g.parents["sibling"] = {"root"};
+    g.roots["leaf"] = {"root"};
+    FakeWatcher w; RecBaker b; RecFlattener f; RecSink s;
+    LiveEditSession sess(w, g, b, f, s, LiveEditConfig{150, 0});
+
+    w.set_now_ms(1000); w.push("/w/leaf.js");
+    w.advance_ms(200);
+    auto r = sess.tick();
+
+    CHECK(r.succeeded, "happy-path rebuild succeeds");
+    // scope correctness: rebaked is exactly the upward cone {leaf,mid,root}
+    std::set<PartId> got(r.rebaked.begin(), r.rebaked.end());
+    CHECK(got.size() == 3 && got.count("leaf") && got.count("mid") && got.count("root"),
+          "rebaked == upward cone exactly");
+    CHECK(got.count("sibling") == 0, "sibling NOT rebaked");
+    // topo order: leaf before mid before root (children first)
+    auto idx = [&](const PartId& p){ for (size_t i=0;i<r.rebaked.size();++i) if (r.rebaked[i]==p) return (int)i; return -1; };
+    CHECK(idx("leaf") < idx("mid") && idx("mid") < idx("root"), "rebake is children-before-parents");
+    // re-flatten only the affected root
+    CHECK(f.roots.size() == 1 && f.roots[0] == "root", "re-flatten exactly the affected root");
+}
+
+static void test_shared_module_fanout_rebake() {
+    std::printf("[test_shared_module_fanout_rebake]\n");
+    // noise.js imported by rock and tree; bush does NOT import it.
+    FakeGraph g;
+    g.file_to_parts["/w/lib/noise.js"] = {"rock", "tree"};
+    g.parents["rock"] = {"root"}; g.parents["tree"] = {"root"}; g.parents["bush"] = {"root"};
+    g.roots["rock"] = {"root"}; g.roots["tree"] = {"root"};
+    FakeWatcher w; RecBaker b; RecFlattener f; RecSink s;
+    LiveEditSession sess(w, g, b, f, s, LiveEditConfig{150, 0});
+    w.set_now_ms(1000); w.push("/w/lib/noise.js"); w.advance_ms(200);
+    auto r = sess.tick();
+    std::set<PartId> got(r.rebaked.begin(), r.rebaked.end());
+    CHECK(got.count("rock") && got.count("tree") && got.count("root"), "both importers + ancestor rebaked");
+    CHECK(got.count("bush") == 0, "non-importer bush untouched");
+}
+
 int main() {
     std::printf("=== dev_live_edit_tests ===\n");
     test_fake_watcher_roundtrip();
     test_upward_cone();
     test_changed_parts_single_and_shared();
     test_debounce_coalesces_two_writes();
+    test_scope_single_part_and_topo();
+    test_shared_module_fanout_rebake();
     if (g_failures) { std::printf("\n%d FAILURES\n", g_failures); return 1; }
     std::printf("\nALL PASS\n");
     return 0;
