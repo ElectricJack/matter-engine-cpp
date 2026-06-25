@@ -194,7 +194,8 @@ run-trivar: $(TRIVAR_TARGET)
 # Shared script library: module-resolution + source-fold unit + JS-helper bake tests
 # (headless, GL-free; ModuleResolver requires no QuickJS).
 SHLIB_TARGET = shared_lib_tests
-SHLIB_CPP = shared_lib_tests.cpp ../src/module_resolver.cpp ../src/part_asset_v2.cpp \
+SHLIB_CPP = shared_lib_tests.cpp ../src/module_resolver.cpp ../src/script_rng_binding.cpp \
+            ../src/part_asset_v2.cpp \
             ../../MatterSurfaceLib/src/part_asset.cpp \
             ../../MatterSurfaceLib/src/blas_manager.cpp ../../MatterSurfaceLib/src/bvh.cpp \
             ../../MatterSurfaceLib/src/tlas_manager.cpp \

@@ -1,5 +1,6 @@
 #include "../include/module_resolver.h"
 #include "../include/part_asset_v2.h"
+#include "../include/script_rng_binding.h"
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
@@ -216,6 +217,29 @@ static void test_rng_reference_stream() {
           "rng.js xoshiro128** seed=42 stream pinned (matches node cross-check)");
 }
 
+// ---- Task 7: C++ Math.random binding (seed-from-params) -------------------
+static void test_script_rng_binding() {
+    // seed_from_params_json extracts an integer seed from a params JSON blob.
+    CHECK(script_rng::seed_from_params_json("{\"seed\":42}", "seed") == 42u,
+          "seed parsed from params json");
+    CHECK(script_rng::seed_from_params_json("{\"size\":1.0}", "seed") == 0u,
+          "missing seed defaults to 0");
+    // ScriptRng matches the JS/reference algorithm and is deterministic.
+    script_rng::ScriptRng r1(42u), r2(42u), r3(7u);
+    for (int i = 0; i < 8; ++i) CHECK(r1.next_u32() == r2.next_u32(), "ScriptRng reproducible");
+    bool diff = false;
+    script_rng::ScriptRng r4(42u);
+    for (int i = 0; i < 8; ++i) if (r4.next_u32() != r3.next_u32()) diff = true;
+    CHECK(diff, "ScriptRng differs by seed");
+    // random() is in [0,1).
+    script_rng::ScriptRng r5(1u);
+    for (int i = 0; i < 100; ++i) { double v = r5.random(); CHECK(v >= 0.0 && v < 1.0, "random in [0,1)"); }
+    // ScriptRng must match the pinned rng.js seed=42 stream bit-for-bit.
+    script_rng::ScriptRng r6(42u);
+    CHECK(r6.next_u32() == 660444221u && r6.next_u32() == 3652823732u,
+          "ScriptRng matches rng.js seed=42 stream");
+}
+
 int main() {
     test_parse_imports();
     test_resolve_specifier();
@@ -223,6 +247,7 @@ int main() {
     test_fold_changes_resolved_hash();
     test_ordering_stability();
     test_rng_reference_stream();
+    test_script_rng_binding();
     if (failures == 0) printf("All shared_lib tests passed\n");
     return failures == 0 ? 0 : 1;
 }
