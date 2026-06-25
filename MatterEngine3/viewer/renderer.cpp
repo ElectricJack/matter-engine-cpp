@@ -2,6 +2,10 @@
 
 #include "material_registry.h"   // MaterialRegistryPackForGPU/Count, MATERIAL_FLOATS_PER_DEF
 
+#include "rlgl.h"   // rlDrawRenderBatchActive
+
+extern "C" { void glFinish(void); }
+
 #include <cstdio>
 
 namespace viewer {
@@ -63,6 +67,29 @@ void Renderer::draw(BLASManager& blas, TLASManager& tlas) {
     BeginShaderMode(shader_);
         DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), WHITE);
     EndShaderMode();
+}
+
+void Renderer::warm_up(BLASManager& blas, TLASManager& tlas) {
+    if (shader_.id == 0) return;
+    printf("Warming up raytrace shader (one-time GPU compile)...\n");
+    double t0 = GetTime();
+    RenderTexture2D warm = LoadRenderTexture(1, 1);
+    BeginTextureMode(warm);
+    ClearBackground(BLACK);
+    BeginShaderMode(shader_);
+    Vector2 screen_size = {1.0f, 1.0f};
+    if (loc_screen_size_ != -1)
+        SetShaderValue(shader_, loc_screen_size_, &screen_size, SHADER_UNIFORM_VEC2);
+    // Bind real BVH data so the texelFetch traversal paths are part of the compiled program.
+    blas.bind_to_shader(shader_);
+    tlas.bind_to_shader(shader_, blas);
+    DrawRectangle(0, 0, 1, 1, WHITE);
+    EndShaderMode();
+    EndTextureMode();
+    rlDrawRenderBatchActive();   // flush raylib's batch so the draw is issued
+    glFinish();                  // block until the driver actually compiles+runs it
+    UnloadRenderTexture(warm);
+    printf("Raytrace shader warm-up done in %.2fs\n", GetTime() - t0);
 }
 
 } // namespace viewer

@@ -66,6 +66,15 @@ int main() {
 
     PassThroughResolver pass;
     SectorLodResolver   sec(16.0f, 64.0f);
+
+    // Populate the TLAS once, then warm up the raytrace shader so the GPU compile
+    // stall happens here (with startup logging) instead of on the first real frame.
+    {
+        Vector3 cp0 = renderer.camera().position;
+        composer->compose(state, pass, lods, make_float3(cp0.x, cp0.y, cp0.z));
+        renderer.warm_up(store->blas(), composer->tlas());
+    }
+
     bool camera_capture = false;
 
     while (!WindowShouldClose()) {

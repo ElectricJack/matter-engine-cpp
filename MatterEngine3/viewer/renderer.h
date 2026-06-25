@@ -22,6 +22,11 @@ public:
     // Bind BLAS/TLAS + camera + material uniforms and draw the fullscreen pass.
     void draw(BLASManager& blas, TLASManager& tlas);
 
+    // One-time GPU compile of the raytrace shader via a 1x1 offscreen draw with
+    // real BVH data bound, so the first real frame doesn't stall. Call once after
+    // the world is composed (TLAS populated). Mirrors MSL warm_up_raytracing_shader.
+    void warm_up(BLASManager& blas, TLASManager& tlas);
+
 private:
     void upload_material_table();
 
