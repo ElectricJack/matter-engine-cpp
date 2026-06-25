@@ -100,3 +100,39 @@ private:
 };
 
 } // namespace part_graph
+
+#if defined(MATTER_HAVE_SCRIPT_HOST)
+#include "script_host.h"   // SP-2 (MatterEngine3, via -I../include)
+
+namespace part_graph {
+
+// Reads .js modules from <schemas_dir> and evaluates `static requires` via the host's
+// top-level eval (no build()).
+class FileModuleResolver : public ModuleResolver {
+public:
+    FileModuleResolver(script_host::ScriptHost& host, std::string schemas_dir);
+    bool load_source(const std::string& module, std::string& source_out) override;
+    bool get_requires(const std::string& module, const Params& params,
+                      std::vector<ChildRequest>& children_out) override;
+private:
+    script_host::ScriptHost& host_;
+    std::string              schemas_dir_;
+};
+
+// Checks parts/<hash>.part existence (SP-1 cache_path_resolved) and delegates hashing/baking to
+// SP-2 ScriptHost (resolve_hash + bake_source). SP-2 is the hash authority (master C-2).
+class HostBaker : public Baker {
+public:
+    HostBaker(script_host::ScriptHost& host, std::string parts_dir);
+    uint64_t resolve_hash(const std::string& source, const Params& params,
+                          const std::vector<uint64_t>& child_hashes) override;
+    bool cached(uint64_t resolved_hash) override;
+    bool bake(const std::string& source, const Params& params,
+              const std::vector<uint64_t>& child_hashes, uint64_t resolved_hash) override;
+private:
+    script_host::ScriptHost& host_;
+    std::string              parts_dir_;
+};
+
+} // namespace part_graph
+#endif // MATTER_HAVE_SCRIPT_HOST

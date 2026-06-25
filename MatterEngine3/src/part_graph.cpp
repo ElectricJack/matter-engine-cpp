@@ -189,3 +189,137 @@ bool PartGraph::read_manifest(const std::string& world_data_dir, const std::stri
 }
 
 } // namespace part_graph
+
+#if defined(MATTER_HAVE_SCRIPT_HOST)
+#include <cstdlib>
+#include <cstdio>
+#include <fstream>
+#include <sstream>
+
+namespace part_graph {
+
+// Params -> JSON object string for the host (numbers via %.17g, strings quoted).
+// (Distinct from serialize_params' `key=value;` memo-identity form.) Self-contained
+// here because JSON conversion is only needed on the real-host path.
+static std::string params_to_json(const Params& params) {
+    std::ostringstream os;
+    os << '{';
+    bool first = true;
+    for (const auto& kv : params) {          // Params is an ordered map; host re-sorts
+        if (!first) os << ','; first = false;
+        os << '"' << kv.first << "\":";
+        switch (kv.second.kind) {
+            case ParamValue::Kind::Number: {
+                char buf[32]; std::snprintf(buf, sizeof buf, "%.17g", kv.second.num);
+                os << buf; break;
+            }
+            case ParamValue::Kind::Bool:
+                os << (kv.second.boolean ? "true" : "false"); break;
+            case ParamValue::Kind::Str:
+                os << '"' << kv.second.str << '"'; break;  // SP-3 v1 params have no quotes/escapes
+        }
+    }
+    os << '}';
+    return os.str();
+}
+
+// Inverse: a flat JSON object {"k":num|bool|"str", ...} -> Params. SP-3 v1 only sees
+// the shapes eval_requires emits (flat numbers/bools/strings), so a tiny hand parser
+// suffices; reuse the host's own emitter contract rather than a full JSON lib.
+Params params_from_json(const std::string& json);  // defined below
+
+FileModuleResolver::FileModuleResolver(script_host::ScriptHost& host, std::string schemas_dir)
+    : host_(host), schemas_dir_(std::move(schemas_dir)) {}
+
+bool FileModuleResolver::load_source(const std::string& module, std::string& out) {
+    std::ifstream in(schemas_dir_ + "/" + module + ".js", std::ios::binary);
+    if (!in) return false;
+    std::ostringstream ss; ss << in.rdbuf();
+    out = ss.str();
+    return true;
+}
+
+bool FileModuleResolver::get_requires(const std::string& module, const Params& params,
+                                      std::vector<ChildRequest>& out) {
+    std::string source;
+    if (!load_source(module, source)) return false;
+    // SP-2 eval_requires: eval module top level (no build()), read `static requires`.
+    std::vector<script_host::RequiredChild> kids =
+        host_.eval_requires(source, params_to_json(params));
+    out.clear();
+    out.reserve(kids.size());
+    for (const auto& k : kids)
+        out.push_back(ChildRequest{ k.module_specifier, params_from_json(k.params_json) });
+    return true;   // (a thrown `requires` surfaces as a host error -> empty + caller errors)
+}
+
+HostBaker::HostBaker(script_host::ScriptHost& host, std::string parts_dir)
+    : host_(host), parts_dir_(std::move(parts_dir)) {}
+
+uint64_t HostBaker::resolve_hash(const std::string& source, const Params& params,
+                                 const std::vector<uint64_t>& child_hashes) {
+    return host_.resolve_hash(source, params_to_json(params),
+                              child_hashes.data(), child_hashes.size());
+}
+
+bool HostBaker::cached(uint64_t resolved_hash) {
+    std::string path = parts_dir_ + "/" + part_asset::cache_path_resolved(resolved_hash);
+    std::ifstream in(path, std::ios::binary);
+    return in.good();
+}
+
+bool HostBaker::bake(const std::string& source, const Params& params,
+                     const std::vector<uint64_t>& child_hashes, uint64_t resolved_hash) {
+    // SP-2 bake_source recomputes the same hash and writes parts/<hash>.part via save_v2.
+    script_host::BakeResult r = host_.bake_source(
+        source, params_to_json(params), /*opts*/{},
+        child_hashes.data(), child_hashes.size());
+    // The hash SP-3 memoized must equal where the .part landed (master C-2 guarantee).
+    return r.error.ok && r.resolved_hash == resolved_hash;
+}
+
+// Minimal flat-object JSON parser for the shapes eval_requires emits (flat
+// number|bool|"string"; SP-3 v1 strings carry no escapes). Unknown shapes -> skip.
+Params params_from_json(const std::string& json) {
+    Params out;
+    size_t i = 0, n = json.size();
+    auto skip_ws = [&]{ while (i < n && (json[i]==' '||json[i]=='\t'||json[i]=='\n'||json[i]=='\r')) ++i; };
+    auto parse_str = [&](std::string& s) -> bool {
+        if (i >= n || json[i] != '"') return false;
+        ++i; size_t start = i;
+        while (i < n && json[i] != '"') ++i;
+        if (i >= n) return false;
+        s = json.substr(start, i - start); ++i; return true;
+    };
+    skip_ws();
+    if (i >= n || json[i] != '{') return out; ++i;
+    skip_ws();
+    if (i < n && json[i] == '}') return out;
+    while (i < n) {
+        skip_ws();
+        std::string key;
+        if (!parse_str(key)) break;
+        skip_ws();
+        if (i >= n || json[i] != ':') break; ++i;
+        skip_ws();
+        if (i < n && json[i] == '"') {
+            std::string v; if (!parse_str(v)) break;
+            out[key] = ParamValue::string_(v);
+        } else if (json.compare(i, 4, "true") == 0) {
+            out[key] = ParamValue::boolean_(true); i += 4;
+        } else if (json.compare(i, 5, "false") == 0) {
+            out[key] = ParamValue::boolean_(false); i += 5;
+        } else {
+            size_t start = i;
+            while (i < n && json[i] != ',' && json[i] != '}') ++i;
+            out[key] = ParamValue::number(std::strtod(json.c_str() + start, nullptr));
+        }
+        skip_ws();
+        if (i < n && json[i] == ',') { ++i; continue; }
+        if (i < n && json[i] == '}') break;
+    }
+    return out;
+}
+
+} // namespace part_graph
+#endif // MATTER_HAVE_SCRIPT_HOST
