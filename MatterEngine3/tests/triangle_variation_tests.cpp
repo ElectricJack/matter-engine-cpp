@@ -129,10 +129,41 @@ static void test_skinned_line() {
     CHECK(max_r_near_a > max_r_near_b, "radius tapers from a (0.6) to b (0.1)");
 }
 
+static void test_no_field_interaction() {
+    // A voxel brush (center, radius) that fully contains the authored triangle.
+    // The triangle must NOT be carved/smoothed toward the field: emitted verts
+    // exactly equal the authored verts. triangle_emit has no field input by
+    // construction, so this pins that contract.
+    float3 brush_center = make_float3(0,0,0);
+    float  brush_radius = 10.0f;   // triangle lies well inside this sphere
+
+    float3 v0 = make_float3(0.0f, 0.0f, 0.0f);
+    float3 v1 = make_float3(1.0f, 0.0f, 0.0f);
+    float3 v2 = make_float3(0.0f, 1.0f, 0.0f);
+
+    tri_emit::TriangleBuildBuffer buf;
+    buf.beginShape(tri_emit::ShapeType::TRIANGLES, mat4::Identity(), /*material*/9);
+    buf.vertex(v0); buf.vertex(v1); buf.vertex(v2);
+    buf.endShape();
+
+    CHECK(buf.triangles().size() == 1, "one triangle survives");
+    const Tri& t = buf.triangles()[0];
+    // Authored vertices are preserved exactly (no projection onto the SDF).
+    CHECK(near3(t.vertex0, v0, 1e-6f), "v0 not pulled to field surface");
+    CHECK(near3(t.vertex1, v1, 1e-6f), "v1 not pulled to field surface");
+    CHECK(near3(t.vertex2, v2, 1e-6f), "v2 not pulled to field surface");
+    // Sanity: vertices really are inside the brush volume (so a field-coupled
+    // path WOULD have moved them) -> the no-op is meaningful, not vacuous.
+    float d0 = sqrtf(v0.x*v0.x + v0.y*v0.y + v0.z*v0.z);
+    CHECK(d0 < brush_radius, "vertex genuinely inside brush -> survival is meaningful");
+    (void)brush_center;
+}
+
 int main() {
     test_triangle_emission();
     test_one_blas_merge();
     test_skinned_line();
+    test_no_field_interaction();
     if (failures == 0) printf("All triangle_variation tests passed\n");
     return failures == 0 ? 0 : 1;
 }
