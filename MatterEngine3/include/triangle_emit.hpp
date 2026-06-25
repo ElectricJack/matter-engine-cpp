@@ -1,4 +1,20 @@
 #pragma once
+// SP-6 direct-triangle session, JS-free core.
+//
+// The SP-2 ScriptHost binds these into the QuickJS DSL as the direct-triangle
+// session (mutually exclusive with the voxel session at any instant, sequential
+// within a part):
+//   beginShape(type)      -> TriangleBuildBuffer::beginShape(type, host.currentTransform(), host.currentMaterial())
+//   vertex(x,y,z)         -> TriangleBuildBuffer::vertex({x,y,z})
+//   endShape()            -> TriangleBuildBuffer::endShape()
+//   line(a,b)/lineThickness(r) -> TriangleBuildBuffer::line(a, b, r0, r1, host.currentMaterial(), host.currentTransform())
+//   instance(child, variation) -> VariationRecorder::instance(childSource, paramsBytes, host.currentTransform())
+//
+// At bake the host MERGES this buffer into the SAME build buffer the voxel
+// session fills (appendTo), then registers ONE BLAS via
+// BLASManager::register_triangles(tris, count, triex). There is NO separate
+// triangle BLAS and NO triangle render path. The VariationRecorder's children()
+// feed save_v2's child-instance table (SP-1). Triangles never enter the SDF.
 #include "bvh.h"      // Tri, TriEx, mat4, float3, make_float3
 #include "part_asset_v2.h"  // SP-1: part_asset::ChildInstance, part_asset::compute_resolved_hash
 #include <vector>
