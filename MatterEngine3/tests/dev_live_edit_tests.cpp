@@ -3,6 +3,7 @@
 #include "file_watcher.h"
 #include "live_edit.h"
 #include "inotify_watcher.h"
+#include "win_watcher.h"
 #include <cstdio>
 #include <cstdlib>
 #include <map>
@@ -310,9 +311,21 @@ static void test_e2e_real_watch_to_rebuild() {
 }
 #endif
 
+static void test_windows_stub_is_marked_deferred() {
+    std::printf("[test_windows_stub_is_marked_deferred]\n");
+#ifdef _WIN32
+    bool threw = false;
+    try { live_edit::WinDirWatcher w; } catch (const std::exception&) { threw = true; }
+    CHECK(threw, "Windows watcher throws not-implemented (deferred)");
+#else
+    CHECK(true, "Windows stub header compiles on non-Windows (no-op)");
+#endif
+}
+
 int main() {
     std::printf("=== dev_live_edit_tests ===\n");
     test_fake_watcher_roundtrip();
+    test_windows_stub_is_marked_deferred();
     test_upward_cone();
     test_changed_parts_single_and_shared();
     test_debounce_coalesces_two_writes();
