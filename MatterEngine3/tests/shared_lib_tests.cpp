@@ -147,11 +147,36 @@ static void test_fold_changes_resolved_hash() {
     remove_scratch_shared_lib(scratch);
 }
 
+// ---- Task 5: ordering-stability of the fold -------------------------------
+static void test_ordering_stability() {
+    const std::string root = "shared-lib-fixtures";
+    // Three parts that import {aaa,bbb} in all permutations must fold identically.
+    const char* perms[] = {
+        "import {A} from 'shared-lib/aaa';\nimport {B} from 'shared-lib/bbb';\nclass P extends Part{build(p){}}\n",
+        "import {B} from 'shared-lib/bbb';\nimport {A} from 'shared-lib/aaa';\nclass P extends Part{build(p){}}\n",
+    };
+    // The part SOURCE differs (import line order), so resolved hashes differ overall.
+    // But the MODULE FOLD region must be byte-identical. Assert on the fold region:
+    std::string err;
+    module_resolver::FoldResult r0, r1;
+    module_resolver::fold_sources(perms[0], root, r0, err);
+    module_resolver::fold_sources(perms[1], root, r1, err);
+    std::string m0(r0.folded.begin() + std::char_traits<char>::length(perms[0]), r0.folded.end());
+    std::string m1(r1.folded.begin() + std::char_traits<char>::length(perms[1]), r1.folded.end());
+    CHECK(m0 == m1, "module-fold region is stable across import permutations");
+    CHECK(r0.resolved_specifiers == r1.resolved_specifiers, "resolved-specifier order is canonical/stable");
+    CHECK(r0.resolved_specifiers.size() == 2 &&
+          r0.resolved_specifiers[0] == "shared-lib/aaa" &&
+          r0.resolved_specifiers[1] == "shared-lib/bbb",
+          "specifiers sorted lexicographically (aaa before bbb)");
+}
+
 int main() {
     test_parse_imports();
     test_resolve_specifier();
     test_fold_transitive_and_canonical();
     test_fold_changes_resolved_hash();
+    test_ordering_stability();
     if (failures == 0) printf("All shared_lib tests passed\n");
     return failures == 0 ? 0 : 1;
 }
