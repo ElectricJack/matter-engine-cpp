@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "dsl_state.h"
 
 namespace script_host {
 
@@ -49,6 +50,7 @@ public:
 
     std::string last_merged_params() const { return last_merged_params_; }
     bool last_build_ran() const { return last_build_ran_; }
+    const dsl::BuildBuffer& last_buffer() const { return last_buffer_; }
 
 private:
     // Returns canonical merged-params JSON; fills err on failure. Evals source
@@ -60,6 +62,7 @@ private:
 
     std::string last_merged_params_;
     bool last_build_ran_ = false;
+    dsl::BuildBuffer last_buffer_;
 };
 
 } // namespace script_host

@@ -1,13 +1,24 @@
 #pragma once
-// Evaluated into every fresh context before user source. Defines the Part base
-// and a registry the host reads to discover the authored subclass.
 static const char* kPartBaseJS = R"JS(
-globalThis.__parts = [];
+globalThis.MAT = { stone: 0, dirt: 1, glass: 2 };
 globalThis.Part = class Part {
   build(p) {}
-  static __register(cls) { globalThis.__parts.push(cls); }
+  pushMatrix()           { __dsl_pushMatrix(); }
+  popMatrix()            { __dsl_popMatrix(); }
+  translate(x,y,z)       { __dsl_translate(x,y,z); }
+  rotateX(r)             { __dsl_rotateX(r); }
+  rotateY(r)             { __dsl_rotateY(r); }
+  rotateZ(r)             { __dsl_rotateZ(r); }
+  scale(x,y,z)           { __dsl_scale(x,y,z); }
+  applyMatrix(m)         { __dsl_applyMatrix(m); }
+  fill(mat)              { __dsl_fill(mat); }
+  beginVoxels(spacing)   { __dsl_beginVoxels(spacing); }
+  endVoxels()            { __dsl_endVoxels(); }
+  sphere(c,r)            { __dsl_sphere(c[0],c[1],c[2],r); }
+  box(c,h)               { __dsl_box(c[0],c[1],c[2],h[0],h[1],h[2]); }
+  union()                { __dsl_op(0); }
+  difference()           { __dsl_op(1); }
+  intersection()         { __dsl_op(2); }
+  smoothing(k)           { __dsl_smoothing(k); }
 };
-// Capture subclasses at definition time via a static initializer pattern:
-// user classes call super-less; the host enumerates globalThis for class ctors
-// extending Part after eval (see host). This stub keeps Part defined.
 )JS";

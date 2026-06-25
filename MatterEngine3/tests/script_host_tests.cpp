@@ -125,6 +125,31 @@ static void test_resolve_hash_matches_and_skips_build() {
           "resolve_hash did not run build()");
 }
 
+static void test_bindings_record_ops_and_misuse() {
+    script_host::ScriptHost host;
+    const char* ok =
+        "class Rock extends Part {\n"
+        "  static params = {};\n"
+        "  build(p){ this.beginVoxels(0.1); this.fill(MAT.stone);\n"
+        "            this.sphere([0,0,0],1.0);\n"
+        "            this.box([0,0.5,0],[0.3,0.3,0.3]); this.difference();\n"
+        "            this.endVoxels(); }\n"
+        "}\n";
+    script_host::BakeResult r = host.bake_source(ok, "{}", {});
+    CHECK(r.error.ok, "valid voxel script bakes");
+    CHECK(host.last_buffer().ops.size() == 2, "two brushes recorded");
+    CHECK(host.last_buffer().ops[1].op == dsl::CsgOp::Difference, "difference applied to box");
+
+    script_host::ScriptHost host2;
+    const char* bad =
+        "class Bad extends Part { static params={};\n"
+        "  build(p){ this.sphere([0,0,0],1.0); }\n"   // emit with no session
+        "}\n";
+    script_host::BakeResult rb = host2.bake_source(bad, "{}", {});
+    CHECK(!rb.error.ok, "emit outside session is fail-closed");
+    CHECK(rb.error.message.find("session") != std::string::npos, "structured session error message");
+}
+
 int main() {
     test_embed_eval_1_plus_1();
     test_fresh_context_runs_empty_class();
@@ -132,6 +157,7 @@ int main() {
     test_dsl_state_rules();
     test_params_merge_and_hash();
     test_resolve_hash_matches_and_skips_build();
+    test_bindings_record_ops_and_misuse();
     if (failures == 0) printf("ALL PASS\n");
     return failures ? 1 : 0;
 }

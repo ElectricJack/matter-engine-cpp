@@ -4,6 +4,8 @@ extern "C" {
 }
 #include "part_base.js.h"
 #include "part_asset_v2.h"   // SP-1 v2 helper (compute_resolved_hash)
+#include "../include/dsl_state.h"
+#include "../include/dsl_bindings.h"
 #include <cstring>
 #include <regex>
 
@@ -146,11 +148,18 @@ BakeResult ScriptHost::bake_source(const std::string& source,
     JSRuntime* rt = JS_NewRuntime();
     JSContext* ctx = JS_NewContext(rt);
 
+    // C++-owned authoring state for this bake; native DSL bindings mutate it.
+    dsl::DslState state;
+    JS_SetContextOpaque(ctx, &state);
+
     last_build_ran_ = false;
+    last_buffer_.clear();
+    {
     JSValue base = JS_Eval(ctx, kPartBaseJS, strlen(kPartBaseJS), "<part-base>",
                            JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(base)) { r.error = harvest_exception(ctx); JS_FreeValue(ctx,base); goto done; }
     JS_FreeValue(ctx, base);
+    dsl::install_bindings(ctx);
 
     {
         // Eval user source + a generic trampoline that publishes the authored
@@ -186,6 +195,14 @@ BakeResult ScriptHost::bake_source(const std::string& source,
         JS_FreeValue(ctx, bret);
         JS_FreeValue(ctx, paramsObj);
         JS_FreeValue(ctx, inst);
+    }
+    } // close DslState-scope block
+
+    // Fail-closed: a DSL session/transform misuse during build surfaces here.
+    last_buffer_ = state.buffer();
+    if (r.error.ok && state.has_error()) {
+        r.error.ok = false;
+        r.error.message = state.error();
     }
 
 done:
