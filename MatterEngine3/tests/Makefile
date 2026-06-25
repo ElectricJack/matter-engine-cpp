@@ -54,7 +54,7 @@ else
     LDLIBS = ../../Libraries/raylib/src/libraylib.a
 endif
 
-.PHONY: clean run-partv2 run-script run-graph run-trivar
+.PHONY: clean run-partv2 run-script run-graph run-graph-integration run-trivar
 
 # Part Artifact v2 round-trip + resolved-hash + format-guard tests (headless, GL-free).
 # NEW impl ../src/part_asset_v2.cpp + consumed MatterSurfaceLib backend sources.
@@ -79,7 +79,7 @@ run-partv2: $(PARTV2_TARGET)
 	./$(PARTV2_TARGET)
 
 clean:
-	rm -f $(PARTV2_TARGET) $(SCRIPT_TARGET) $(GRAPH_TARGET) $(TRIVAR_TARGET)
+	rm -f $(PARTV2_TARGET) $(SCRIPT_TARGET) $(GRAPH_TARGET) $(GRAPH_INT_TARGET) $(TRIVAR_TARGET)
 
 # Script host (QuickJS-ng) + DSL/CSG bake tests (headless, GL-free for the host;
 # the BLAS surface path links raylib like the part-asset tests). QuickJS-ng C
@@ -117,6 +117,36 @@ $(SCRIPT_TARGET): $(SCRIPT_CPP) $(SCRIPT_C) $(QJS_C)
 
 run-script: $(SCRIPT_TARGET)
 	./$(SCRIPT_TARGET)
+
+# SP-3 end-to-end install through the REAL FileModuleResolver/HostBaker adapters,
+# which drive the SP-2 ScriptHost (eval_requires + resolve_hash + bake_source ->
+# save_v2). Built with -DMATTER_HAVE_SCRIPT_HOST so the guarded adapters in
+# part_graph.{h,cpp} compile, and links the full host/QuickJS source set (mirrors
+# SCRIPT_CPP) plus ../src/part_graph.cpp. material_registry.c stays gcc-compiled.
+GRAPH_INT_TARGET = part_graph_integration_tests
+GRAPH_INT_CPP = part_graph_integration_tests.cpp ../src/part_graph.cpp \
+                ../src/script_host.cpp ../src/dsl_state.cpp \
+                ../src/dsl_bindings.cpp ../src/csg_lowering.cpp ../src/part_asset_v2.cpp \
+                ../../MatterSurfaceLib/src/cluster.cpp ../../MatterSurfaceLib/src/cell.cpp ../../MatterSurfaceLib/src/mesh_simplifier.cpp \
+                ../../MatterSurfaceLib/src/blas_manager.cpp ../../MatterSurfaceLib/src/bvh.cpp ../../MatterSurfaceLib/src/bvh_analyzer.cpp \
+                ../../MatterSurfaceLib/src/mesh_worker_pool.cpp ../../MatterSurfaceLib/src/mesh_build_utils.cpp \
+                ../../MatterSurfaceLib/src/meshing_algorithm.cpp ../../MatterSurfaceLib/src/marching_cubes_algorithm.cpp \
+                ../../MatterSurfaceLib/src/oriented_cube_algorithm.cpp ../../MatterSurfaceLib/src/vertex_ao.cpp \
+                ../../MatterSurfaceLib/src/occupancy.cpp ../../MatterSurfaceLib/src/tlas_manager.cpp ../../MatterSurfaceLib/src/part_asset.cpp \
+                ../../MatterSurfaceLib/src/lattice.cpp ../../MatterSurfaceLib/src/particle_culling.cpp
+GRAPH_INT_C   = ../../MatterSurfaceLib/src/surface.c ../../MatterSurfaceLib/src/open_particle_surface.c \
+                ../../MatterSurfaceLib/src/spatial_hash.c ../../MatterSurfaceLib/src/object_allocator.c ../../MatterSurfaceLib/src/material_registry.c
+GRAPH_INT_C_OBJ = surface.o open_particle_surface.o spatial_hash.o object_allocator.o material_registry.o
+
+$(GRAPH_INT_TARGET): $(GRAPH_INT_CPP) $(GRAPH_INT_C) $(QJS_C)
+	gcc -c $(QJS_C) -O2 -DCONFIG_VERSION='"0.10.0"' $(QJS_INC)
+	gcc -c $(GRAPH_INT_C) -O2 -DPLATFORM_DESKTOP $(INCLUDE_PATHS)
+	$(CC) $(GRAPH_INT_CPP) $(QJS_OBJ) $(GRAPH_INT_C_OBJ) -o $(GRAPH_INT_TARGET) \
+	      $(CFLAGS) -DMATTER_HAVE_SCRIPT_HOST $(INCLUDE_PATHS) $(QJS_INC) $(LDFLAGS) $(LDLIBS)
+	rm -f $(QJS_OBJ) $(GRAPH_INT_C_OBJ)
+
+run-graph-integration: $(GRAPH_INT_TARGET)
+	./$(GRAPH_INT_TARGET)
 
 # Part graph resolve/dedup/topo/cycle/reachability/cache-miss tests (headless, GL-free).
 # NEW MatterEngine3 sources ../src/<new>.cpp + consumed MatterSurfaceLib backend.

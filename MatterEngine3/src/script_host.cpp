@@ -187,6 +187,129 @@ std::string ScriptHost::merge_params_canonical(const std::string& source,
     return last_merged_params_;
 }
 
+// Static discovery of a part's required children WITHOUT baking. Evals the
+// class top-level in a fresh isolated bake context (same restricted intrinsics,
+// no Date/require/fetch/os), reads `static requires`, evaluates it against the
+// merged static+override params, and returns one RequiredChild per declared
+// { module, params } entry with canonical params JSON. Fail-closed: any error
+// (no requires, throw, malformed entry) yields an empty list. Never runs build().
+std::vector<RequiredChild> ScriptHost::eval_requires(const std::string& source,
+                                                     const std::string& params_json) {
+    std::vector<RequiredChild> out;
+
+    // Reuse the shared params-merge path so the params handed to `requires` are
+    // the same canonical merged params build()/resolve_hash see. On merge
+    // failure (no class, bad params, etc.) fail closed with an empty list.
+    BakeError merr;
+    std::string merged = merge_params_canonical(source, params_json, merr);
+    if (!merr.ok) return out;
+
+    std::string className = find_part_class_name(source);
+    if (className.empty()) return out;
+
+    JSRuntime* rt = JS_NewRuntime();
+    JSContext* ctx = new_bake_context(rt);
+
+    JSValue base = JS_Eval(ctx, kPartBaseJS, strlen(kPartBaseJS), "<part-base>",
+                           JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(base)) { JS_FreeValue(ctx, base);
+        JS_FreeContext(ctx); JS_FreeRuntime(rt); return out; }
+    JS_FreeValue(ctx, base);
+
+    std::string wrapped = source + "\n;globalThis.__partClass = " + className + ";\n";
+    JSValue v = JS_Eval(ctx, wrapped.c_str(), wrapped.size(), "<part>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(v)) { JS_FreeValue(ctx, v);
+        JS_FreeContext(ctx); JS_FreeRuntime(rt); return out; }
+    JS_FreeValue(ctx, v);
+
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue authored = JS_GetPropertyStr(ctx, global, "__partClass");
+    JS_FreeValue(ctx, global);
+    if (!JS_IsFunction(ctx, authored)) {
+        JS_FreeValue(ctx, authored);
+        JS_FreeContext(ctx); JS_FreeRuntime(rt); return out;
+    }
+
+    JSValue requiresProp = JS_GetPropertyStr(ctx, authored, "requires");
+    // No `static requires` => no children (not an error; leaf parts are common).
+    if (JS_IsUndefined(requiresProp) || JS_IsNull(requiresProp)) {
+        JS_FreeValue(ctx, requiresProp);
+        JS_FreeValue(ctx, authored);
+        JS_FreeContext(ctx); JS_FreeRuntime(rt); return out;
+    }
+
+    // Parse the merged params back into an object to pass to requires(params).
+    JSValue paramsObj = JS_ParseJSON(ctx, merged.c_str(), merged.size(), "<merged>");
+    if (JS_IsException(paramsObj)) { JS_FreeValue(ctx, paramsObj); paramsObj = JS_NewObject(ctx); }
+
+    // `static requires` may be a method (call it with params) or a plain array.
+    JSValue list;
+    if (JS_IsFunction(ctx, requiresProp)) {
+        list = JS_Call(ctx, requiresProp, authored, 1, &paramsObj);
+    } else {
+        list = JS_DupValue(ctx, requiresProp);
+    }
+    JS_FreeValue(ctx, paramsObj);
+    JS_FreeValue(ctx, requiresProp);
+
+    if (JS_IsException(list) || !JS_IsArray(list)) {
+        // A thrown requires() or a non-array result is fail-closed: empty.
+        JS_FreeValue(ctx, list);
+        JS_FreeValue(ctx, authored);
+        JS_FreeContext(ctx); JS_FreeRuntime(rt); return out;
+    }
+
+    // Canonicalize each child's params the same way merge_params_canonical does
+    // (sorted keys, no whitespace) so SP-3's memo identity stays stable.
+    static const char* kCanon =
+      "(function(o){if(o===undefined||o===null)return '{}';"
+      "let keys=Object.keys(o).sort();let r={};for(let k of keys)r[k]=o[k];"
+      "return JSON.stringify(r);})";
+    JSValue canonFn = JS_Eval(ctx, kCanon, strlen(kCanon), "<canon>", JS_EVAL_TYPE_GLOBAL);
+
+    uint32_t len = 0;
+    {
+        JSValue lenV = JS_GetPropertyStr(ctx, list, "length");
+        JS_ToUint32(ctx, &len, lenV);
+        JS_FreeValue(ctx, lenV);
+    }
+    bool ok = true;
+    for (uint32_t i = 0; i < len && ok; ++i) {
+        JSValue entry = JS_GetPropertyUint32(ctx, list, i);
+        JSValue modV = JS_GetPropertyStr(ctx, entry, "module");
+        JSValue parV = JS_GetPropertyStr(ctx, entry, "params");
+
+        RequiredChild rc;
+        const char* ms = JS_ToCString(ctx, modV);
+        if (ms) { rc.module_specifier = ms; JS_FreeCString(ctx, ms); }
+        else    { ok = false; }   // a child must name a module
+
+        JSValue canonStr = JS_Call(ctx, canonFn, JS_UNDEFINED, 1, &parV);
+        if (JS_IsException(canonStr)) { ok = false; }
+        else {
+            const char* cs = JS_ToCString(ctx, canonStr);
+            rc.params_json = cs ? cs : "{}";
+            if (cs) JS_FreeCString(ctx, cs);
+        }
+        JS_FreeValue(ctx, canonStr);
+        JS_FreeValue(ctx, parV);
+        JS_FreeValue(ctx, modV);
+        JS_FreeValue(ctx, entry);
+
+        if (ok) out.push_back(std::move(rc));
+    }
+
+    JS_FreeValue(ctx, canonFn);
+    JS_FreeValue(ctx, list);
+    JS_FreeValue(ctx, authored);
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+
+    // Fail-closed: a malformed entry invalidates the whole list (SP-3 hard-errors).
+    if (!ok) out.clear();
+    return out;
+}
+
 uint64_t ScriptHost::resolve_hash(const std::string& source,
                                   const std::string& params_json,
                                   const uint64_t* child_hashes,

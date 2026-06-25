@@ -346,6 +346,114 @@ static void test_fail_closed() {
           "structured time-budget error");
 }
 
+// SP-2 C-2: static discovery of a part's child instances WITHOUT baking.
+// A part declares its children via a `static requires(params)` method (or a
+// `static requires` array) returning a list of { module, params } records.
+// eval_requires evals the class top-level in a fresh isolated context (no
+// build()) and returns the declared children with canonicalized params.
+static void test_eval_requires_lists_children() {
+    script_host::ScriptHost host;
+    const char* src =
+        "class Tower extends Part {\n"
+        "  static params = { floors: 3 };\n"
+        "  static requires(p) {\n"
+        "    let out = [];\n"
+        "    for (let i = 0; i < p.floors; i++)\n"
+        "      out.push({ module: 'Floor', params: { level: i } });\n"
+        "    out.push({ module: 'Roof', params: {} });\n"
+        "    return out;\n"
+        "  }\n"
+        "  build(p) {}\n"
+        "}\n";
+    auto kids = host.eval_requires(src, "{}");
+    CHECK(kids.size() == 4, "Tower with default floors=3 declares 3 floors + 1 roof");
+    if (kids.size() == 4) {
+        CHECK(kids[0].module_specifier == "Floor", "first child is Floor");
+        CHECK(kids[0].params_json.find("\"level\":0") != std::string::npos,
+              "first floor carries level:0");
+        CHECK(kids[3].module_specifier == "Roof", "last child is Roof");
+    }
+}
+
+static void test_eval_requires_honors_overrides() {
+    script_host::ScriptHost host;
+    const char* src =
+        "class Tower extends Part {\n"
+        "  static params = { floors: 3 };\n"
+        "  static requires(p) {\n"
+        "    let out = [];\n"
+        "    for (let i = 0; i < p.floors; i++)\n"
+        "      out.push({ module: 'Floor', params: { level: i } });\n"
+        "    return out;\n"
+        "  }\n"
+        "  build(p) {}\n"
+        "}\n";
+    auto kids = host.eval_requires(src, "{\"floors\":5}");
+    CHECK(kids.size() == 5, "override floors=5 declares 5 floor children");
+}
+
+static void test_eval_requires_none_is_empty() {
+    script_host::ScriptHost host;
+    // No `static requires` at all => empty list, no error.
+    const char* leaf =
+        "class Leaf extends Part {\n"
+        "  static params = {};\n"
+        "  build(p) {}\n"
+        "}\n";
+    auto kids = host.eval_requires(leaf, "{}");
+    CHECK(kids.empty(), "part with no requires declares no children");
+
+    // An explicit empty requires() also yields empty.
+    script_host::ScriptHost host2;
+    const char* empty =
+        "class Leaf extends Part {\n"
+        "  static params = {};\n"
+        "  static requires(p) { return []; }\n"
+        "  build(p) {}\n"
+        "}\n";
+    auto kids2 = host2.eval_requires(empty, "{}");
+    CHECK(kids2.empty(), "part with empty requires() declares no children");
+}
+
+static void test_eval_requires_deterministic() {
+    const char* src =
+        "class Tower extends Part {\n"
+        "  static params = { floors: 2 };\n"
+        "  static requires(p) {\n"
+        "    let out = [];\n"
+        "    for (let i = 0; i < p.floors; i++)\n"
+        "      out.push({ module: 'Floor', params: { level: i, h: 2.5 } });\n"
+        "    return out;\n"
+        "  }\n"
+        "  build(p) {}\n"
+        "}\n";
+    script_host::ScriptHost a, b;
+    auto k1 = a.eval_requires(src, "{}");
+    auto k2 = b.eval_requires(src, "{}");
+    CHECK(k1.size() == k2.size() && k1.size() == 2,
+          "same source+params => same child count");
+    bool same = k1.size() == k2.size();
+    for (size_t i = 0; same && i < k1.size(); ++i)
+        same = k1[i].module_specifier == k2[i].module_specifier &&
+               k1[i].params_json == k2[i].params_json;
+    CHECK(same, "same source+params => identical child records (deterministic)");
+}
+
+static void test_eval_requires_does_not_build() {
+    script_host::ScriptHost host;
+    const char* src =
+        "class Probe extends Part {\n"
+        "  static params = {};\n"
+        "  static requires(p) { return [{ module: 'X', params: {} }]; }\n"
+        "  build(p) { globalThis.__built_requires = true; }\n"
+        "}\n";
+    auto kids = host.eval_requires(src, "{}");
+    CHECK(kids.size() == 1, "requires evaluated");
+    // eval_requires must not run build(): it shares merge_params_canonical, which
+    // never instantiates/builds, so last_build_ran stays false.
+    CHECK(!host.last_build_ran(), "eval_requires did not run build()");
+}
+
 int main() {
     test_embed_eval_1_plus_1();
     test_fresh_context_runs_empty_class();
@@ -363,6 +471,11 @@ int main() {
     test_fresh_context_no_residue();
     test_seeded_rng_and_no_ambient();
     test_fail_closed();
+    test_eval_requires_lists_children();
+    test_eval_requires_honors_overrides();
+    test_eval_requires_none_is_empty();
+    test_eval_requires_deterministic();
+    test_eval_requires_does_not_build();
     if (failures == 0) printf("ALL PASS\n");
     return failures ? 1 : 0;
 }

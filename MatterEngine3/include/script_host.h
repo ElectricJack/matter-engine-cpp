@@ -48,6 +48,16 @@ public:
                           const uint64_t* child_hashes = nullptr,
                           size_t child_count = 0);
 
+    // Static discovery of the part's child instances WITHOUT baking. Evals the
+    // class top-level in a fresh isolated context, reads its `static requires`
+    // (a method `requires(params)` or an array) evaluated against the merged
+    // static+override params, and returns the declared { module, params }
+    // records with canonical (sorted-key) params JSON. SP-3 calls this to walk
+    // the graph leaves-first. Fail-closed: returns empty on any error (no
+    // requires declared, eval throws, malformed entries). Does NOT call build().
+    std::vector<RequiredChild> eval_requires(const std::string& source,
+                                             const std::string& params_json);
+
     std::string last_merged_params() const { return last_merged_params_; }
     bool last_build_ran() const { return last_build_ran_; }
     const dsl::BuildBuffer& last_buffer() const { return last_buffer_; }
