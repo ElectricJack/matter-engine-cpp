@@ -268,6 +268,31 @@ int main() {
         CHECK(r2.hits == 1, "unrelated Stable branch stays a cache hit");
     }
 
+    // Task 10: failure propagation (child bake fail => parent unbaked => install fails named).
+    {
+        // Root -> Child. Child's bake fails => Child never recorded, Root never baked,
+        // install fails naming Child.
+        FakeModuleResolver res;
+        res.modules["Child"] = FakeModule{ "src-Child", nullptr, false };
+        res.modules["Root"]  = FakeModule{ "src-Root",
+            [](const Params&){ return std::vector<ChildRequest>{ ChildRequest{"Child", Params{}} }; }, false };
+        FakeBaker baker;
+        uint64_t child_hash = part_asset::compute_resolved_hash("src-Child", 9, "", 0, nullptr, 0);
+        baker.fail_hashes.insert(child_hash);
+
+        PartGraph g(res, baker);
+        InstallResult r = g.install({ ChildRequest{"Root", Params{}} });
+        CHECK(!r.ok, "install fails when a child bake fails");
+        CHECK(r.error.find("Child") != std::string::npos, "error names the failing part (Child)");
+        CHECK(r.baked.empty(), "no part recorded as baked when child fails");
+        // Root must NOT have been baked (its child hash is unavailable).
+        uint64_t root_hash = part_asset::compute_resolved_hash(
+            "src-Root", 8, "", 0, &child_hash, 1);
+        bool root_baked = false;
+        for (uint64_t h : baker.bake_order) if (h == root_hash) root_baked = true;
+        CHECK(!root_baked, "parent is not baked after child bake failure");
+    }
+
     if (failures == 0) printf("All part_graph tests passed\n");
     return failures == 0 ? 0 : 1;
 }
