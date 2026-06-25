@@ -52,9 +52,11 @@ two approved specs and is reused as-is:
 6. **Two execution modes over one cache:** *install/first-run* bakes the whole DAG once; *dev/creative*
    hot-reloads edited parts and incrementally re-bakes only the upward cone of affected parts,
    refreshing the live world without restart.
-7. **Networked collaborative building is in-scope** (creative-mode first), **host-authoritative**
-   (Minecraft-style). It rides on the content-addressed cache: peers reconcile world state by part
-   hash and fetch only missing parts. Gameplay/physics sync is out of scope for v1.
+7. **Networked collaborative building is in-scope** (creative-mode first), **dedicated-server-authoritative**.
+   One canonical authority (the server) owns world state; everyone runs the same client binary.
+   Single-player launches an embedded in-process server, so there is exactly one authority path. It
+   rides on the content-addressed cache: the server and clients reconcile world state by part hash and
+   fetch only missing parts. Gameplay/physics sync is out of scope for v1.
 
 ---
 
@@ -174,17 +176,19 @@ orthogonal and unchanged. No raytracer or sector-LOD logic changes are required 
 
 ## Networked collaborative building (cross-cutting)
 
-Creative-mode-first, **host-authoritative** (Minecraft-style). Content-addressed parts make
-replication natural; networking splits into two clean problems:
+Creative-mode-first, **dedicated-server-authoritative**. A single canonical authority — the server —
+owns world state; everyone runs the same client binary. Single-player launches an embedded in-process
+server, so the local and networked paths are identical and there is no separate "host" code path to
+maintain. Content-addressed parts make replication natural; networking splits into two clean problems:
 
-1. **Part replication:** peers exchange part *definitions* (tiny: script source + params) and/or
-   baked `.part` blobs. Because everything is hash-addressed, a peer asks "do I have hash X?" and
-   fetches only what is missing — automatic dedup, git/IPFS-style.
-2. **World-state replication:** the host owns the canonical placed-instance set + part cache; clients
-   receive a snapshot, send edit intents, and the host applies and broadcasts deltas. A shared
-   part-script edit propagates by hash so peers re-bake locally from synced source.
+1. **Part replication:** server and clients exchange part *definitions* (tiny: script source + params)
+   and/or baked `.part` blobs. Because everything is hash-addressed, a peer asks "do I have hash X?"
+   and fetches only what is missing — automatic dedup, git/IPFS-style.
+2. **World-state replication:** the server owns the canonical placed-instance set + part cache; clients
+   receive a snapshot, send edit intents, and the server applies and broadcasts deltas. A shared
+   part-script edit propagates by hash so clients re-bake locally from synced source.
 
-Authority evolution (host → dedicated server → P2P/CRDT) and gameplay/physics sync are deferred.
+Authority evolution beyond a single dedicated server (P2P/CRDT) and gameplay/physics sync are deferred.
 
 ---
 
@@ -202,7 +206,7 @@ Built bottom-up so each rests on a working layer below. Each gets its own spec �
 | **SP-6** | Direct-triangle DSL path + variations | triangle frontend + combine step; variation dedup → unlocks the full tree scene | SP-2, SP-3 |
 | **SP-7** | Shared script library | L-system, Bézier, flow-field, etc. as importable JS modules | SP-2 |
 | **SP-8** | Content-addressed part replication | hash "have/want" protocol; sync part defs + `.part` blobs; fetch-only-missing dedup | SP-1, SP-3 |
-| **SP-9** | Host-authoritative world session | host owns canonical instance set + cache; clients get snapshot, send edit intents, host applies + broadcasts deltas | SP-4, SP-8 |
+| **SP-9** | Dedicated-server world session | server owns canonical instance set + cache; clients get snapshot, send edit intents, server applies + broadcasts deltas; single-player runs an embedded in-process server | SP-4, SP-8 |
 | **SP-10** | Collaborative creative editing | live multi-user part placement + shared part-script editing; edits propagate by hash so peers re-bake locally | SP-5, SP-9 |
 
 **First buildable slice = SP-1 + SP-2:** one JS part script, authored with voxel-CSG primitives,
@@ -214,9 +218,9 @@ complexity.
 - *Single-player end-to-end:* reproduce the prototype's **Forest → Tree → TreeBranch → Leaf** scene —
   voxel trunk (SP-2), triangle leaves (SP-6), 4-level dependency DAG (SP-3), instancing into the
   world (SP-4), live-edit a leaf and watch the forest update (SP-5).
-- *Collaborative creative:* two clients join a host's world, both place/edit parts, and one client
-  editing the `Leaf` script propagates over the wire so the other's forest updates — all reconciled
-  by content hash (SP-8 → SP-10).
+- *Collaborative creative:* two clients connect to a dedicated server, both place/edit parts, and one
+  client editing the `Leaf` script propagates over the wire so the other's forest updates — all
+  reconciled by content hash (SP-8 → SP-10).
 
 ---
 
@@ -225,19 +229,20 @@ complexity.
 **v1 goals**
 - The ten sub-projects above.
 - Single-player tree scene as the end-to-end acceptance test.
-- Collaborative *creative building*: host-authoritative shared world, content-addressed part sync,
-  multi-user placement + shared script editing.
+- Collaborative *creative building*: dedicated-server-authoritative shared world, content-addressed
+  part sync, multi-user placement + shared script editing. Single-player runs an embedded server.
 
 **Non-goals (deferred)**
 - Syncing gameplay/physics/simulation state (creative building only first).
-- Dedicated standalone server (SP-9 is player-host first).
-- P2P / CRDT eventual consistency (host-authoritative baseline).
-- Network security / anti-griefing hardening beyond basic host control.
+- Player-hosted authority / host-migration (single dedicated-server authority only; single-player uses
+  an embedded in-process server, not a separate host code path).
+- P2P / CRDT eventual consistency (single-authority baseline).
+- Network security / anti-griefing hardening beyond basic server-side validation.
 - GPU-accelerated meshing of the CSG field (the prototype used compute shaders; reuse the existing
   CPU mesher first).
 - Multi-threaded parallel `build()` of independent DAG branches (the artifact model allows it later —
   parts are pure functions of their hash — but not v1).
-- Networked/collaborative *script* editing conflict-resolution beyond host-authoritative last-writer.
+- Networked/collaborative *script* editing conflict-resolution beyond server-authoritative last-writer.
 
 ---
 
