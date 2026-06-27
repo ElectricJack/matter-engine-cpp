@@ -7,6 +7,9 @@ extern "C" {
 #include "../include/script_host.h"
 #include "../include/dsl_state.h"
 #include "../include/csg_lowering.h"
+#include "../include/part_asset_v2.h"
+#include "../../MatterSurfaceLib/include/blas_manager.hpp"
+#include "../../MatterSurfaceLib/include/tlas_manager.hpp"
 #include <sys/stat.h>
 #include <vector>
 
@@ -454,6 +457,64 @@ static void test_eval_requires_does_not_build() {
     CHECK(!host.last_build_ran(), "eval_requires did not run build()");
 }
 
+// SP-2 Task 5: placeChild('Module') records a child-part placement at the
+// current matrix-stack transform; bake_source folds the child hashes/names and
+// save_v2 writes the ChildInstance rows. This proves the round-trip: bake a leaf,
+// bake a parent that places it twice, reload the parent .part, and assert two
+// child rows with the right hashes + transforms — plus a determinism re-bake.
+static void test_place_child_roundtrip() {
+    using namespace script_host;
+    ScriptHost host;
+
+    // NOTE: the host's classic bake path (no shared-lib root) evaluates the part
+    // as a GLOBAL script and discovers the class via a lexical-binding trampoline,
+    // so a plain `class X extends Part` declaration is required (module-only
+    // `export default class` would throw under JS_EVAL_TYPE_GLOBAL). This matches
+    // every other test in this file.
+    const char* leaf_src =
+        "class Leaf extends Part {"
+        "  build(p){ this.beginVoxels(0.1); this.fill(MAT.leaf);"
+        "            this.sphere([0,0,0],0.1); this.endVoxels(); } }";
+    BakeResult lr = host.bake_source(leaf_src, "{}", {});
+    CHECK(lr.error.ok, "leaf bakes");
+    uint64_t leaf_hash = lr.resolved_hash;
+
+    const char* parent_src =
+        "class P extends Part {"
+        "  build(p){"
+        "    this.beginVoxels(0.2); this.fill(MAT.bark);"
+        "    this.box([0,0,0],[0.2,0.2,0.2]); this.endVoxels();"
+        "    this.pushMatrix(); this.translate(2,3,4); this.placeChild('Leaf'); this.popMatrix();"
+        "    this.pushMatrix(); this.translate(5,0,0); this.placeChild('Leaf'); this.popMatrix();"
+        "  } }";
+    uint64_t kids[1]   = { leaf_hash };
+    std::string names[1] = { std::string("Leaf") };
+    BakeResult pr = host.bake_source(parent_src, "{}", {}, kids, 1, names);
+    CHECK(pr.error.ok, "parent bakes with placed children");
+
+    BLASManager blas; TLASManager tlas(64);
+    std::vector<part_asset::ChildInstance> children;
+    part_asset::LodLevels lods;
+    std::string ppath = part_asset::cache_path_resolved(pr.resolved_hash);
+    bool loaded = part_asset::load_v2(ppath, pr.resolved_hash, blas, tlas, children, lods);
+    CHECK(loaded, "parent .part reloads");
+    CHECK(children.size() == 2, "two leaf instances recorded");
+    if (children.size() == 2) {
+        CHECK(children[0].child_resolved_hash == leaf_hash, "child 0 is the leaf");
+        CHECK(children[1].child_resolved_hash == leaf_hash, "child 1 is the leaf");
+        // row-major translation lives in transform[3],[7],[11]
+        CHECK(children[0].transform[3]  == 2.0f &&
+              children[0].transform[7]  == 3.0f &&
+              children[0].transform[11] == 4.0f, "child 0 placed at (2,3,4)");
+        CHECK(children[1].transform[3]  == 5.0f, "child 1 placed at x=5");
+    }
+
+    // Determinism: re-baking the same parent must yield the same resolved hash.
+    BakeResult pr2 = host.bake_source(parent_src, "{}", {}, kids, 1, names);
+    CHECK(pr2.error.ok && pr2.resolved_hash == pr.resolved_hash,
+          "parent re-bake is deterministic");
+}
+
 int main() {
     test_embed_eval_1_plus_1();
     test_fresh_context_runs_empty_class();
@@ -476,6 +537,7 @@ int main() {
     test_eval_requires_none_is_empty();
     test_eval_requires_deterministic();
     test_eval_requires_does_not_build();
+    test_place_child_roundtrip();
     if (failures == 0) printf("ALL PASS\n");
     return failures ? 1 : 0;
 }
