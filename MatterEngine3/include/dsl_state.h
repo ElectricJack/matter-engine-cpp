@@ -2,6 +2,7 @@
 #include "raylib.h"   // Vector3, Matrix, Vector4
 #include "dsl_rng.h"
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -72,6 +73,21 @@ public:
 
     const BuildBuffer& buffer() const { return buffer_; }
 
+    // A recorded child-part placement: resolved hash of the child + the world
+    // transform (row-major) at the current matrix-stack top when placeChild ran.
+    struct ChildPlacement { uint64_t hash; float transform[16]; };
+
+    // Host installs the declared children's module-name -> resolved-hash map
+    // before build(); placeChild looks names up here. Empty map => any placeChild
+    // is a fail-closed error.
+    void set_child_hashes(std::map<std::string, uint64_t> m) { child_hashes_ = std::move(m); }
+
+    // Record a placement of `module` at the current transform-stack top. Unknown
+    // module (not in set_child_hashes) -> set_error (fail-closed).
+    void placeChild(const std::string& module);
+
+    const std::vector<ChildPlacement>& children() const { return children_; }
+
     // Seeded RNG cursor. The host installs a seeded Rng (derived from the part's
     // params) before build(); the bound Math.random() draws from it. Deterministic
     // and process-entropy-free so bakes are reproducible.
@@ -94,6 +110,8 @@ private:
     bool        has_error_ = false;
     std::string error_;
     std::unique_ptr<Rng> rng_;    // seeded by the host before build()
+    std::map<std::string, uint64_t>   child_hashes_;   // declared children (name -> hash)
+    std::vector<ChildPlacement>       children_;        // accumulated placements
 };
 
 } // namespace dsl

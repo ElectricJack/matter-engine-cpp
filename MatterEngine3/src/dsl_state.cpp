@@ -53,4 +53,27 @@ void DslState::box(const Vector3& c, const Vector3& h, CsgOp op) {
     buffer_.ops.push_back(o);
 }
 
+// raylib Matrix stores its 16 floats column-major (m0,m4,m8,m12 = first row of
+// the math matrix). world_flatten / ChildInstance consume row-major, so transpose
+// the storage: translation (m12,m13,m14) lands in out[3],out[7],out[11].
+static void matrix_to_row16(const Matrix& mm, float out[16]) {
+    out[0]=mm.m0;  out[1]=mm.m4;  out[2]=mm.m8;  out[3]=mm.m12;
+    out[4]=mm.m1;  out[5]=mm.m5;  out[6]=mm.m9;  out[7]=mm.m13;
+    out[8]=mm.m2;  out[9]=mm.m6;  out[10]=mm.m10; out[11]=mm.m14;
+    out[12]=mm.m3; out[13]=mm.m7; out[14]=mm.m11; out[15]=mm.m15;
+}
+
+void DslState::placeChild(const std::string& module) {
+    auto it = child_hashes_.find(module);
+    if (it == child_hashes_.end()) {
+        set_error("placeChild: undeclared child '" + module +
+                  "' (add it to static requires)");
+        return;
+    }
+    ChildPlacement p;
+    p.hash = it->second;
+    matrix_to_row16(top(), p.transform);
+    children_.push_back(p);
+}
+
 } // namespace dsl

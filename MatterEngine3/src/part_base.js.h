@@ -24,5 +24,6 @@ globalThis.Part = class Part {
   difference()           { __dsl_op(1); }
   intersection()         { __dsl_op(2); }
   smoothing(k)           { __dsl_smoothing(k); }
+  placeChild(module)     { __dsl_placeChild(module); }
 };
 )JS";

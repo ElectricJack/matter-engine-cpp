@@ -31,6 +31,10 @@ static JSValue j_box(JSContext* c, JSValueConst, int, JSValueConst* a){
 static JSValue j_op(JSContext* c, JSValueConst, int, JSValueConst* a){
     int32_t k=0; JS_ToInt32(c,&k,a[0]); state_of(c)->set_last_op((CsgOp)k); return JS_UNDEFINED; }
 static JSValue j_smoothing(JSContext* c, JSValueConst, int, JSValueConst* a){ state_of(c)->smoothing((float)argd(c,a[0])); return JS_UNDEFINED; }
+static JSValue j_placeChild(JSContext* c, JSValueConst, int, JSValueConst* a){
+    const char* m = JS_ToCString(c, a[0]);
+    if (m) { state_of(c)->placeChild(m); JS_FreeCString(c, m); }
+    return JS_UNDEFINED; }
 
 // Seeded Math.random: draws from the bake's DslState Rng (seeded by the host
 // before build()). Deterministic and process-entropy-free so the resolved-hash
@@ -53,6 +57,7 @@ void install_bindings(JSContext* ctx) {
     bind("__dsl_beginVoxels",j_beginVoxels,1); bind("__dsl_endVoxels",j_endVoxels,0);
     bind("__dsl_sphere",j_sphere,4); bind("__dsl_box",j_box,6);
     bind("__dsl_op",j_op,1); bind("__dsl_smoothing",j_smoothing,1);
+    bind("__dsl_placeChild",j_placeChild,1);
     // Override Math.random with the seeded draw so authored parts are reproducible.
     JSValue math = JS_GetPropertyStr(ctx, g, "Math");
     if (JS_IsObject(math)) {
