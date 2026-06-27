@@ -15,7 +15,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <sstream>
 #include <string>
+#include <vector>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -27,6 +29,81 @@ static bool file_exists(const std::string& p) { struct stat st; return stat(p.c_
 static void write_file(const std::string& path, const std::string& body) {
     std::ofstream f(path, std::ios::binary);
     f << body;
+}
+
+static std::string read_file(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    std::ostringstream ss; ss << f.rdbuf();
+    return ss.str();
+}
+
+// SP-3 Task 7: prove the graph-driven placement path. A parent that declares a
+// child via `static requires` AND places it via placeChild() must, after a real
+// PartGraph::install (FileModuleResolver -> HostBaker -> ScriptHost), produce a
+// parent .part carrying exactly one ChildInstance row pointing at the leaf, at the
+// placed transform (y=1). The resolved hash is recomputed here by folding the leaf
+// hash exactly as the graph did, to locate the parent's .part for reload.
+//
+// NOTE: the host's classic bake path (HostBaker sets no shared-lib root) evaluates
+// the part as a GLOBAL script, so a bare `class X extends Part` declaration is
+// required — `export default class` would throw under JS_EVAL_TYPE_GLOBAL. This
+// mirrors script_host_tests.cpp's place-child round-trip.
+static void test_install_with_placement() {
+    namespace pg = part_graph;
+
+    const std::string root = "/tmp/me3_graph_place";
+    system(("rm -rf " + root).c_str());
+    const std::string schemas = root + "/schemas";
+    system(("mkdir -p " + schemas + " " + root + "/parts").c_str());
+
+    write_file(schemas + "/LeafX.js",
+        "class LeafX extends Part {"
+        "  build(p){ this.beginVoxels(0.1); this.fill(MAT.leaf);"
+        "            this.sphere([0,0,0],0.1); this.endVoxels(); } }");
+    write_file(schemas + "/TreeX.js",
+        "class TreeX extends Part {"
+        "  static requires = [{ module: 'LeafX' }];"
+        "  build(p){"
+        "    this.beginVoxels(0.2); this.fill(MAT.bark);"
+        "    this.box([0,0,0],[0.3,0.3,0.3]); this.endVoxels();"
+        "    this.pushMatrix(); this.translate(0,1,0); this.placeChild('LeafX'); this.popMatrix();"
+        "  } }");
+
+    // chdir so bake_source's relative "parts/<hash>.part" lands under <root>/parts;
+    // HostBaker(".") joins "." + "/" + "parts/<hash>.part" for its cache check.
+    char prevcwd[4096]; if (!getcwd(prevcwd, sizeof prevcwd)) prevcwd[0] = '\0';
+    CHECK(chdir(root.c_str()) == 0, "chdir into placement sandbox");
+
+    script_host::ScriptHost host;
+    pg::FileModuleResolver resolver(host, "schemas");
+    pg::HostBaker baker(host, ".");
+    pg::PartGraph graph(resolver, baker);
+
+    pg::InstallResult ir = graph.install({ pg::ChildRequest{ "TreeX", pg::Params{} } });
+    CHECK(ir.ok, "install of TreeX with a required+placed LeafX succeeds");
+    if (!ir.ok) printf("  install error: %s\n", ir.error.c_str());
+
+    // Recompute the resolved hashes the way the graph did: leaf with no children,
+    // tree with the leaf hash folded in (children affect the resolved hash).
+    uint64_t leaf_hash = host.resolve_hash(read_file("schemas/LeafX.js"), "{}");
+    uint64_t kids[1] = { leaf_hash };
+    uint64_t tree_hash = host.resolve_hash(read_file("schemas/TreeX.js"), "{}", kids, 1);
+
+    BLASManager blas; TLASManager tlas(64);
+    std::vector<part_asset::ChildInstance> children;
+    part_asset::LodLevels lods;
+    bool loaded = part_asset::load_v2(part_asset::cache_path_resolved(tree_hash),
+                                      tree_hash, blas, tlas, children, lods);
+    CHECK(loaded, "TreeX .part reloads");
+    CHECK(children.size() == 1, "TreeX recorded one LeafX instance");
+    if (children.size() == 1) {
+        CHECK(children[0].child_resolved_hash == leaf_hash, "instance points at LeafX");
+        // row-major translation lives in transform[3],[7],[11]; y is [7].
+        CHECK(children[0].transform[7] == 1.0f, "instance placed at y=1");
+    }
+
+    if (prevcwd[0]) (void)chdir(prevcwd);
+    system(("rm -rf " + root).c_str());
 }
 
 int main() {
@@ -91,6 +168,9 @@ int main() {
 
     if (prevcwd[0]) (void)chdir(prevcwd);
     system(("rm -rf " + root).c_str());
+
+    // SP-3 Task 7: graph-driven placement (requires + placeChild) round-trip.
+    test_install_with_placement();
 
     if (failures == 0) printf("All part_graph integration tests passed\n");
     return failures == 0 ? 0 : 1;
