@@ -6,10 +6,17 @@
 #include "../viewer/local_provider.h"
 #include "../viewer/world_composer.h"
 #include "lod_select.h"   // PartLodTable, PartLod
+#include "part_graph.h"   // PartGraph + FileModuleResolver/HostBaker (script-host guarded)
+#include "part_asset_v2.h"
 
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
 #include <string>
+#include <vector>
+#include <unistd.h>
 
 static int g_failures = 0;
 #define CHECK(cond, msg) do { \
@@ -162,12 +169,74 @@ static void test_composer_counts() {
     CHECK(active_far < active_all, "sectorlod from far/small-radius composes fewer");
 }
 
+static std::string read_file(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    std::ostringstream ss; ss << f.rdbuf();
+    return ss.str();
+}
+
+// Task 10: the PartStore must KEEP the baked child-instance table on its LoadedPart
+// (the next task's WorldComposer expands it into the TLAS). We install the REAL demo
+// Tree through the same part_graph + ScriptHost harness the integration test uses
+// (which bakes parts/<hash>.part relative to cwd), then point a PartStore at that
+// sandbox and assert get_or_load(tree)->children is non-empty (the placed Leaf rows).
+static void test_partstore_keeps_children() {
+    namespace pg = part_graph;
+
+    // Resolve the demo schemas + shared-lib to ABSOLUTE paths BEFORE we chdir, so
+    // they still resolve from inside the sandbox (they are repo-relative to tests/).
+    std::string schemas, sharedlib;
+    { char abs[4096];
+      if (realpath("../examples/world_demo/schemas", abs)) schemas = abs;
+      if (realpath("../shared-lib", abs)) sharedlib = abs; }
+    CHECK(!schemas.empty() && !sharedlib.empty(),
+          "resolved demo schemas + shared-lib absolute paths");
+    if (schemas.empty() || sharedlib.empty()) return;
+
+    // Fresh sandbox; HostBaker(".") writes the .part to <root>/parts/<hash>.part, so
+    // a PartStore(<root>) (disk_path = <root>/parts/<hash>.part) reads the same file.
+    const std::string root = "/tmp/me3_viewer_keepchildren";
+    system(("rm -rf " + root).c_str());
+    system(("mkdir -p " + root + "/parts").c_str());
+
+    char prevcwd[4096]; if (!getcwd(prevcwd, sizeof prevcwd)) prevcwd[0] = '\0';
+    CHECK(chdir(root.c_str()) == 0, "chdir into keep-children sandbox");
+
+    script_host::ScriptHost host;
+    host.set_shared_lib_root(sharedlib);
+    pg::FileModuleResolver resolver(host, schemas);
+    pg::HostBaker baker(host, ".");
+    pg::PartGraph graph(resolver, baker);
+
+    pg::InstallResult ir = graph.install({ pg::ChildRequest{ "Tree", pg::Params{} } });
+    CHECK(ir.ok, "demo Tree installs into sandbox cache");
+    if (!ir.ok) printf("  install error: %s\n", ir.error.c_str());
+
+    // Recompute the Tree hash exactly as the graph did: Leaf (no children) folded
+    // into Tree (kids,1). Use the SAME host (shared-lib root set) so the imported
+    // module sources fold identically.
+    uint64_t leaf_hash = host.resolve_hash(read_file(schemas + "/Leaf.js"), "{}");
+    uint64_t kids[1] = { leaf_hash };
+    uint64_t tree_hash = host.resolve_hash(read_file(schemas + "/Tree.js"), "{}", kids, 1);
+
+    // PartStore reads <root>/parts/<hash>.part — point it at the sandbox root.
+    viewer::PartStore store(".");
+    const viewer::LoadedPart* lp = store.get_or_load(tree_hash);
+    CHECK(lp != nullptr, "tree part loads from PartStore");
+    CHECK(lp && !lp->children.empty(), "loaded tree part carries its child table");
+    if (lp) printf("  loaded Tree carries %zu child instance(s)\n", lp->children.size());
+
+    if (prevcwd[0]) (void)chdir(prevcwd);
+    system(("rm -rf " + root).c_str());
+}
+
 int main() {
     test_world_state_delta();
     test_resolvers();
     test_part_store_missing();
     test_local_provider_cache();
     test_composer_counts();
+    test_partstore_keeps_children();
     printf("\n%s\n", g_failures == 0 ? "viewer-logic OK" : "viewer-logic FAILED");
     return g_failures == 0 ? 0 : 1;
 }

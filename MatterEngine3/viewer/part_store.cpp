@@ -68,6 +68,7 @@ const LoadedPart* PartStore::get_or_load(uint64_t part_hash) {
     // so use blas_indices[0] directly as the index — do NOT add 'before'.
     LoadedPart lp;
     lp.bound_radius = radius;
+    lp.children = std::move(children);   // keep the baked child-instance table for the WorldComposer
     lod_bake::LodLevels lods = lod_bake::bake_lods(tris, lod_bake::BakeTargets{}, blas_);
     for (const auto& L : lods) {
         lp.thresholds.push_back(L.screen_size_threshold);

@@ -3,6 +3,7 @@
 
 #include "blas_manager.hpp"     // MSL BLASManager / BLASHandle
 #include "lod_select.h"         // lod_select::PartLodTable
+#include "part_asset_v2.h"      // part_asset::ChildInstance
 
 #include <cstdint>
 #include <map>
@@ -19,6 +20,7 @@ struct LoadedPart {
     std::vector<BLASHandle> lod_blas;       // lod_blas[i] -> BLAS for LOD level i
     float                   bound_radius = 0.0f;
     std::vector<float>      thresholds;      // per-LOD screen-size thresholds
+    std::vector<part_asset::ChildInstance> children;   // baked child-instance table (may be empty)
 };
 
 // Owns one BLASManager shared across all loaded parts. Content-addressed and
