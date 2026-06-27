@@ -64,7 +64,11 @@ BvhMesh::BvhMesh( const uint primCount )
 	// basic constructor, for top-down TLAS construction
 	tri = (Tri*)MALLOC64( primCount * sizeof( Tri ) );
 	memset( tri, 0, primCount * sizeof( Tri ) );
-	triEx = (TriEx*)MALLOC64( primCount * sizeof( TriEx ) );
+	// Round up to a multiple of 64 so aligned_alloc (MALLOC64) gets a valid size.
+	// sizeof(TriEx)==96 is not a power-of-two multiple of 64, so odd primCounts
+	// would produce a misaligned size without this guard.
+	size_t triex_bytes = ((primCount * sizeof( TriEx ) + 63) & ~size_t(63));
+	triEx = (TriEx*)MALLOC64( triex_bytes );
 	memset( triEx, 0, primCount * sizeof( TriEx ) );
 	triCount = primCount;
 }

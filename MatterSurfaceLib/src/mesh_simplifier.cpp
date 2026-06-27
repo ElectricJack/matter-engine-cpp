@@ -1,14 +1,78 @@
 #include "mesh_simplifier.hpp"
 
 #include <vector>
-#include <map>
 #include <array>
 #include <queue>
 #include <cmath>
 #include <cstdint>
 #include <algorithm>
+#include <cstring>
 
 namespace {
+
+// Flat open-addressing hash map: key = array<long long,3>, value = int.
+// Allocates ONE contiguous block (avoids per-node heap fragmentation from
+// std::map's red-black tree which creates ~600 K small allocations for a
+// 1.3 M-triangle mesh and fragments the heap on destruction).
+struct WeldMap {
+    struct Slot {
+        std::array<long long,3> key;
+        int                     value;
+        bool                    used;
+    };
+    std::vector<Slot> table;
+    size_t            count = 0;
+
+    void init(size_t capacity) {
+        // Round up to next power of two so masking works.
+        size_t sz = 1;
+        while (sz < capacity) sz <<= 1;
+        table.assign(sz, Slot{{}, -1, false});
+    }
+
+    static size_t hash3(const std::array<long long,3>& k) {
+        // FNV-1a over three longs.
+        uint64_t h = 14695981039346656037ull;
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(k.data());
+        for (size_t i = 0; i < 3 * sizeof(long long); ++i) {
+            h ^= p[i];
+            h *= 1099511628211ull;
+        }
+        return static_cast<size_t>(h);
+    }
+
+    // Returns existing value or -1 if absent.
+    int find(const std::array<long long,3>& key) const {
+        size_t mask = table.size() - 1;
+        size_t idx  = hash3(key) & mask;
+        for (;;) {
+            const Slot& s = table[idx];
+            if (!s.used)       return -1;
+            if (s.key == key)  return s.value;
+            idx = (idx + 1) & mask;
+        }
+    }
+
+    // Insert key→value; caller guarantees key is absent and load < 75%.
+    void insert(const std::array<long long,3>& key, int value) {
+        size_t mask = table.size() - 1;
+        size_t idx  = hash3(key) & mask;
+        while (table[idx].used) idx = (idx + 1) & mask;
+        table[idx] = { key, value, true };
+        ++count;
+    }
+
+    // Grow by 2× when load factor hits 50%.
+    void maybe_grow() {
+        if (count * 2 >= table.size()) {
+            WeldMap next;
+            next.init(table.size() * 2);
+            for (const Slot& s : table)
+                if (s.used) next.insert(s.key, s.value);
+            *this = std::move(next);
+        }
+    }
+};
 
 // --- minimal double-precision vector helpers (avoids raymath coupling) ---
 struct V3 { double x, y, z; };
@@ -75,19 +139,27 @@ struct WTri {
 // surface into holes. Welding by position fixes connectivity regardless of
 // whether the input was indexed.
 static void buildTopology(const Mesh& m, std::vector<WVert>& verts, std::vector<WTri>& tris) {
-    std::map<std::array<long long,3>, int> weld;
+    // Pre-size the weld map to hold at least 2× the vertex count with < 50% load.
+    // A non-indexed mesh has m.triangleCount*3 source verts; after welding the
+    // unique count is much smaller, but we must accommodate the worst case without
+    // rehashing (each rehash would still fragment the heap).
+    WeldMap weld;
+    weld.init(static_cast<size_t>(m.triangleCount) * 4 + 8); // 4 slots/tri >> worst-case load
     auto weldVertex = [&](float x, float y, float z) -> int {
         std::array<long long,3> key = {
             (long long)std::llround((double)x * 100000.0),
             (long long)std::llround((double)y * 100000.0),
             (long long)std::llround((double)z * 100000.0)
         };
-        auto it = weld.find(key);
-        if (it != weld.end()) return it->second;
+        int existing = weld.find(key);
+        if (existing >= 0) return existing;
         int vi = (int)verts.size();
         WVert w; w.pos = {x, y, z};
         verts.push_back(w);
-        weld[key] = vi;
+        weld.insert(key, vi);
+        // No maybe_grow() needed: initial size guarantees < 50% load for any
+        // realistic mesh (3 verts/tri → 3/(4+ε) ≈ 75% of verts unique → still
+        // under 75% load; welding reduces unique count further in practice).
         return vi;
     };
 

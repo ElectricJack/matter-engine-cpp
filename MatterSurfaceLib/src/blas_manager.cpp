@@ -163,8 +163,11 @@ BLASHandle BLASManager::register_triangles(Tri* triangles, int triangle_count, c
         }
 
         // Copy per-vertex shading normals when provided (indexed the same as mesh->tri).
+        // Round up to multiple of 64: sizeof(TriEx)==96 is not a multiple of 64, so
+        // aligned_alloc (MALLOC64) would fail for odd triangle counts without this guard.
         if (triex) {
-            mesh->triEx = static_cast<TriEx*>(MALLOC64(triangle_count * sizeof(TriEx)));
+            size_t triex_bytes = ((static_cast<size_t>(triangle_count) * sizeof(TriEx) + 63) & ~size_t(63));
+            mesh->triEx = static_cast<TriEx*>(MALLOC64(triex_bytes));
             for (int i = 0; i < triangle_count; i++) {
                 mesh->triEx[i] = triex[i];
             }
@@ -223,7 +226,10 @@ BLASHandle BLASManager::register_prebuilt(const Tri* tris, const TriEx* triex, i
     mesh->tri = static_cast<Tri*>(MALLOC64(tri_count * sizeof(Tri)));
     std::memcpy(mesh->tri, tris, tri_count * sizeof(Tri));
     if (triex) {
-        mesh->triEx = static_cast<TriEx*>(MALLOC64(tri_count * sizeof(TriEx)));
+        // Round up to multiple of 64: sizeof(TriEx)==96 is not a multiple of 64, so
+        // aligned_alloc (MALLOC64) would fail for odd tri_counts without this guard.
+        size_t triex_bytes = ((static_cast<size_t>(tri_count) * sizeof(TriEx) + 63) & ~size_t(63));
+        mesh->triEx = static_cast<TriEx*>(MALLOC64(triex_bytes));
         std::memcpy(mesh->triEx, triex, tri_count * sizeof(TriEx));
     }
 
